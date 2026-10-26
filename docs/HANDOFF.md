@@ -81,3 +81,7 @@ tests; lint/format/types passed; authorized live multi-domain outcomes and limit
 verification/generation-grounding.md. User workspace currently has one Ready source. Preserve
 private backend/.env. SP-4/SP-16 remain In Progress. Startup must inspect the PR/git state and
 wait for authorization before starting the next recommended task.
+
+Evaluation delivery PR: https://github.com/barakfisher/Social-Platform/pull/1 . Initial delivery
+commit c659795; the user's merge request applies to this PR. Its final merge/check state must
+be verified from GitHub/git history; .ai/handoff.md contains the full continuation context.

@@ -85,3 +85,12 @@ Actions spending limits. Do not change billing/paid limits. Inspect the new PR's
 checks and annotations; local passing tests do not establish hosted verification.
 Record the PR URL and final audit/check evidence below before merging. Use GitHub PR state
 and git history for the final merge commit; do not infer it from this source file alone.
+
+## Delivery PR
+
+PR: https://github.com/barakfisher/Social-Platform/pull/1
+Branch: codex/grounding-evaluation-handoff; initial implementation commit c659795.
+The user requested merging this PR. Inspect its actual mergedAt/mergeCommit and current
+checkout history on resume. Initial new push/PR checks were queued or running when this
+handoff was written; the historical billing failure is not asserted for these new runs.
+Use the PR Checks tab for final hosted results, not the older blocked run or local evidence.
