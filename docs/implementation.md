@@ -72,4 +72,32 @@ Live verification passed six negative cases plus English LinkedIn and Hebrew Fac
 
 Each generation request now holds a PostgreSQL transaction advisory lock scoped to its workspace, user and request key. A separate connection owns that lock across retrieval, writer and reviewer calls; no data row lock is held across provider calls. Concurrent requests return generation_in_progress. PostgreSQL releases the lock when its owning connection/process closes. Retry/status reads encountering Processing without a live lock mark the run Failed with generation_interrupted. Recovery is on access, not a scheduled sweep or automatic provider replay; untouched orphan rows remain Processing until accessed. A fresh explicit retry uses a new key. English/Hebrew error copy explains this while preserving inputs. Existing cached Ready results remain idempotent and undergo the existing review-version gate.
 
+## Cross-language retrieval continuation — 2026-10-26
+
+When the original scoped query returns no hits, generation now tries one bounded EN/HE
+query translation using the existing configured writer model. It targets the other script
+based on the topic, not the requested post language. The translation is strictly validated
+and capped at 450 output tokens and 1,000 characters. Topics without EN/HE letters skip it.
+The translated query uses the same embedding model, Ready/profile/owner filters, relevance
+cutoff and context budget. Existing hits that cannot fit the context budget do not trigger
+translation. Original preferences reach the writer and reviewer unchanged; translated text
+is never evidence and is not included in returned metadata.
+
+Direct retrieval retains half-budget writer/reviewer allowances. Translation first reserves
+at most 20% of GENERATION_MAX_REQUEST_USD, including its permitted retries. After completion,
+its per-attempt maximum estimate multiplied by attempts actually made remains reserved;
+unused future translation retries cannot run. Writer and reviewer each receive half the
+remaining allowance, including their own permitted retries. Invalid reservation metadata
+fails closed. Translation usage and this consumed estimate are retained on success and
+downstream failure; successful total reported completion cost includes all three stages.
+This remains an estimated completion limit, not a provider billing cap. The additional
+query embedding is separate from completion cost accounting.
+
+Source review is now source-review-v3. It explicitly requires separate exact evidence
+entries for nonadjacent passages instead of stitched quotations. Exact substring, source
+ownership and ordered sentence coverage checks are unchanged. Old review approvals cannot
+bypass retry/read/save version gates. This improves the contract but does not eliminate
+model disagreement or false rejection; actual-user validation results and remaining limits
+are recorded in verification/generation-grounding.md. SP-4/SP-16 remain In Progress.
+
 Verification: 85 backend tests passed with PostgreSQL, including real separate-connection lock exclusion/release, active-run protection, recovery via POST/GET, no provider replay and fresh-key success. Provider completions remain mocked. Browser suite: all 14 tests passed against the production build. An earlier development-server run had an unrelated navigation timeout that passed in isolation. Both grounding-failure and interruption retry cases passed. Ruff/mypy, frontend production build/lint/format/types and Alembic drift passed. Frontend left running with npm run start on port 53073. API image rebuilt and readiness confirmed locally. No paid provider evaluation or user document changes were performed. SP-4 and parent issues remain In Progress; broad grounding/brand/platform evaluation, requested model deployment checks and actual-user-source validation remain outstanding.

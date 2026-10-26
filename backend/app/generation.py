@@ -20,6 +20,7 @@ from app.grounding import REVIEW_VERSION, review_draft
 from app.grounding import prompt_tokens as generation_tokens
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID
 from app.models import BrandDNA, GenerationRun, KnowledgeDocument
+from app.query_translation import translate_query
 from app.retrieval import search_context
 
 router = APIRouter(prefix="/generation", tags=["generation"], dependencies=[Depends(local_only)])
@@ -229,6 +230,7 @@ def generate_locked(payload: GenerateInput):
                 existing.error_code = "generation_interrupted"
                 session.commit()
             raise HTTPException(409, existing.error_code or "generation_failed")
+    translation_metadata: dict[str, object] | None = None
     try:
         if not generation_key():
             raise GenerationError("generation_not_configured")
@@ -257,6 +259,24 @@ def generate_locked(payload: GenerateInput):
                 limit=settings.generation_retrieval_count,
                 max_distance=settings.generation_max_distance,
             )
+        stage_budget = settings.generation_max_request_usd / 2
+        if not sources:
+            translated = translate_query(
+                payload.topic, budget_usd=settings.generation_max_request_usd * 0.2
+            )
+            if translated is not None:
+                query, translation_metadata, translation_reservation = translated
+                stage_budget = (settings.generation_max_request_usd - translation_reservation) / 2
+                vector = embed_texts([query])[0]
+                with SessionLocal() as session:
+                    sources = search_context(
+                        session,
+                        vector,
+                        user_id=LOCAL_USER_ID,
+                        workspace_id=LOCAL_WORKSPACE_ID,
+                        limit=settings.generation_retrieval_count,
+                        max_distance=settings.generation_max_distance,
+                    )
         sources = bounded_context(sources, settings.generation_context_budget)
         if not sources:
             raise GenerationError("insufficient_context")
@@ -274,9 +294,7 @@ def generate_locked(payload: GenerateInput):
         prompt_tokens = generation_tokens(SYSTEM) + generation_tokens(user) + 32
         if prompt_tokens > settings.generation_prompt_budget:
             raise GenerationError("generation_prompt_limit")
-        raw, metadata = chat_completion(
-            SYSTEM, user, prompt_tokens, budget_usd=settings.generation_max_request_usd / 2
-        )
+        raw, metadata = chat_completion(SYSTEM, user, prompt_tokens, budget_usd=stage_budget)
         try:
             completion = Completion.model_validate_json(raw)
         except ValidationError:
@@ -296,10 +314,19 @@ def generate_locked(payload: GenerateInput):
         if not references:
             raise GenerationError("insufficient_grounding", metadata)
         try:
-            review = review_draft(completion.content.strip(), references, brand_values, inputs)
+            review = review_draft(
+                completion.content.strip(),
+                references,
+                brand_values,
+                inputs,
+                budget_usd=stage_budget,
+            )
         except GenerationError as exc:
             raise GenerationError(exc.code, {"generation": metadata, **exc.metadata}) from None
         costs = [metadata.get("usage", {}).get("cost_usd"), review.get("usage", {}).get("cost_usd")]
+        if translation_metadata is not None:
+            metadata["retrieval_translation"] = translation_metadata
+            costs.append(translation_metadata.get("cost_usd"))
         metadata["grounding_review"] = review
         metadata["total_cost_usd"] = sum(costs) if all(c is not None for c in costs) else None
         result = {
@@ -332,7 +359,10 @@ def generate_locked(payload: GenerateInput):
             assert run is not None
             run.status = "Failed"
             run.error_code = exc.code
-            run.result = {"metadata": getattr(exc, "metadata", {})}
+            failure_metadata = dict(getattr(exc, "metadata", {}))
+            if translation_metadata is not None:
+                failure_metadata["retrieval_translation"] = translation_metadata
+            run.result = {"metadata": failure_metadata}
         status = (
             409
             if exc.code

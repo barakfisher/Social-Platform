@@ -85,6 +85,7 @@ def service_api(api):
         )
         session.execute(delete(BrandDNA).where(BrandDNA.workspace_id == LOCAL_WORKSPACE_ID))
     with (
+        patch("app.generation.translate_query", return_value=None),
         patch("app.generation.SessionLocal", factory),
         patch("app.generation.lock_engine", factory.kw["bind"].engine),
         patch("app.posts.SessionLocal", factory),
@@ -534,7 +535,8 @@ def test_wrong_language_is_rejected_before_review_call(content, language):
     complete.assert_not_called()
 
 
-def test_legacy_results_cannot_bypass_review_on_retry_or_save(service_api):
+@pytest.mark.parametrize("legacy_review", [None, "source-review-v2"])
+def test_legacy_results_cannot_bypass_review_on_retry_or_save(service_api, legacy_review):
     from sqlalchemy import select
 
     client, factory, _, _ = service_api
@@ -546,7 +548,18 @@ def test_legacy_results_cannot_bypass_review_on_retry_or_save(service_api):
         run = session.scalar(
             select(GenerationRun).where(GenerationRun.request_key == body["request_key"])
         )
-        run.result = {**run.result, "metadata": {"prompt_version": "grounded-post-v1"}}
+        metadata = dict(run.result["metadata"])
+        if legacy_review is None:
+            metadata = {"prompt_version": "grounded-post-v1"}
+        else:
+            metadata["grounding_review"] = {
+                **metadata["grounding_review"],
+                "version": legacy_review,
+            }
+        run.result = {**run.result, "metadata": metadata}
+    restored = client.get(f"/generation/{result['id']}").json()["result"]
+    assert restored["grounded"] is False
+    assert "generation_review_required" in restored["warnings"]
     assert (
         client.post("/generation", json=body).json()["error"]["message"]
         == "generation_review_required"
@@ -635,3 +648,192 @@ def test_generation_lock_excludes_other_connections_and_releases_on_disconnect()
             assert acquired
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("outcome", ["success", "empty", "translation_failure"])
+def test_translation_fallback_is_bounded_owned_and_not_replayed(service_api, settings, outcome):
+    from sqlalchemy import select
+
+    client, factory, embeddings, generation = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    body = payload(topic="community garden rosemary", tone="Warm", goal="Inform")
+    translation = {"usage": {"cost_usd": 0.00003}, "cost_usd": 0.00003}
+    with factory() as session:
+        from app.generation import search_context
+
+        sources = search_context(
+            session,
+            [1.0, 0.0, 0.0],
+            user_id=LOCAL_USER_ID,
+            workspace_id=LOCAL_WORKSPACE_ID,
+            limit=settings.generation_retrieval_count,
+            max_distance=settings.generation_max_distance,
+        )
+    assert sources
+    translation_reservation = settings.generation_max_request_usd * 0.1
+    translated_result = ("רוזמרין בגינה", translation, translation_reservation)
+    with (
+        patch(
+            "app.generation.search_context",
+            side_effect=[[], sources if outcome == "success" else []],
+        ) as search,
+        patch("app.generation.translate_query", return_value=translated_result) as translate,
+        patch("app.grounding.chat_completion", side_effect=fake_review) as review,
+    ):
+        if outcome == "translation_failure":
+            translate.side_effect = GenerationError("generation_translation_invalid", translation)
+        response = client.post("/generation", json=body)
+        assert (
+            response.status_code
+            == {"success": 200, "empty": 409, "translation_failure": 503}[outcome]
+        )
+        translate.assert_called_once_with(
+            body["topic"], budget_usd=settings.generation_max_request_usd * 0.2
+        )
+        assert search.call_count == (1 if outcome == "translation_failure" else 2)
+        if search.call_count == 2:
+            assert search.call_args_list[0].kwargs == search.call_args_list[1].kwargs
+        first_calls = (
+            translate.call_count,
+            search.call_count,
+            generation.call_count,
+            embeddings.call_count,
+        )
+        replay = client.post("/generation", json=body)
+        assert (
+            translate.call_count,
+            search.call_count,
+            generation.call_count,
+            embeddings.call_count,
+        ) == first_calls
+        if outcome == "success":
+            assert replay.json() == response.json()
+            data = json.loads(generation.call_args.args[1])
+            assert data["preferences"]["topic"] == body["topic"]
+            assert data["preferences"]["tone"] == "Warm"
+            assert data["sources"] == sources
+            assert embeddings.call_args_list[-1].args == (["רוזמרין בגינה"],)
+            cap = settings.generation_max_request_usd
+            assert generation.call_args.kwargs["budget_usd"] == (cap - translation_reservation) / 2
+            assert review.call_args.kwargs["budget_usd"] == (cap - translation_reservation) / 2
+            assert (
+                sum(
+                    [
+                        translation_reservation,
+                        generation.call_args.kwargs["budget_usd"],
+                        review.call_args.kwargs["budget_usd"],
+                    ]
+                )
+                <= cap + 1e-12
+            )
+            assert response.json()["metadata"]["total_cost_usd"] == pytest.approx(0.00023)
+        else:
+            generation.assert_not_called()
+            review.assert_not_called()
+        with factory() as session:
+            run = session.scalar(
+                select(GenerationRun).where(GenerationRun.request_key == body["request_key"])
+            )
+            assert run is not None
+            metadata = run.result["metadata"]
+            if outcome != "translation_failure":
+                assert metadata["retrieval_translation"] == translation
+            else:
+                assert metadata["cost_usd"] == translation["cost_usd"]
+
+
+def test_original_context_does_not_translate(service_api):
+    client, factory, _, _ = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    with patch("app.generation.translate_query") as translate:
+        assert client.post("/generation", json=payload()).status_code == 200
+    translate.assert_not_called()
+
+
+def test_translated_retrieval_keeps_usage_when_writer_fails(service_api):
+    from sqlalchemy import select
+
+    client, factory, _, generation = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    body = payload()
+    translation = {"cost_usd": 0.00003, "usage": {"cost_usd": 0.00003}}
+    source = {
+        "chunk_id": "owned",
+        "content": "Rosemary grows.",
+        "source_location": {"char_start": 0, "char_end": 15},
+    }
+    generation.side_effect = GenerationError(
+        "generation_invalid_response", {"usage": {"cost_usd": 0.00002}}
+    )
+    with (
+        patch("app.generation.search_context", side_effect=[[], [source]]),
+        patch("app.generation.translate_query", return_value=("רוזמרין", translation, 0.0001)),
+        patch("app.generation.review_draft") as review,
+    ):
+        assert client.post("/generation", json=body).status_code == 503
+    review.assert_not_called()
+    with factory() as session:
+        run = session.scalar(
+            select(GenerationRun).where(GenerationRun.request_key == body["request_key"])
+        )
+        assert run is not None
+        assert run.result["metadata"]["retrieval_translation"] == translation
+        assert run.result["metadata"]["usage"]["cost_usd"] == 0.00002
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Rosemary grows. Volunteers gather.",
+        "Rosemary ... Volunteers",
+        "Rosemary grows.\nVolunteers gather.",
+    ],
+)
+def test_review_rejects_stitched_or_normalized_source_quotes(quote):
+    verdict = {
+        "accepted": True,
+        "issues": [],
+        "sentences": [
+            {
+                "index": 0,
+                "supported": True,
+                "evidence": [{"chunk_id": "source", "quote": quote}],
+            }
+        ],
+    }
+    with patch("app.grounding.chat_completion", return_value=(json.dumps(verdict), {})):
+        with pytest.raises(GenerationError, match="grounding_review_failed"):
+            review_draft(
+                "Rosemary grows.",
+                [
+                    {
+                        "chunk_id": "source",
+                        "content": "Rosemary grows. Other details. Volunteers gather.",
+                    }
+                ],
+                {},
+                {"language": "en"},
+            )
+
+
+def test_existing_hits_that_do_not_fit_context_never_trigger_translation(service_api):
+    client, factory, embeddings, generation = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    with (
+        patch("app.generation.bounded_context", return_value=[]) as bound,
+        patch("app.generation.translate_query") as translate,
+        patch("app.generation.review_draft") as review,
+    ):
+        response = client.post("/generation", json=payload())
+    assert response.status_code == 409
+    assert response.json()["error"]["message"] == "insufficient_context"
+    bound.assert_called_once()
+    assert bound.call_args.args[0]
+    embeddings.assert_called_once()
+    translate.assert_not_called()
+    generation.assert_not_called()
+    review.assert_not_called()

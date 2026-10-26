@@ -1,106 +1,100 @@
-# Social Platform handoff — 2026-10-26
+# Social Platform continuation handoff — 2026-10-26
 
-## Startup
+## Delivery and startup
 
-Read AGENTS.md, this file, docs/HANDOFF.md and verification/generation-grounding.md.
-Inspect git status/log and the delivery PR before changing files. Do not start paid calls,
-modify user data, or assume a hosted CI pass on startup. Recommend the next existing task;
-wait for authorization before starting it. No new chat was requested for this delivery.
+The user requested merge, handoff and a fresh session for this delivery. Read AGENTS.md,
+this file, docs/HANDOFF.md, docs/implementation.md and verification/generation-grounding.md.
+Read .ai/codex-rules.md and .ai/project-memory.md if they exist (currently absent).
+Inspect Git status/log, origin/main and the delivery PR's actual merge/check/review status.
+The previous PR #1 was merged as d36d3a4; its historical review blocker is resolved.
+This delivery is on codex/cross-language-grounding-handoff. Final PR/merge state must be
+read from GitHub, not inferred from a startup handoff written before delivery finishes.
 
-Never print, overwrite or stage private ignored backend/.env. Preserve local user data.
-User authorized paid evaluations in this chat and explicitly requested this handoff, PR and
-merge. Further implementation stays local until another delivery is authorized.
+Never print, overwrite or stage ignored backend/.env. Preserve user Brand DNA, Ready
+sources and saved posts. No policy/billing changes or merge bypasses. The user authorized
+paid model validation in the preceding work; it does not authorize new paid calls merely
+because a new chat starts. Existing evaluator defaults offline. Future implementation
+stays local until another delivery request. A fresh chat was explicitly requested.
 
-## Delivery scope
+## Current change
 
-Expand SP-4 evaluation, not production generation behavior:
+- app/query_translation.py: bounded EN/HE fallback using configured writer GPT-4.1 only
+  when original scoped retrieval returns no hits. Opposite topic script, strict JSON/query
+  validation, max450 output tokens/1000 characters. No EN/HE letters means no paid fallback.
+- app/generation.py: retry same scope/Ready/profile/cosine cutoff/context budget with the
+  translated query; retain original preferences. Existing hits removed by context trimming
+  never trigger translation. Translated text is not evidence and is not returned in metadata.
+- Translation preflights at most20% of completion allowance including retries. On completion,
+  per-attempt estimate × attempts actually made remains consumed. Writer/reviewer each get
+  half the remainder including all their possible retries. Invalid/nonfinite reservations
+  fail closed. Direct retrieval stays50/50. Translation usage retained on failures and added
+  to successful cost totals. Extra embedding cost is outside completion accounting; estimates
+  are not provider billing caps.
+- app/grounding.py: source-review-v3 explicitly requires separate contiguous exact excerpts;
+  server substring/coverage checks unchanged. Old v2 retry/read/save approval invalidated.
+  Actual model had stitched nonadjacent passages, omitting126 source characters.
+- New tests test_query_translation.py and test_grounding_evidence.py; expanded
+  test_generation.py. docs/implementation.md and verification/generation-grounding.md record
+  behavior, actual paid history, failures and limitations.
 
-- backend/scripts/evaluate_generation.py: offline by default, explicit --live, strict fixtures,
-  isolated DB identity guard, --scenarios-only and repeatable --scenario selection.
-- backend/scripts/generation_review_cases.json: 20 positive/negative EN/HE reviewer fixtures.
-- backend/scripts/generation_scenarios.py + generation_scenarios.json: 16 end-to-end EN/HE
-  library/repair scenarios for supported facts and missing prices/dates/benefits; provenance,
-  persistence, withholding/save prevention, cleanup and aggregate failure checks.
-- backend/tests/test_generation_scenarios.py: 84 offline tests.
-- verification/generation-grounding.md: actual execution history, false positives, limitations.
-- docs/implementation.md: explicit --live command. docs/HANDOFF.md points here.
-- AGENTS.md: preserve the user's communication/clarification and next-task rules.
+## Evidence and unresolved scope
 
-## Verification and audit evidence
+Final local backend suite:231 passed in a fresh disposable migrated DB; providers mocked.
+Ruff format/lint, app mypy and offline20-review/16-scenario validation passed. Existing
+Starlette/httpx warning only. No frontend changes/tests rerun during this slice.
+Fresh separate QA added tests for exact/stitched EN/HE evidence, malformed/null boundaries,
+legacy v2 approvals, translation/schema/attempt/reservation boundaries, scoped fallback,
+remaining budgets, usage, idempotency, failure persistence and context trimming.
+Fresh independent pre-merge security audit reviewed the complete delivery diff/new files:
+no blocking findings. No private data/credentials read or paid calls by auditors.
 
-Current pre-PR local verification: 169 backend tests passed against PostgreSQL (provider
-completions mocked in automated tests), Ruff format/lint for backend and recovery script,
-app mypy and evaluator mypy passed. Existing Starlette/httpx deprecation warning only.
-Offline CLI validates 20 review fixtures +16 generation scenarios without provider calls.
-No frontend code changed; prior 14 Playwright/build evidence is historical, not rerun here.
+Live GPT-4.1 source-review-v3 regression:20/20 fixtures passed (10 controls,10 negatives).
+Actual Brand DNA v2 / existing Hebrew Ready source: fresh supported EN LinkedIn and HE
+Facebook drafts passed exact review and save/read/delete across targeted runs. English used
+translation; Hebrew did not. Do not describe this as one uninterrupted green matrix.
+Six unsupported-detail challenges: EN price/date withheld; EN guarantee omitted in accepted
+source-supported draft; HE price/guarantee withheld. HE date case remains UNRESOLVED:
+production accepted with exact evidence, full-source audit flagged an extra claim, later
+focused source/sentence check judged it supported. Initial classifier's invented-date claim
+is not established. The six-challenge run exited unsuccessfully and no exception was added.
+Some withheld drafts were judged safe by extra audits. False rejection/model disagreement
+remain. Model assessment is not independent human editorial verification.
 
-Authorized live OpenRouter GPT-4.1: 20 expanded review fixtures, six legacy negatives, and
-EN LinkedIn/HE Facebook generation/save/read/edit/delete passed. New 16 multi-domain
-scenarios passed across initial and targeted runs: 11 drafts and five safely withheld.
-This was not one uninterrupted green matrix run. Three lexical false positives were safe
-missing-information disclaimers, reviewed manually and exempted only as exact complete
-sentences. Regression tests ensure appended/embedded claims still fail. Model review and
-fixture-specific lexical checks do not prove arbitrary-domain factuality. No production
-prompt/review behavior was weakened. Total provider billing was not measured.
+Private disputed sample retained outside Git (directory0700,file0600):
+/var/folders/0w/spf_k7c124l8t8rztmqk721m0000gn/T/social-grounding-review-j6qu9t1z/case.json
+Contains private draft/input/source snapshot and production review; never print or commit it.
+Use privately for the next adjudication; do not regenerate a different case and call it fixed.
+Other transient scripts/captures removed. All disposable DBs removed; final catalog count0.
+Original fingerprints matched after each run. Total experiment billing not measured.
 
-All evaluation databases were removed and catalog checks found none remaining.
-Free-only experiments were inconclusive; do not claim free-model suitability. An earlier
-unintended paid invocation is disclosed in verification/generation-grounding.md.
+QA also noted existing unsupported sentence schema still requires nonempty evidence;
+this can yield review_invalid and is NOT fixed or the cause of valid rejected reviews.
 
-Separate QA completed with 84 offline tests. Security reviews during implementation found
-no unresolved blocker after fixing the old --isolated workspace bypass. Final independent
-pre-merge security audit completed with no blocking findings: CLI opt-in/isolation, SQL
-identifiers, subprocess arguments, diagnostic exposure, fixtures and exact disclaimer checks
-reviewed. Static audit only; no provider/DB operations or secrets access. Internal Python
-helpers rely on the guarded CLI and trusted developer usage.
+## Local runtime
 
-## Runtime and user workspace
-
-Frontend http://127.0.0.1:53073 (production); API localhost:58073; PostgreSQL 55473;
-Redis 56373. Do not stop another project's port 3000 process. Stop only this project's
-frontend before rebuilding to avoid concurrent .next writes.
-
-Last read-only check: API ready; configured=true, brand_ready=true, ready_documents=1.
-Unlike the historical startup handoff, the user now has one Ready source. No user source
-was created, edited or deleted during these disposable evaluations.
+API rebuilt and ready at localhost:58073; reports source-review-v3 and retrieval-translation-v1.
+PostgreSQL55473, Redis56373. Last config:configured=true,brand_ready=true,ready_documents=1;
+Brand DNA v2, zero saved posts. Source2054 characters/three chunks, original data untouched.
+Only brand name/audience populated; voice/positioning/guidelines/prohibited claims empty.
+Do not invent brand settings/sources to improve evaluation.
+Project services had stopped between checks; existing PostgreSQL/Redis/API were restarted
+without resetting volumes. Worker/scheduler were not restarted. Frontend53073 was not
+restarted in this continuation; recheck availability. Never stop another project's port3000.
+No public deployment/authentication/media/publishing delivered.
 
 ## Linear and next task
 
-SP-4 Implement grounded RAG post generation remains In Progress:
+SP-4 Implement grounded RAG post generation and parent SP-16 remain In Progress.
 https://linear.app/test-bf/issue/SP-4/implement-grounded-rag-post-generation
-Only the verified small-curated-evaluation criterion was newly checked. Source-instruction/
-context release criteria and requested-model deployment availability remain unchecked.
-SP-16 and broader parents stay In Progress; do not close them for this delivery.
+No new acceptance checkbox checked. Existing curated-evaluation checkbox was already checked.
+Context/source-instruction release and requested Claude3.5Sonnet/GPT-4o deployment availability
+remain open. Do not close SP-4/parents based on this delivery.
+Evidence and limitations recorded in existing SP-4 comments, latest continuation comment
+69f0a59b-8524-44b3-ac0d-2fd6f3fd9dd9.
 
-Recommended next work: finish SP-4 validation against actual user Brand DNA/Ready source,
-then resolve the deployment model decision/availability criterion. Recommend only; do not
-start without authorization. Broader-domain/nondeterministic behavior remains a limitation.
-SP-5, SP-1/2, SP-8/9/10, SP-11/13 remain partial; SP-6 topic suggestions and SP-3 media remain
-Backlog. No public deployment/authentication, media or publishing was delivered here.
-
-## Hosted checks and merge
-
-Previous hosted run 40285333281 was blocked before job steps by failed GitHub payments or
-Actions spending limits. Do not change billing/paid limits. Inspect the new PR's actual
-checks and annotations; local passing tests do not establish hosted verification.
-Record the PR URL and final audit/check evidence below before merging. Use GitHub PR state
-and git history for the final merge commit; do not infer it from this source file alone.
-
-## Delivery PR
-
-PR: https://github.com/barakfisher/Social-Platform/pull/1
-Branch: codex/grounding-evaluation-handoff; initial implementation commit c659795.
-The user requested merging this PR. Inspect its actual mergedAt/mergeCommit and current
-checkout history on resume. Initial new push/PR checks were queued or running when this
-handoff was written; the historical billing failure is not asserted for these new runs.
-Use the PR Checks tab for final hosted results, not the older blocked run or local evidence.
-
-## Merge gate observed
-
-GitHub rejected the normal squash merge because main's repository rules require an approving
-review (PR reviewDecision=REVIEW_REQUIRED; one approving review required). Auto-merge was also
-rejected because it is disabled for this repository. No administrator bypass, ruleset change,
-or fabricated reviewer approval was used. An eligible reviewer must approve before a normal
-merge can complete. The PR remains open unless its live GitHub state now shows otherwise.
-Backend hosted checks passed on aaac80e; frontend/worker checks were still running at this
-source update. Read the current PR Checks tab for all final results and latest head SHA.
+Next existing atomic task: adjudicate retained HE date sample/model-audit disagreement before
+further release claims; then remaining SP-4 release criteria. Recommend only; this merge/
+fresh-session request does not explicitly authorize new engineering or new paid validation.
+If delivery is blocked, the fresh chat's first priority is completing the already-authorized
+normal merge after actual required review/check gates are satisfied. Do not bypass them.
+Broader SP-5,SP-1/2,SP-8/9/10,SP-11/13 remain partial; SP-6 suggestions and SP-3 media Backlog.
