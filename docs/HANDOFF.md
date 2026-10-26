@@ -71,3 +71,21 @@ New session first action: read root AGENTS.md and this handoff, inspect git stat
 Delivery merge completed locally: `0fc3b98` merges `77af3bd` from `codex/local-draft-studio-delivery` into `main`. A following handoff commit records this merge. Push and hosted checks are performed after that commit; inspect origin/main and GitHub Actions for their final state. Credential-pattern scan of all staged files passed; backend/.env was confirmed ignored and never staged. Local verification remains 85 backend tests, 14 Playwright tests, frontend production build/static checks, backend Ruff/mypy, schema drift and API readiness passed. The frontend remains running on port 53073 in production mode.
 
 Hosted CI result after push: https://github.com/barakfisher/Social-Platform/actions/runs/40285333281 failed before any job steps started. GitHub annotation: “The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings”. Backend/frontend/worker-recovery checks therefore have no hosted verification evidence. Account billing/Actions limit must be resolved by the user before rerunning; do not change billing or paid limits automatically. This infrastructure blocker does not invalidate the recorded local checks. Merge and push succeeded; no PR was created. A following documentation-only commit records this CI blocker on main.
+
+## Evaluation delivery handoff — 2026-10-26
+
+The current continuation handoff is `.ai/handoff.md`. It supersedes historical zero-Ready-source
+and local-only delivery notes where explicitly stated. This user requested handoff + PR + merge
+for the evaluation expansion. Current verification: 169 backend tests; 84 new focused offline
+tests; lint/format/types passed; authorized live multi-domain outcomes and limitations are in
+verification/generation-grounding.md. User workspace currently has one Ready source. Preserve
+private backend/.env. SP-4/SP-16 remain In Progress. Startup must inspect the PR/git state and
+wait for authorization before starting the next recommended task.
+
+Evaluation delivery PR: https://github.com/barakfisher/Social-Platform/pull/1 . Initial delivery
+commit c659795; the user's merge request applies to this PR. Its final merge/check state must
+be verified from GitHub/git history; .ai/handoff.md contains the full continuation context.
+
+GitHub rejected normal PR #1 merging pending a required approving review; repository auto-merge
+is disabled. No admin bypass or repository-policy change was attempted. See .ai/handoff.md and
+live PR state for the final review/check gate. This handoff does not claim the PR was merged.

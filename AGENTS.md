@@ -1,5 +1,18 @@
 # Project workflow
 
+## Communication and clarification
+
+- Provide a concise completion report describing what was achieved, the relevant changes, verification performed and its results, and any outstanding limitations. This supersedes the code-only response rule; include code or diffs only when useful or requested.
+- Proceed autonomously with clear, authorized work and routine implementation choices that follow established project patterns.
+- Stop and ask focused clarification questions only when requirements or context are unclear, an architecture decision is needed, or a new third-party dependency or service would be added. Resolve these questions before implementing the affected work; do not write speculative code.
+
+## Task completion and next work
+
+- After finishing each task, review the current task list and backlog, including unfinished acceptance criteria, dependencies, priorities, and actual issue statuses.
+- Recommend the next existing task to take, identify it by its title and issue identifier or link when available, and briefly explain why it should come next. Recommend only; do not start it without authorization.
+- If the completed task reveals concrete follow-up work missing from the plan, suggest it separately with the evidence and reason it is needed. Do not invent tasks or create backlog items without authorization.
+- If no tasks remain, explicitly say so. If the task list or backlog cannot be accessed, report that limitation instead of claiming there are no tasks or inventing a recommendation.
+
 ## Linear status and completion
 
 - Keep an active parent issue In Progress when work on its required children has started.

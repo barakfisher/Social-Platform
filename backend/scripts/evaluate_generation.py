@@ -1,23 +1,75 @@
 """Live generation evaluation using a disposable local PostgreSQL database.
 
-Run from backend with: uv run python scripts/evaluate_generation.py
+Validate offline: uv run python scripts/evaluate_generation.py --validate-cases
+Run paid evaluation: uv run python scripts/evaluate_generation.py --live
 Uses configured provider credentials; removes only its own temporary database afterward.
 """
 
+import argparse
 import json
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Literal
 from unittest.mock import patch
 from uuid import uuid4
+
+from generation_scenarios import load_scenarios, run_scenarios
+from pydantic import BaseModel, ConfigDict, Field
 
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
 
-def evaluate():
+class ReviewCase(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    name: str = Field(min_length=1)
+    category: Literal[
+        "conflicting_facts", "irrelevant_source", "unsupported_request", "brand", "platform"
+    ]
+    accepted: bool
+    language: Literal["en", "he"]
+    platform: Literal["linkedin", "facebook"]
+    source: str = Field(min_length=1)
+    topic: str = Field(min_length=1)
+    draft: str = Field(min_length=1)
+
+
+def load_review_cases() -> list[ReviewCase]:
+    path = Path(__file__).with_name("generation_review_cases.json")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("Review cases must be a nonempty array")
+    cases = [ReviewCase.model_validate(item) for item in raw]
+    if len({case.name for case in cases}) != len(cases):
+        raise ValueError("Review case names must be unique")
+    required = {
+        (category, language, accepted)
+        for category in (
+            "conflicting_facts",
+            "irrelevant_source",
+            "unsupported_request",
+            "brand",
+            "platform",
+        )
+        for language in ("en", "he")
+        for accepted in (False, True)
+    }
+    if not required.issubset({(case.category, case.language, case.accepted) for case in cases}):
+        raise ValueError(
+            "Every review category requires positive and negative English and Hebrew cases"
+        )
+    return cases
+
+
+def evaluate(scenarios_only: bool = False, scenario_names: list[str] | None = None):
+    curated_cases = load_review_cases()
+    scenarios = load_scenarios()
+    if scenario_names:
+        scenarios = [case for case in scenarios if case.name in scenario_names]
     from fastapi.testclient import TestClient
     from sqlalchemy import select
 
@@ -27,6 +79,9 @@ def evaluate():
     from app.worker import embed_document, process_text
 
     client = TestClient(app)
+    if scenarios_only:
+        run_scenarios(client, scenarios)
+        return
     brand = client.put(
         "/brand",
         json={
@@ -113,6 +168,37 @@ def evaluate():
             print(json.dumps({"case": name, "unsupported_draft_rejected": True}), flush=True)
         else:
             raise AssertionError("Reviewer accepted unsupported case: " + name)
+    for review_case in curated_cases:
+        try:
+            review_draft(
+                review_case.draft,
+                [{"chunk_id": review_case.name, "content": review_case.source}],
+                review_brand,
+                {
+                    "language": review_case.language,
+                    "topic": review_case.topic,
+                    "platform": review_case.platform,
+                },
+            )
+        except GenerationError as exc:
+            if exc.code != "grounding_review_failed" or review_case.accepted:
+                raise AssertionError("Curated case failed: " + review_case.name) from exc
+            accepted = False
+        else:
+            accepted = True
+        if accepted != review_case.accepted:
+            raise AssertionError("Reviewer accepted curated negative case: " + review_case.name)
+        print(
+            json.dumps(
+                {
+                    "case": review_case.name,
+                    "category": review_case.category,
+                    "accepted": accepted,
+                    "passed": True,
+                }
+            ),
+            flush=True,
+        )
     cases = [
         {
             "name": "English LinkedIn",
@@ -220,13 +306,14 @@ def evaluate():
             ),
             flush=True,
         )
-    client.delete("/knowledge/" + document_id)
+    assert client.delete("/knowledge/" + document_id).status_code == 200
+    run_scenarios(client, scenarios)
     print(
         "Live generation evaluation passed; source injection was ignored in both cases.", flush=True
     )
 
 
-def isolated_database():
+def isolated_database(scenarios_only: bool = False, scenario_names: list[str] | None = None):
     from sqlalchemy import create_engine, text
     from sqlalchemy.engine import make_url
 
@@ -245,6 +332,8 @@ def isolated_database():
         connection.execute(text(f'CREATE DATABASE "{name}"'))
     try:
         temporary = create_engine(admin.set(database=name))
+        if runtime.username is None:
+            raise ValueError("Evaluation database requires a runtime username")
         role = temporary.dialect.identifier_preparer.quote(runtime.username)
         with temporary.begin() as connection:
             connection.execute(text(f"GRANT USAGE ON SCHEMA public TO {role}"))
@@ -257,6 +346,7 @@ def isolated_database():
         temporary.dispose()
         env = {
             **os.environ,
+            "SOCIAL_GENERATION_EVALUATION_DATABASE": name,
             "DATABASE_URL": runtime.render_as_string(hide_password=False),
             "MIGRATION_DATABASE_URL": admin.set(database=name).render_as_string(
                 hide_password=False
@@ -266,7 +356,14 @@ def isolated_database():
             [sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND, env=env, check=True
         )
         subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), "--isolated"],
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--live",
+                "--isolated",
+                *(["--scenarios-only"] if scenarios_only else []),
+                *[part for name in (scenario_names or []) for part in ("--scenario", name)],
+            ],
             cwd=BACKEND,
             env=env,
             check=True,
@@ -282,7 +379,44 @@ def isolated_database():
 
 
 if __name__ == "__main__":
-    if "--isolated" in sys.argv:
-        evaluate()
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--live", action="store_true", help="Run paid provider evaluation")
+    mode.add_argument("--validate-cases", action="store_true", help="Validate fixtures offline")
+    parser.add_argument(
+        "--scenarios-only",
+        action="store_true",
+        help="Run only multi-domain end-to-end scenarios (requires --live)",
+    )
+    parser.add_argument(
+        "--scenario",
+        action="append",
+        choices=[case.name for case in load_scenarios()],
+        help="Run a named scenario only; repeat to select several (requires --live)",
+    )
+    parser.add_argument("--isolated", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if (args.isolated or args.scenarios_only or args.scenario) and not args.live:
+        parser.error("--isolated, --scenarios-only and --scenario require --live")
+    if not args.live:
+        print(
+            json.dumps(
+                {
+                    "validated_cases": len(load_review_cases()),
+                    "generation_scenarios": len(load_scenarios()),
+                    "provider_calls": 0,
+                }
+            )
+        )
+    elif args.isolated:
+        from sqlalchemy.engine import make_url
+
+        expected_database = os.environ.get("SOCIAL_GENERATION_EVALUATION_DATABASE", "")
+        database_url = os.environ.get("DATABASE_URL", "")
+        if not re.fullmatch(r"social_generation_verify_[a-f0-9]{10}", expected_database):
+            parser.error("Internal evaluation requires a disposable database marker")
+        if not database_url or make_url(database_url).database != expected_database:
+            parser.error("Internal evaluation database does not match its disposable marker")
+        evaluate(args.scenarios_only or bool(args.scenario), args.scenario)
     else:
-        isolated_database()
+        isolated_database(args.scenarios_only or bool(args.scenario), args.scenario)
