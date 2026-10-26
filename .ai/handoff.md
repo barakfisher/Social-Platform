@@ -98,3 +98,18 @@ fresh-session request does not explicitly authorize new engineering or new paid 
 If delivery is blocked, the fresh chat's first priority is completing the already-authorized
 normal merge after actual required review/check gates are satisfied. Do not bypass them.
 Broader SP-5,SP-1/2,SP-8/9/10,SP-11/13 remain partial; SP-6 suggestions and SP-3 media Backlog.
+
+## This delivery PR and actual gate
+
+PR: https://github.com/barakfisher/Social-Platform/pull/2
+Implementation/handoff commit:1d1de24 (subsequent delivery-state documentation follows).
+Normal squash merge was attempted and GitHub rejected it under base-branch policy.
+Live PR state:OPEN, mergeStateStatus=BLOCKED, reviewDecision=REVIEW_REQUIRED. The active
+main ruleset requires one approving review and linear history. No admin bypass, self-review,
+policy change or fabricated approval was used. An eligible reviewer must approve before the
+already-authorized normal merge can complete. Check current PR state on resume: human action
+may have resolved it. Do not re-ask permission to merge after legitimate gates are satisfied.
+Hosted frontend/backend/worker-recovery checks were running when this handoff was written;
+no final-head hosted pass is claimed here. Inspect actual final head/check results. The
+fresh requested session should follow delivery first, then recommend the next SP-4 task;
+do not start new engineering or new paid evaluations merely on startup.
