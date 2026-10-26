@@ -1,0 +1,197 @@
+import uuid
+from datetime import datetime
+
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db import Base
+
+
+class Record:
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class User(Record, Base):
+    __tablename__ = "users"
+    name: Mapped[str] = mapped_column(String(200))
+
+
+class Workspace(Record, Base):
+    __tablename__ = "workspaces"
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    __table_args__ = (UniqueConstraint("id", "user_id"),)
+
+
+class Owned(Record):
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True)
+
+
+def ownership():
+    return ForeignKeyConstraint(
+        ["workspace_id", "user_id"], ["workspaces.id", "workspaces.user_id"], ondelete="CASCADE"
+    )
+
+
+class BrandDNA(Owned, Base):
+    __tablename__ = "brand_dna"
+    name: Mapped[str] = mapped_column(String(200))
+    audience: Mapped[str] = mapped_column(Text, default="")
+    positioning: Mapped[str] = mapped_column(Text, default="")
+    voice: Mapped[str] = mapped_column(Text, default="")
+    guidelines: Mapped[str] = mapped_column(Text, default="")
+    prohibited_claims: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    __table_args__ = (ownership(), UniqueConstraint("workspace_id"), CheckConstraint("version > 0"))
+
+
+class KnowledgeDocument(Owned, Base):
+    __tablename__ = "knowledge_documents"
+    title: Mapped[str] = mapped_column(String(300))
+    source_type: Mapped[str] = mapped_column(String(20))
+    source_reference: Mapped[str | None] = mapped_column(Text)
+    source_text: Mapped[str | None] = mapped_column(Text)
+    processing_stage: Mapped[str] = mapped_column(
+        String(30), default="pending", server_default="pending"
+    )
+    embedding_profile: Mapped[str | None] = mapped_column(String(64))
+    checksum: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="Pending", index=True)
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    __table_args__ = (
+        ownership(),
+        UniqueConstraint("id", "workspace_id", "user_id"),
+        Index(
+            "uq_text_workspace_checksum",
+            "workspace_id",
+            "checksum",
+            unique=True,
+            postgresql_where=text("source_type = 'text' AND checksum IS NOT NULL"),
+        ),
+        CheckConstraint("source_type IN ('text', 'pdf', 'url')"),
+        CheckConstraint("status IN ('Pending', 'Processing', 'Ready', 'Failed')"),
+    )
+
+
+class KnowledgeChunk(Owned, Base):
+    __tablename__ = "knowledge_chunks"
+    document_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True)
+    chunk_order: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    token_count: Mapped[int] = mapped_column(Integer)
+    source_location: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # Configurable dimensions; profile tags isolate incompatible embedding spaces.
+    embedding = mapped_column(Vector(), nullable=True)
+    embedding_profile: Mapped[str | None] = mapped_column(String(64), index=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(200))
+    embedding_dimensions: Mapped[int | None] = mapped_column(Integer)
+    __table_args__ = (
+        ownership(),
+        ForeignKeyConstraint(
+            ["document_id", "workspace_id", "user_id"],
+            [
+                "knowledge_documents.id",
+                "knowledge_documents.workspace_id",
+                "knowledge_documents.user_id",
+            ],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("document_id", "chunk_order"),
+        CheckConstraint("chunk_order >= 0 AND token_count >= 0"),
+        CheckConstraint(
+            "(embedding IS NULL AND embedding_dimensions IS NULL AND embedding_model IS NULL) "
+            "OR (embedding IS NOT NULL AND embedding_dimensions IS NOT NULL "
+            "AND embedding_model IS NOT NULL AND vector_dims(embedding) = embedding_dimensions "
+            "AND embedding_dimensions > 0)"
+        ),
+    )
+
+
+class Post(Owned, Base):
+    __tablename__ = "posts_history"
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    save_key: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    generation_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("generation_runs.id", ondelete="SET NULL"), unique=True
+    )
+    platform: Mapped[str] = mapped_column(String(20))
+    language: Mapped[str] = mapped_column(String(5))
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="Draft")
+    media_references: Mapped[list] = mapped_column(JSONB, default=list)
+    generation_settings: Mapped[dict] = mapped_column(JSONB, default=dict)
+    source_snapshots: Mapped[list] = mapped_column(JSONB, default=list)
+    __table_args__ = (
+        ownership(),
+        UniqueConstraint("workspace_id", "save_key"),
+        CheckConstraint("version > 0", name="ck_posts_version_positive"),
+        CheckConstraint("platform IN ('linkedin', 'facebook')"),
+        CheckConstraint("language IN ('en', 'he')"),
+        CheckConstraint("status = 'Draft'", name="phase_one_drafts_only"),
+        Index("ix_posts_workspace_status_created", "workspace_id", "status", "created_at"),
+    )
+
+
+class IngestionJob(Owned, Base):
+    __tablename__ = "ingestion_jobs"
+    document_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True)
+    request_id: Mapped[str] = mapped_column(String(36))
+    status: Mapped[str] = mapped_column(String(20), default="Pending", index=True)
+    kind: Mapped[str] = mapped_column(String(30), default="ingestion")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    __table_args__ = (
+        ownership(),
+        Index(
+            "uq_embedding_job_document",
+            "document_id",
+            unique=True,
+            postgresql_where=text("kind = 'embedding'"),
+        ),
+        ForeignKeyConstraint(
+            ["document_id", "workspace_id", "user_id"],
+            [
+                "knowledge_documents.id",
+                "knowledge_documents.workspace_id",
+                "knowledge_documents.user_id",
+            ],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("status IN ('Pending', 'Processing', 'Ready', 'Failed')"),
+        CheckConstraint("attempts >= 0"),
+    )
+
+
+class GenerationRun(Owned, Base):
+    __tablename__ = "generation_runs"
+    request_key: Mapped[uuid.UUID] = mapped_column(Uuid)
+    input_fingerprint: Mapped[str] = mapped_column(String(64))
+    inputs: Mapped[dict] = mapped_column(JSONB)
+    result: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="Processing")
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    __table_args__ = (
+        ownership(),
+        UniqueConstraint("workspace_id", "request_key"),
+        CheckConstraint("status IN ('Processing', 'Ready', 'Failed')"),
+    )

@@ -1,0 +1,52 @@
+name: Checks
+on: [push, pull_request]
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: docker compose up -d --wait postgres redis
+      - run: uv sync --frozen --python 3.12
+        working-directory: backend
+      - run: uv run ruff format --check . ../scripts/verify_worker_recovery.py && uv run ruff check . ../scripts/verify_worker_recovery.py && uv run mypy app
+        working-directory: backend
+      - run: uv run alembic upgrade head
+        working-directory: backend
+        env:
+          MIGRATION_DATABASE_URL: postgresql+psycopg://social_admin:social_admin_local@localhost:55473/social
+      - run: uv run alembic check
+        working-directory: backend
+        env:
+          MIGRATION_DATABASE_URL: postgresql+psycopg://social_admin:social_admin_local@localhost:55473/social
+      - run: uv run pytest
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://social_app:social_app_local@localhost:55473/social
+  worker-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/verify_worker_recovery.py

@@ -11,7 +11,7 @@ Single-user, single-brand content studio. Phase 1 creates drafts for LinkedIn an
 - Celery/Redis worker with persistent database job status and idempotent probe task.
 - Locked dependencies, lint/type/build checks, browser navigation and PostgreSQL integration tests, GitHub Actions workflow.
 
-Brand DNA is functional: load/save your profile and edit six fields in English or Hebrew with validation and save feedback. Knowledge Base supports pasted-text ingestion, processing, preview, retry, and deletion. Create Post and History remain foundation screens.
+Brand DNA is functional: load/save your profile and edit six fields in English or Hebrew with validation and save feedback. Knowledge Base supports pasted-text ingestion, processing, preview, retry, and deletion. Create Post generates editable English/Hebrew drafts with source references and saves them to searchable History. Each generated draft now passes a separate sentence-by-sentence source review before display. Check drafts against their sources; AI review is not a factual guarantee. Topic suggestions and media are not yet implemented.
 
 ## Start locally
 
@@ -27,7 +27,7 @@ npm ci
 npm run dev
 ```
 
-Open http://localhost:3000. API docs: http://localhost:58073/docs. Health: `/health/live` (process), `/health/ready` (database migrations and Redis). Readiness does not assert worker availability.
+Open http://localhost:53073. API docs: http://localhost:58073/docs. Health: `/health/live` (process), `/health/ready` (database migrations and Redis). Readiness does not assert worker availability.
 
 PostgreSQL uses localhost:55473 and Redis localhost:56373 to avoid other local projects. All published ports bind to loopback. Docker credentials are development-only; volumes retain data across restarts. `docker compose down` preserves volumes.
 
@@ -58,7 +58,7 @@ curl -X POST http://localhost:58073/dev/jobs/probe
 curl http://localhost:58073/dev/jobs/UUID
 ```
 
-The job should reach Ready with attempts=1. Redis carries job IDs, while PostgreSQL stores status independently of Redis result expiration. The probe is a foundation smoke test; document ingestion/recovery is implemented in the next stage. `ENVIRONMENT=production` removes `/dev` endpoints. Authentication must replace the fixed local scope before exposing product APIs publicly.
+The job should reach Ready with attempts=1. Redis carries job IDs, while PostgreSQL stores status independently of Redis result expiration. The probe is a foundation smoke test; document ingestion and scheduled recovery are also implemented. `ENVIRONMENT=production` removes `/dev` endpoints. Authentication must replace the fixed local scope before exposing product APIs publicly.
 
 ## Checks
 
@@ -89,7 +89,7 @@ Runtime role `social_app` has DML access only; `social_admin` applies migrations
 
 Every owned record has `user_id` and `workspace_id`, enforced against workspace ownership. Chunk and job document references also enforce the same owner/workspace. Document deletion cascades chunks; saved posts retain JSON source snapshots. Post status is constrained to Draft until Phase 2.
 
-No embedding provider has been selected yet. Vectors use variable-dimension storage with a check that model metadata and stored dimensions match. SP-7 must choose the embedding model, enforce its dimension, and add a dimension-specific vector index. No production vector-search configuration is implied by the foundation schema.
+OpenRouter embeddings use openai/text-embedding-3-small at 1536 dimensions with profile-aware retrieval. Live provider verification passed. Retrieval currently uses exact cosine search; a production vector index remains outstanding. See docs/ai-setup.md.
 
 Create a migration with `uv run alembic revision --autogenerate -m 'description'`, review it, and run `uv run alembic upgrade head`. Use MIGRATION_DATABASE_URL separately from DATABASE_URL. In production, provision non-superuser migrator/runtime roles outside Compose and require TLS (`sslmode=verify-full` with your CA) on database connections.
 
@@ -108,7 +108,7 @@ Backups contain private brand and knowledge data. Production policy: encrypted d
 
 ## Delivery decisions
 
-See [implementation notes](docs/implementation.md). Next: grounded generation → editable saved drafts; then PDF/URL ingestion, suggestions, previews, and images.
+See [implementation notes](docs/implementation.md). Generation and editable saved drafts are available locally. Remaining work includes PDF/URL ingestion, suggestions, previews, images and broader grounding evaluation.
 
 ## Brand DNA editor
 
@@ -138,7 +138,7 @@ Validation includes 26 backend tests, six browser tests, and a live browser-to-w
 
 The provider client, resumable embedding worker, Ready gating, and scoped vector-search API are implemented and live-verified with OpenRouter. Provider connectivity, source readiness, idempotent embedding requests, and semantic retrieval passed; temporary verification data was removed. See [AI setup](docs/ai-setup.md) for configuration and repeat verification. Credentials remain local in the Git-ignored backend/.env.
 
-The default configuration is OpenRouter / openai/text-embedding-3-small / 1536 dimensions, with separate embedding credentials. Configuration/model/revision changes are isolated using profile hashes; existing vectors must be re-embedded before they are eligible for the current search. No post-generation API is implemented yet.
+The default configuration is OpenRouter / openai/text-embedding-3-small / 1536 dimensions, with separate embedding credentials. Configuration/model/revision changes are isolated using profile hashes; existing vectors must be re-embedded before they are eligible for the current search. The generation API retrieves Ready sources and performs a separate factual-support review.
 
 ## Worker reliability verification
 
@@ -146,3 +146,9 @@ Run `python3 scripts/verify_worker_recovery.py` from the repository root. It bui
 
 Worker domain events are JSON with job_id, document_id, and request_id. Arbitrary logging extras and exception bodies are excluded. Celery timeouts, late acknowledgements, broker-loss cancellation, concurrency, and visibility timeout are configured together; provider failures still follow their bounded retry policy.
 # Social-Platform
+
+## Generate and save drafts locally
+
+Configure Brand DNA, paste a source in Knowledge Base and enable AI search until it is Ready. Open Create Post, select platform/language and preferences, generate, review and edit, then Save Draft. History supports searching, editing and deleting drafts. Generation defaults to configurable OpenRouter `openai/gpt-4.1`. It can reuse the existing embedding key on official OpenRouter; all provider calls and secrets stay on the backend. See backend/.env.example for generation budgets and docs/implementation.md for known grounding limitations and retention.
+
+To run the opt-in live provider evaluation (incurs API usage): `cd backend && uv run python scripts/evaluate_generation.py`. It uses a disposable database and deliberately fails known unsupported embellishments. It checks six rejected examples and two bilingual generation/save/edit/delete flows. Exact excerpt validation and model review improve grounding but cannot guarantee factual correctness.
