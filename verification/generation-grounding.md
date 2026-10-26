@@ -142,3 +142,177 @@ code or deployment configuration were modified. No commit, push or merge.
 SP-4 and its parent stay In Progress. Small curated evaluation now has live evidence across
 three domains; arbitrary domains, paraphrases, model nondeterminism, actual-user Brand DNA and
 Ready-source validation, and deployment/requested-model availability remain release work.
+
+## Actual-user validation — 2026-10-26
+
+Actual-user validation did **not** establish usable supported generation in either language.
+SP-4 and SP-16 remain In Progress; no acceptance checkbox was newly checked.
+
+Validated after merge commit `d36d3a4`, with configured OpenRouter `openai/gpt-4.1`
+writer/reviewer and existing budgets, timeouts and retries. API readiness passed;
+configuration reported configured=true, brand_ready=true and ready_documents=1. Brand
+DNA version 2 contains a name and audience; positioning, voice, guidelines and prohibited
+claims are empty. No fields were filled in. This limits style/prohibited-claim assessment.
+
+A transient private Python harness read the original through read-only, repeatable-read
+transactions. It cloned only the scoped user/workspace, actual Brand DNA, one Ready
+document (2,054 source characters) and three existing chunks/embeddings into a newly
+migrated `social_generation_verify_<random>` database. The child checked the reserved
+marker and explicit database URL before application import. Existing embeddings were
+reused; query embedding, writer and reviewer calls were live. No invented source/readiness
+bypass or application, prompt, threshold or model change was used.
+
+A structured GPT-4.1 planning call privately selected equivalent EN/HE requests supported
+by four source facts and identified absent exact purchase price, upcoming launch date and
+guaranteed quantified outcome. Six challenges requested those unsupported details alongside
+the supported topic. Planner/audit outputs were locally validated using strict Pydantic
+models. Private source text, topics, drafts and provider issue text were not printed or
+committed. The harness was transient; these private requests are not reusable committed
+fixtures. Source selection and semantic assessment were model-assisted, not human approval.
+
+Initial matrix, one uninterrupted run (exit 1):
+
+| Request | English / LinkedIn | Hebrew / Facebook |
+| --- | --- | --- |
+| Supported topic | Failed: insufficient_context | Failed: grounding_review_failed |
+| Infer exact purchase price | Inconclusive: insufficient_context | Safely withheld: grounding_review_failed |
+| Infer exact upcoming launch date | Inconclusive: insufficient_context | Safely withheld: grounding_review_failed |
+| Promise 50% improvement within seven days | Inconclusive: insufficient_context | Safely withheld: grounding_review_failed |
+
+Three Hebrew challenges passed fail-closed checks. Supported cases and all four English
+cases failed evaluation expectations (five failures). Retrieval failures do not count as
+semantic rejection. All eight persisted Failed status, exposed no public result and
+rejected saving with HTTP 404. No accepted draft was available; positive provenance and
+save/read/delete checks did not execute and must not be reported as passed.
+
+A second disposable run repeated only the two supported requests, capturing live
+writer/reviewer responses privately in memory. Separate diagnostic retrieval omitted the
+cutoff, while production generation retained it:
+
+- English: three eligible chunks; nearest cosine distance 0.727529 versus configured
+  maximum 0.65; zero within threshold. Generation again returned insufficient_context.
+- Hebrew: three eligible chunks; nearest distance 0.289866; all three within threshold.
+  Generation again returned grounding_review_failed. Production review returned
+  accepted=false, one issue and zero supported sentences out of three; evidence quote
+  membership was valid. A separate full-source GPT-4.1 audit rated factual support, topic,
+  audience, platform, language, omission of unsupported detail and brand identity acceptable.
+  This is reviewer disagreement, not proof of an incorrect production rejection. Its cause
+  remains open; same-model auditing is not independent human editorial verification.
+
+Diagnostic run: exit 1, both supported cases failed, public results absent and saves blocked.
+Instrumentation returned actual provider responses and preserved production safeguards.
+Its writer capture parsed valid JSON in this run; malformed-output behavior was not tested.
+
+Separate QA reviewed API contracts, provenance/persistence expectations, strict output
+validation, failure handling and isolation; syntax compilation passed. Separate security
+audit found no remaining blocking findings after suppressing application logs, removing
+unconstrained planner output and allowlisting error codes. Auditors made no provider calls
+or user-data reads. This transient harness is trusted developer instrumentation, not a
+production security boundary. No application changes or new regression tests; the historical
+169-test suite was not rerun. Offline validation passed for 20 review fixtures and 16
+generation scenarios with zero provider calls. Existing Starlette/httpx warning observed.
+
+Both disposable databases were removed in finally blocks. A subsequent PostgreSQL catalog
+check found zero evaluation databases. Original scoped Brand DNA/documents/chunks/posts/
+generation/jobs fingerprints matched before and after each run. Saved posts remained empty;
+private backend/.env remained ignored and unmodified. Total provider billing was not
+measured. Reported planning/extra-audit costs alone were $0.004902 and $0.006828, excluding
+generation/review/query embeddings and any unreported usage.
+
+Next existing SP-4 work: investigate cross-language retrieval and the Hebrew review
+disagreement without weakening factuality safeguards, then address deployment-model
+availability and remaining context/source-instruction release criteria. Suggestions/media
+remain deferred. No push, PR or merge was performed for this validation.
+
+## Cross-language retrieval and review continuation — 2026-10-26
+
+The user authorized continuing and explicitly selected an EN/HE query-translation fallback
+using the existing model, preserving relevance, review and the total completion allowance.
+The actual Ready document is Hebrew. Additional equivalent English topic/keyword queries
+had nearest distances 0.815756 and 0.768751 (an earlier keyword run: 0.777968); equivalent
+Hebrew forms reached 0.575927 and 0.421153. None of the English variants met the unchanged
+0.65 cutoff. These observations support cross-language retrieval as the immediate blocker;
+they do not establish embedding quality for arbitrary queries.
+
+Private Hebrew diagnostics also found a concrete extraction failure: the model accepted
+three sentences but stitched two nonadjacent source passages into one quote, omitting 126
+source characters. Ordered coverage and chunk IDs were valid; exact membership correctly
+failed. Source-review-v3 now explicitly requires separate contiguous quotations. Exact
+validation was retained, not normalized or relaxed. Replaying that same draft with v3
+still produced a rejection, while a later fresh supported generation passed. Quote stitching
+and false rejection are not claimed to be eliminated by the instruction change.
+
+Implemented app/query_translation.py and generation orchestration: only empty initial
+scoped retrieval triggers one bounded translation to the opposite topic script. The second
+search preserves owner, Ready/profile/model/dimension filters, 0.65 cutoff and context
+budget. Context trimming that removes existing hits never triggers translation. Translated
+queries are strictly validated, remain out of factual evidence and returned metadata, and
+do not replace original writer/reviewer preferences. No new dependency, embedding model,
+source or user Brand DNA change was introduced.
+
+Initial fixed 20/40/40 completion shares caused generation_spending_limit before writing.
+That failed live attempt is retained as execution history. The final allocation still
+preflights translation within 20%, including all allowed retries. After it completes,
+estimated_max_usd multiplied by attempts actually made remains consumed; writer/reviewer
+each receive half the remainder, including all of their possible retries. Strict finite
+reservation/attempt validation rejects impossible metadata. This reuses only future
+translation retries that cannot occur after completion, not unverified provider billing.
+Actual translation usage is included in successful completion totals and preserved on
+downstream failure. The extra embedding call remains outside completion accounting.
+
+Final actual-source outcomes were obtained across targeted runs, not one uninterrupted
+green matrix. Two supported runs passed production review with exact evidence, original
+preferences, save/read/delete and independent model-assisted factual assessment:
+
+| Request | English / LinkedIn | Hebrew / Facebook |
+| --- | --- | --- |
+| Supported topic | Grounded draft; translation to Hebrew used | Grounded draft; no translation |
+| Infer exact purchase price | Withheld | Withheld |
+| Infer exact upcoming launch date | Withheld | Draft; additional audit disputed support |
+| Promise 50% improvement within seven days | Grounded draft omitting unsupported guarantee | Withheld |
+
+The six-challenge run exited unsuccessfully because the Hebrew date case failed its
+additional audit. Production review accepted that draft with exact quotes; a separate
+full-source audit flagged an extra claim, and an initial classification called it an
+invented event/date. A later targeted source/third-sentence check found no unsupported
+clause and judged the sentence supported. These conflicting model assessments remain
+unresolved; the case has NOT been exempted, marked passed, or treated as proof of a leak.
+Model assessment is not independent human editorial verification. Some other withheld
+challenges were judged safe by the extra audit, preserving the known false-rejection risk.
+All withheld challenge runs had Failed/null public results and HTTP 404 save rejection.
+Every accepted draft passed save/read/delete; test-created drafts/runs were removed.
+
+Reported completion costs for supported English/Hebrew drafts were $0.009326/$0.010250.
+Their measured reservations remained below $0.05. These are not total experiment billing;
+query embeddings, rejected attempts, targeted classifiers/replays and separate fixture
+reviews are excluded. Total provider billing remains unmeasured. No private text, source
+names, topics, drafts, model issue text or credentials were printed or committed.
+
+Final verification: 231 backend tests passed against a freshly migrated disposable DB
+(completion calls mocked); Ruff format/lint and app mypy passed; offline validation passed
+20 review fixtures and 16 generation scenarios with zero provider calls. All 20 existing
+review fixtures also passed a live source-review-v3 regression run: ten accepted controls
+and ten rejected negatives. The 16 synthetic generation scenarios were not rerun live.
+Existing Starlette/httpx deprecation warning only. No frontend code/tests changed.
+
+Fresh QA added EN/HE exact-excerpt tests, stale-v2 retry/read/save tests, translation/schema
+and reservation boundary tests, scoped fallback/budget/usage/idempotency/failure tests and
+context-trimming coverage. Fresh security audit found no blocking issue in the final
+translation/reservation/review changes. A temporary private-capture path was hardened to
+exclusive, no-symlink creation; existing captures were verified regular, owned and 0600.
+Auditors did not access user data or make paid calls. Original workspace fingerprints
+matched after every disposable generation run. All temporary databases were dropped.
+The disputed Hebrew sample and complete source snapshot were retained outside the checkout
+in a private temporary directory (0700; case file 0600) for adjudication. Other transient
+scripts/captures were removed. No private artifact was added to Git.
+
+The local API was rebuilt for this continuation; no public deployment, push, PR or merge.
+Readiness and configuration passed; the container reports source-review-v3 and
+retrieval-translation-v1. Final catalog check found zero evaluation databases, Brand DNA
+version 2, one Ready source and zero saved posts.
+SP-4/SP-16 remain In Progress with no new checkbox checked. Next existing SP-4 work is
+to resolve the Hebrew date audit disagreement and remaining release evaluation, then
+context/source-instruction and requested-model deployment criteria. The reviewer schema
+also still requires evidence for unsupported sentences; QA identified this as a separate
+contract inconsistency that can yield review_invalid, not the cause of the valid rejected
+verdicts above. It is recorded here without creating an overlapping issue or claiming a fix.

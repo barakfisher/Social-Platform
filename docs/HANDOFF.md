@@ -89,3 +89,13 @@ be verified from GitHub/git history; .ai/handoff.md contains the full continuati
 GitHub rejected normal PR #1 merging pending a required approving review; repository auto-merge
 is disabled. No admin bypass or repository-policy change was attempted. See .ai/handoff.md and
 live PR state for the final review/check gate. This handoff does not claim the PR was merged.
+
+## Latest delivery — 2026-10-26
+
+The current handoff is `.ai/handoff.md`, rewritten for the cross-language retrieval delivery.
+It supersedes startup/wait/runtime/PR #1 status notes above: PR #1 merged as d36d3a4.
+The user now requested merge, handoff and a fresh chat. Current local verification is231
+backend tests, static checks and20 live review fixtures passed. Actual supported EN/HE drafts
+passed targeted runs; a Hebrew date challenge remains unresolved due conflicting model audits.
+Read the private evidence location, budget behavior, current runtime and delivery status in
+`.ai/handoff.md`; inspect GitHub for the final new PR merge/check status. SP-4/SP-16 stay open.
