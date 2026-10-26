@@ -85,3 +85,7 @@ wait for authorization before starting the next recommended task.
 Evaluation delivery PR: https://github.com/barakfisher/Social-Platform/pull/1 . Initial delivery
 commit c659795; the user's merge request applies to this PR. Its final merge/check state must
 be verified from GitHub/git history; .ai/handoff.md contains the full continuation context.
+
+GitHub rejected normal PR #1 merging pending a required approving review; repository auto-merge
+is disabled. No admin bypass or repository-policy change was attempted. See .ai/handoff.md and
+live PR state for the final review/check gate. This handoff does not claim the PR was merged.

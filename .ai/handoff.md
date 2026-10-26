@@ -94,3 +94,13 @@ The user requested merging this PR. Inspect its actual mergedAt/mergeCommit and 
 checkout history on resume. Initial new push/PR checks were queued or running when this
 handoff was written; the historical billing failure is not asserted for these new runs.
 Use the PR Checks tab for final hosted results, not the older blocked run or local evidence.
+
+## Merge gate observed
+
+GitHub rejected the normal squash merge because main's repository rules require an approving
+review (PR reviewDecision=REVIEW_REQUIRED; one approving review required). Auto-merge was also
+rejected because it is disabled for this repository. No administrator bypass, ruleset change,
+or fabricated reviewer approval was used. An eligible reviewer must approve before a normal
+merge can complete. The PR remains open unless its live GitHub state now shows otherwise.
+Backend hosted checks passed on aaac80e; frontend/worker checks were still running at this
+source update. Read the current PR Checks tab for all final results and latest head SHA.
