@@ -1,0 +1,202 @@
+[
+  {
+    "name": "conflicting_facts_en",
+    "category": "conflicting_facts",
+    "language": "en",
+    "platform": "facebook",
+    "source": "The volunteer meeting is Thursday. Correction: the volunteer meeting is Friday, not Thursday.",
+    "topic": "Announce the corrected volunteer meeting day.",
+    "draft": "The volunteer meeting is Thursday.",
+    "accepted": false
+  },
+  {
+    "name": "conflicting_facts_he",
+    "category": "conflicting_facts",
+    "language": "he",
+    "platform": "facebook",
+    "source": "מפגש המתנדבים ביום חמישי. תיקון: מפגש המתנדבים ביום שישי ולא ביום חמישי.",
+    "topic": "הודיעו על היום המתוקן של מפגש המתנדבים.",
+    "draft": "מפגש המתנדבים ביום חמישי.",
+    "accepted": false
+  },
+  {
+    "name": "irrelevant_source_en",
+    "category": "irrelevant_source",
+    "language": "en",
+    "platform": "facebook",
+    "source": "The museum opens on Tuesdays.",
+    "topic": "Describe the garden volunteer meeting.",
+    "draft": "The garden volunteer meeting is Tuesday.",
+    "accepted": false
+  },
+  {
+    "name": "irrelevant_source_he",
+    "category": "irrelevant_source",
+    "language": "he",
+    "platform": "facebook",
+    "source": "המוזיאון פתוח ביום שלישי.",
+    "topic": "תארו את מפגש המתנדבים בגינה.",
+    "draft": "מפגש המתנדבים בגינה ביום שלישי.",
+    "accepted": false
+  },
+  {
+    "name": "unsupported_request_en",
+    "category": "unsupported_request",
+    "language": "en",
+    "platform": "facebook",
+    "source": "The garden grows sage.",
+    "topic": "Include the requested admission price of 20 dollars.",
+    "draft": "Admission to the garden costs 20 dollars.",
+    "accepted": false
+  },
+  {
+    "name": "unsupported_request_he",
+    "category": "unsupported_request",
+    "language": "he",
+    "platform": "facebook",
+    "source": "בגינה מגדלים מרווה.",
+    "topic": "כללו את מחיר הכניסה המבוקש של עשרים שקלים.",
+    "draft": "הכניסה לגינה עולה עשרים שקלים.",
+    "accepted": false
+  },
+  {
+    "name": "brand_en",
+    "category": "brand",
+    "language": "en",
+    "platform": "facebook",
+    "source": "The garden grows sage.",
+    "topic": "Describe the sage in the garden.",
+    "draft": "The garden grows sage. #Garden",
+    "accepted": false
+  },
+  {
+    "name": "brand_he",
+    "category": "brand",
+    "language": "he",
+    "platform": "facebook",
+    "source": "בגינה מגדלים מרווה.",
+    "topic": "תארו את המרווה בגינה.",
+    "draft": "בגינה מגדלים מרווה. #גינה",
+    "accepted": false
+  },
+  {
+    "name": "platform_en",
+    "category": "platform",
+    "language": "en",
+    "platform": "linkedin",
+    "source": "The garden grows sage. Our Instagram Story has a swipe-up link with more information.",
+    "topic": "Describe the sage in a LinkedIn post.",
+    "draft": "The garden grows sage. Swipe up on our Instagram Story to learn more.",
+    "accepted": false
+  },
+  {
+    "name": "platform_he",
+    "category": "platform",
+    "language": "he",
+    "platform": "linkedin",
+    "source": "בגינה מגדלים מרווה. בסטורי שלנו באינסטגרם יש קישור בהחלקה למעלה לפרטים נוספים.",
+    "topic": "תארו את המרווה בפוסט בלינקדאין.",
+    "draft": "בגינה מגדלים מרווה. החליקו למעלה בסטורי שלנו באינסטגרם לפרטים נוספים.",
+    "accepted": false
+  },
+  {
+    "name": "conflicting_facts_en_supported",
+    "category": "conflicting_facts",
+    "language": "en",
+    "platform": "facebook",
+    "source": "The volunteer meeting is Thursday. Correction: the volunteer meeting is Friday, not Thursday.",
+    "topic": "Announce the corrected volunteer meeting day.",
+    "draft": "The volunteer meeting is Friday.",
+    "accepted": true
+  },
+  {
+    "name": "conflicting_facts_he_supported",
+    "category": "conflicting_facts",
+    "language": "he",
+    "platform": "facebook",
+    "source": "מפגש המתנדבים ביום חמישי. תיקון: מפגש המתנדבים ביום שישי ולא ביום חמישי.",
+    "topic": "הודיעו על היום המתוקן של מפגש המתנדבים.",
+    "draft": "מפגש המתנדבים ביום שישי.",
+    "accepted": true
+  },
+  {
+    "name": "irrelevant_source_en_supported",
+    "category": "irrelevant_source",
+    "language": "en",
+    "platform": "facebook",
+    "source": "The museum opens on Tuesdays.",
+    "topic": "Describe the museum opening day.",
+    "draft": "The museum opens on Tuesdays.",
+    "accepted": true
+  },
+  {
+    "name": "irrelevant_source_he_supported",
+    "category": "irrelevant_source",
+    "language": "he",
+    "platform": "facebook",
+    "source": "המוזיאון פתוח ביום שלישי.",
+    "topic": "תארו את יום פתיחת המוזיאון.",
+    "draft": "המוזיאון פתוח ביום שלישי.",
+    "accepted": true
+  },
+  {
+    "name": "unsupported_request_en_supported",
+    "category": "unsupported_request",
+    "language": "en",
+    "platform": "facebook",
+    "source": "The garden grows sage.",
+    "topic": "Describe the sage in the garden.",
+    "draft": "The garden grows sage.",
+    "accepted": true
+  },
+  {
+    "name": "unsupported_request_he_supported",
+    "category": "unsupported_request",
+    "language": "he",
+    "platform": "facebook",
+    "source": "בגינה מגדלים מרווה.",
+    "topic": "תארו את המרווה בגינה.",
+    "draft": "בגינה מגדלים מרווה.",
+    "accepted": true
+  },
+  {
+    "name": "brand_en_supported",
+    "category": "brand",
+    "language": "en",
+    "platform": "facebook",
+    "source": "The garden grows sage.",
+    "topic": "Describe the sage in the garden.",
+    "draft": "The garden grows sage.",
+    "accepted": true
+  },
+  {
+    "name": "brand_he_supported",
+    "category": "brand",
+    "language": "he",
+    "platform": "facebook",
+    "source": "בגינה מגדלים מרווה.",
+    "topic": "תארו את המרווה בגינה.",
+    "draft": "בגינה מגדלים מרווה.",
+    "accepted": true
+  },
+  {
+    "name": "platform_en_supported",
+    "category": "platform",
+    "language": "en",
+    "platform": "linkedin",
+    "source": "The garden grows sage. Our Instagram Story has a swipe-up link with more information.",
+    "topic": "Describe the sage in the garden.",
+    "draft": "The garden grows sage.",
+    "accepted": true
+  },
+  {
+    "name": "platform_he_supported",
+    "category": "platform",
+    "language": "he",
+    "platform": "linkedin",
+    "source": "בגינה מגדלים מרווה. בסטורי שלנו באינסטגרם יש קישור בהחלקה למעלה לפרטים נוספים.",
+    "topic": "תארו את המרווה בגינה.",
+    "draft": "בגינה מגדלים מרווה.",
+    "accepted": true
+  }
+]

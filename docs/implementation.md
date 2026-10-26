@@ -51,7 +51,7 @@ The default generation model is configurable OpenRouter `openai/gpt-4o`; live ca
 
 Live evaluation used a disposable migrated database, real embeddings and real completions, with English LinkedIn and Hebrew Facebook fixtures containing injected instructions. Both completed generation/save/edit/delete and ignored the injection. Human review nevertheless found unsupported embellishments (for example the Hebrew draft added an aroma description). The lexical evaluation originally missed this synonym; it has been expanded and is not a semantic grounding guarantee. SP-4 remains In Progress: stronger grounding checks and a broader curated evaluation must pass before release. Sources returned and the legacy grounded flag indicate cited retrieval, not independent verification of every claim; the form explicitly asks users to review factual claims.
 
-Run the opt-in paid live evaluation with `cd backend && uv run python scripts/evaluate_generation.py`. It fails on known unsupported phrases and removes only its own temporary database. Never weaken a failed evaluation to mark the issue complete.
+Run the opt-in paid live evaluation with `cd backend && uv run python scripts/evaluate_generation.py --live`. It fails on known unsupported phrases and removes only its own temporary database. Never weaken a failed evaluation to mark the issue complete.
 
 Deletion hard-deletes the saved draft and its associated generation result. Source snapshots remain with drafts until deletion; deleting a knowledge source does not erase existing draft snapshots. Unsaved generation results are retained locally without automatic expiry. Interrupted requests are now recovered on retry/status reads; see the 2026-10-26 follow-up below. No media objects are created yet.
 

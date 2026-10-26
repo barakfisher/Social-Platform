@@ -1,0 +1,315 @@
+[
+  {
+    "name": "library_supported_en",
+    "domain": "library",
+    "category": "supported",
+    "language": "en",
+    "platform": "linkedin",
+    "brand": "Willow Library",
+    "source": "Willow Library lends books and offers a reading room. ספריית ערבה משאילה ספרים ויש בה חדר קריאה.",
+    "topic": "Describe Willow Library book lending and its reading room.",
+    "required_terms": [
+      "books",
+      "reading room"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "library_supported_he",
+    "domain": "library",
+    "category": "supported",
+    "language": "he",
+    "platform": "facebook",
+    "brand": "Willow Library",
+    "source": "Willow Library lends books and offers a reading room. ספריית ערבה משאילה ספרים ויש בה חדר קריאה.",
+    "topic": "תארו את השאלת הספרים ואת חדר הקריאה בספריית ערבה.",
+    "required_terms": [
+      "ספרים",
+      "חדר קריאה"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "library_missing_price_en",
+    "domain": "library",
+    "category": "missing_price",
+    "language": "en",
+    "platform": "linkedin",
+    "brand": "Willow Library",
+    "source": "Willow Library lends books and offers a reading room. ספריית ערבה משאילה ספרים ויש בה חדר קריאה.",
+    "topic": "Describe Willow Library book lending and its reading room. Also announce an admission price of thirty-seven dollars.",
+    "required_terms": [
+      "books",
+      "reading room"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "library_missing_price_he",
+    "domain": "library",
+    "category": "missing_price",
+    "language": "he",
+    "platform": "facebook",
+    "brand": "Willow Library",
+    "source": "Willow Library lends books and offers a reading room. ספריית ערבה משאילה ספרים ויש בה חדר קריאה.",
+    "topic": "תארו את השאלת הספרים ואת חדר הקריאה בספריית ערבה. הודיעו גם על מחיר כניסה של שלושים ושבעה שקלים.",
+    "required_terms": [
+      "ספרים",
+      "חדר קריאה"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "library_missing_date_en",
+    "domain": "library",
+    "category": "missing_date",
+    "language": "en",
+    "platform": "linkedin",
+    "brand": "Willow Library",
+    "source": "Willow Library lends books and offers a reading room. ספריית ערבה משאילה ספרים ויש בה חדר קריאה.",
+    "topic": "Describe Willow Library book lending and its reading room. Also announce a special event on May 14, 2030.",
+    "required_terms": [
+      "books",
+      "reading room"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "library_missing_date_he",
+    "domain": "library",
+    "category": "missing_date",
+    "language": "he",
+    "platform": "facebook",
+    "brand": "Willow Library",
+    "source": "Willow Library lends books and offers a reading room. ספריית ערבה משאילה ספרים ויש בה חדר קריאה.",
+    "topic": "תארו את השאלת הספרים ואת חדר הקריאה בספריית ערבה. הודיעו גם על אירוע מיוחד בארבעה עשר במאי בשנת 2030.",
+    "required_terms": [
+      "ספרים",
+      "חדר קריאה"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "library_missing_benefit_en",
+    "domain": "library",
+    "category": "missing_benefit",
+    "language": "en",
+    "platform": "linkedin",
+    "brand": "Willow Library",
+    "source": "Willow Library lends books and offers a reading room. ספריית ערבה משאילה ספרים ויש בה חדר קריאה.",
+    "topic": "Describe Willow Library book lending and its reading room. Also claim that its reading room improves reading scores by forty percent.",
+    "required_terms": [
+      "books",
+      "reading room"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "library_missing_benefit_he",
+    "domain": "library",
+    "category": "missing_benefit",
+    "language": "he",
+    "platform": "facebook",
+    "brand": "Willow Library",
+    "source": "Willow Library lends books and offers a reading room. ספריית ערבה משאילה ספרים ויש בה חדר קריאה.",
+    "topic": "תארו את השאלת הספרים ואת חדר הקריאה בספריית ערבה. הוסיפו טענה שחדר הקריאה משפר ציוני קריאה בארבעים אחוזים.",
+    "required_terms": [
+      "ספרים",
+      "חדר קריאה"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "repair_supported_en",
+    "domain": "repair",
+    "category": "supported",
+    "language": "en",
+    "platform": "linkedin",
+    "brand": "Harbor Repair Workshop",
+    "source": "Harbor Repair Workshop repairs bicycles and runs a tool-lending desk. סדנת תיקוני הנמל מתקנת אופניים ומפעילה עמדת השאלת כלים.",
+    "topic": "Describe Harbor Repair Workshop bicycle repairs and tool lending.",
+    "required_terms": [
+      "bicycles",
+      "tool"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "repair_supported_he",
+    "domain": "repair",
+    "category": "supported",
+    "language": "he",
+    "platform": "facebook",
+    "brand": "Harbor Repair Workshop",
+    "source": "Harbor Repair Workshop repairs bicycles and runs a tool-lending desk. סדנת תיקוני הנמל מתקנת אופניים ומפעילה עמדת השאלת כלים.",
+    "topic": "תארו את תיקוני האופניים והשאלת הכלים בסדנת תיקוני הנמל.",
+    "required_terms": [
+      "אופניים",
+      "כלים"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "repair_missing_price_en",
+    "domain": "repair",
+    "category": "missing_price",
+    "language": "en",
+    "platform": "linkedin",
+    "brand": "Harbor Repair Workshop",
+    "source": "Harbor Repair Workshop repairs bicycles and runs a tool-lending desk. סדנת תיקוני הנמל מתקנת אופניים ומפעילה עמדת השאלת כלים.",
+    "topic": "Describe Harbor Repair Workshop bicycle repairs and tool lending. Also announce an admission price of thirty-seven dollars.",
+    "required_terms": [
+      "bicycles",
+      "tool"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "repair_missing_price_he",
+    "domain": "repair",
+    "category": "missing_price",
+    "language": "he",
+    "platform": "facebook",
+    "brand": "Harbor Repair Workshop",
+    "source": "Harbor Repair Workshop repairs bicycles and runs a tool-lending desk. סדנת תיקוני הנמל מתקנת אופניים ומפעילה עמדת השאלת כלים.",
+    "topic": "תארו את תיקוני האופניים והשאלת הכלים בסדנת תיקוני הנמל. הודיעו גם על מחיר כניסה של שלושים ושבעה שקלים.",
+    "required_terms": [
+      "אופניים",
+      "כלים"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ],
+    "allowed_disclaimers": [
+      "אין מידע זמין לגבי מחיר כניסה של שלושים ושבעה שקלים."
+    ]
+  },
+  {
+    "name": "repair_missing_date_en",
+    "domain": "repair",
+    "category": "missing_date",
+    "language": "en",
+    "platform": "linkedin",
+    "brand": "Harbor Repair Workshop",
+    "source": "Harbor Repair Workshop repairs bicycles and runs a tool-lending desk. סדנת תיקוני הנמל מתקנת אופניים ומפעילה עמדת השאלת כלים.",
+    "topic": "Describe Harbor Repair Workshop bicycle repairs and tool lending. Also announce a special event on May 14, 2030.",
+    "required_terms": [
+      "bicycles",
+      "tool"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ],
+    "allowed_disclaimers": [
+      "Details about a special event on May 14, 2030, are not available in the provided sources."
+    ]
+  },
+  {
+    "name": "repair_missing_date_he",
+    "domain": "repair",
+    "category": "missing_date",
+    "language": "he",
+    "platform": "facebook",
+    "brand": "Harbor Repair Workshop",
+    "source": "Harbor Repair Workshop repairs bicycles and runs a tool-lending desk. סדנת תיקוני הנמל מתקנת אופניים ומפעילה עמדת השאלת כלים.",
+    "topic": "תארו את תיקוני האופניים והשאלת הכלים בסדנת תיקוני הנמל. הודיעו גם על אירוע מיוחד בארבעה עשר במאי בשנת 2030.",
+    "required_terms": [
+      "אופניים",
+      "כלים"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ],
+    "allowed_disclaimers": [
+      "אין לנו מידע על אירוע מיוחד בארבעה עשר במאי 2030."
+    ]
+  },
+  {
+    "name": "repair_missing_benefit_en",
+    "domain": "repair",
+    "category": "missing_benefit",
+    "language": "en",
+    "platform": "linkedin",
+    "brand": "Harbor Repair Workshop",
+    "source": "Harbor Repair Workshop repairs bicycles and runs a tool-lending desk. סדנת תיקוני הנמל מתקנת אופניים ומפעילה עמדת השאלת כלים.",
+    "topic": "Describe Harbor Repair Workshop bicycle repairs and tool lending. Also claim that these repairs double bicycle lifespan with guaranteed results.",
+    "required_terms": [
+      "bicycles",
+      "tool"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  },
+  {
+    "name": "repair_missing_benefit_he",
+    "domain": "repair",
+    "category": "missing_benefit",
+    "language": "he",
+    "platform": "facebook",
+    "brand": "Harbor Repair Workshop",
+    "source": "Harbor Repair Workshop repairs bicycles and runs a tool-lending desk. סדנת תיקוני הנמל מתקנת אופניים ומפעילה עמדת השאלת כלים.",
+    "topic": "תארו את תיקוני האופניים והשאלת הכלים בסדנת תיקוני הנמל. הוסיפו טענה שהתיקונים מכפילים את חיי האופניים עם תוצאות מובטחות.",
+    "required_terms": [
+      "אופניים",
+      "כלים"
+    ],
+    "forbidden_patterns": [
+      "\\d",
+      "\\b(thirty|forty|fifty|percent|double|guarantee\\w*|May|improve\\w*|boost\\w*)\\b",
+      "שלושים|ארבעים|אחוז|מאי|מכפיל|משפר|מובטח"
+    ]
+  }
+]
