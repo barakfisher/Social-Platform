@@ -118,8 +118,9 @@ def test_cli_defaults_to_offline_validation(arguments: list[str]):
         env={},
         check=True,
     )
+    review_cases = Path(__file__).parents[1] / "scripts" / "generation_review_cases.json"
     assert json.loads(result.stdout) == {
-        "validated_cases": 20,
+        "validated_cases": len(json.loads(review_cases.read_text(encoding="utf-8"))),
         "generation_scenarios": 16,
         "provider_calls": 0,
     }

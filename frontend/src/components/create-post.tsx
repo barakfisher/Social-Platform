@@ -62,10 +62,29 @@ const copy = {
       "This draft changed elsewhere. Open History to load its latest version before saving.",
     brandLimit:
       "Your brand profile and topic exceed the writing context limit. Shorten the guidance or topic and try again.",
+    spendingLimit:
+      "This request would exceed the per-request AI cost limit set on the server. Your inputs are preserved; try a shorter topic or raise the limit in the server settings.",
     usage: "Based on Brand DNA version",
     chars: "characters",
     defaults:
       "Defaults: brand voice, automatic hook, medium length, no call to action.",
+    reviewModel: "Source check model",
+    reviewHint:
+      "Estimated cost of the source check per draft: typical, and the most the server will reserve. Writing and search are billed separately.",
+    perDraft: "per draft",
+    upTo: "up to",
+    recommended: "recommended",
+    costUnavailable: "cost unavailable",
+    unavailable: "unavailable",
+    loadingModels: "Loading models…",
+    modelsUnavailable:
+      "Model options couldn’t be loaded. The default source check will be used.",
+    reviewModelUnavailable:
+      "The selected source check model is no longer available. Choose another and try again.",
+    notes: {
+      "openai/gpt-5.6-terra": "stricter",
+      "openai/gpt-4.1": "cheaper, less strict",
+    } as Record<string, string>,
   },
   he: {
     title: "הופכים ידע לפוסט הבא שלך",
@@ -116,10 +135,29 @@ const copy = {
       "הטיוטה עודכנה במקום אחר. יש לפתוח את ההיסטוריה ולטעון את הגרסה העדכנית לפני שמירה.",
     brandLimit:
       "זהות המותג והנושא חורגים ממגבלת ההקשר. אפשר לקצר את ההנחיות או הנושא ולנסות שוב.",
+    spendingLimit:
+      "הבקשה חורגת ממגבלת העלות של AI לבקשה שהוגדרה בשרת. הפרטים שהזנת נשמרו; אפשר לקצר את הנושא או להעלות את המגבלה בהגדרות השרת.",
     usage: "מבוסס על גרסת זהות המותג",
     chars: "תווים",
     defaults:
       "ברירת המחדל: קול המותג, פתיחה אוטומטית, אורך בינוני, ללא הנעה לפעולה.",
+    reviewModel: "מודל לבדיקת המקורות",
+    reviewHint:
+      "עלות משוערת של בדיקת המקורות לכל טיוטה: עלות טיפוסית, והסכום המרבי שהשרת ישריין. הכתיבה והחיפוש מחויבים בנפרד.",
+    perDraft: "לטיוטה",
+    upTo: "עד",
+    recommended: "מומלץ",
+    costUnavailable: "העלות אינה זמינה",
+    unavailable: "לא זמין",
+    loadingModels: "טוען מודלים…",
+    modelsUnavailable:
+      "לא הצלחנו לטעון את אפשרויות המודל. תתבצע בדיקת המקורות המוגדרת כברירת מחדל.",
+    reviewModelUnavailable:
+      "המודל שנבחר לבדיקת המקורות כבר לא זמין. יש לבחור מודל אחר ולנסות שוב.",
+    notes: {
+      "openai/gpt-5.6-terra": "בדיקה מחמירה",
+      "openai/gpt-4.1": "זול יותר, פחות מחמיר",
+    } as Record<string, string>,
   },
 };
 type Capability = {
@@ -127,6 +165,26 @@ type Capability = {
   brand_ready: boolean;
   ready_documents: number;
 };
+type ReviewModelOption = {
+  id: string;
+  available: boolean;
+  typical_usd: number | null;
+  max_usd: number | null;
+};
+type ReviewModels = { default: string; models: ReviewModelOption[] };
+// Display names only; the server owns the allowlist and the prices.
+const modelNames: Record<string, string> = {
+  "openai/gpt-5.6-terra": "GPT-5.6 Terra",
+  "openai/gpt-4.1": "GPT-4.1",
+};
+function isReviewModels(data: unknown): data is ReviewModels {
+  const value = data as ReviewModels | null;
+  return (
+    typeof value?.default === "string" &&
+    Array.isArray(value.models) &&
+    value.models.every((m) => typeof m?.id === "string")
+  );
+}
 export function CreatePost({ locale }: { locale: Locale }) {
   const t = copy[locale];
   const [capability, setCapability] = useState<Capability | null>(null);
@@ -139,7 +197,12 @@ export function CreatePost({ locale }: { locale: Locale }) {
     hook: "auto",
     length: "medium",
     cta: "",
+    // Empty means the server's default source-check model.
+    review_model: "",
   });
+  const [reviewModels, setReviewModels] = useState<
+    ReviewModels | "error" | null
+  >(null);
   const [generated, setGenerated] = useState<GeneratedPost | null>(null);
   const [content, setContent] = useState("");
   const [saved, setSaved] = useState<SavedPost | null>(null);
@@ -152,7 +215,36 @@ export function CreatePost({ locale }: { locale: Locale }) {
     apiRequest<Capability>("/api/generation/configuration")
       .then(setCapability)
       .catch(() => setError("api_unavailable"));
+    apiRequest<unknown>("/api/generation/review-models")
+      .then((data) => setReviewModels(isReviewModels(data) ? data : "error"))
+      .catch(() => setReviewModels("error"));
   }, []);
+  const money = new Intl.NumberFormat(locale === "he" ? "he-IL" : "en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumSignificantDigits: 2,
+  });
+  function modelCost(option: ReviewModelOption) {
+    return !option.available
+      ? t.unavailable
+      : option.typical_usd !== null && option.max_usd !== null
+        ? `~${money.format(option.typical_usd)} ${t.perDraft} · ${t.upTo} ${money.format(option.max_usd)}`
+        : t.costUnavailable;
+  }
+  function modelLabel(option: ReviewModelOption, defaultId: string) {
+    const notes = [
+      option.id === defaultId ? t.recommended : null,
+      t.notes[option.id] ?? null,
+    ].filter(Boolean);
+    return `${modelNames[option.id] ?? option.id}${notes.length ? ` (${notes.join(", ")})` : ""} — ${modelCost(option)}`;
+  }
+  // A closed select truncates long options on phones, so the chosen cost is repeated below.
+  const selectedModel =
+    reviewModels && reviewModels !== "error"
+      ? reviewModels.models.find(
+          (option) => option.id === (form.review_model || reviewModels.default),
+        )
+      : undefined;
   async function generate(event: React.FormEvent) {
     event.preventDefault();
     setBusy("generate");
@@ -234,7 +326,11 @@ export function CreatePost({ locale }: { locale: Locale }) {
                   error ?? "",
                 )
               ? t.brandLimit
-              : t.error;
+              : error === "generation_spending_limit"
+                ? t.spendingLimit
+                : error === "review_model_unavailable"
+                  ? t.reviewModelUnavailable
+                  : t.error;
   return (
     <section aria-labelledby="create-title" className="mt-10 space-y-6">
       <div className="rounded-2xl border border-border bg-card p-6 sm:p-9">
@@ -412,6 +508,61 @@ export function CreatePost({ locale }: { locale: Locale }) {
                     value={form.cta}
                     onChange={(e) => setForm({ ...form, cta: e.target.value })}
                   />
+                </div>
+                <div className="sm:col-span-2">
+                  <label
+                    htmlFor={
+                      reviewModels === "error" ? undefined : "post-review-model"
+                    }
+                    className="mb-2 block text-sm"
+                  >
+                    {t.reviewModel}
+                  </label>
+                  {reviewModels === "error" ? (
+                    <p role="status" className="text-xs text-muted-foreground">
+                      {t.modelsUnavailable}
+                    </p>
+                  ) : (
+                    <select
+                      id="post-review-model"
+                      className={inputClass}
+                      aria-describedby="post-review-model-hint"
+                      disabled={reviewModels === null}
+                      value={form.review_model || reviewModels?.default || ""}
+                      onChange={(e) =>
+                        setForm({ ...form, review_model: e.target.value })
+                      }
+                    >
+                      {reviewModels === null ? (
+                        <option value="">{t.loadingModels}</option>
+                      ) : (
+                        reviewModels.models.map((option) => (
+                          <option
+                            key={option.id}
+                            value={option.id}
+                            disabled={!option.available}
+                          >
+                            {modelLabel(option, reviewModels.default)}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  )}
+                  {selectedModel && (
+                    <p
+                      data-testid="review-model-cost"
+                      aria-live="polite"
+                      className="mt-2 text-sm"
+                    >
+                      {modelCost(selectedModel)}
+                    </p>
+                  )}
+                  <p
+                    id="post-review-model-hint"
+                    className="mt-2 text-xs text-muted-foreground"
+                  >
+                    {t.reviewHint}
+                  </p>
                 </div>
               </div>
             </details>

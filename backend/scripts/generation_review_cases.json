@@ -198,5 +198,45 @@
     "topic": "תארו את המרווה בגינה.",
     "draft": "בגינה מגדלים מרווה.",
     "accepted": true
+  },
+  {
+    "name": "outside_context_en",
+    "category": "outside_context",
+    "language": "en",
+    "platform": "linkedin",
+    "source": "John Montagu, the fourth Earl of Sandwich, often ate meat between slices of bread while playing cards.",
+    "topic": "Explain where the word sandwich comes from.",
+    "draft": "The word sandwich is named after John Montagu, the fourth Earl of Sandwich, who often ate meat between slices of bread while playing cards.",
+    "accepted": false
+  },
+  {
+    "name": "outside_context_he",
+    "category": "outside_context",
+    "language": "he",
+    "platform": "facebook",
+    "source": "ג'ון מונטגיו, הרוזן הרביעי מסנדוויץ', נהג לאכול בשר בין פרוסות לחם בזמן משחק קלפים.",
+    "topic": "הסבירו מאיפה הגיעה המילה סנדוויץ'.",
+    "draft": "המילה סנדוויץ' נקראת על שמו של ג'ון מונטגיו, הרוזן הרביעי מסנדוויץ', שנהג לאכול בשר בין פרוסות לחם בזמן משחק קלפים.",
+    "accepted": false
+  },
+  {
+    "name": "outside_context_en_supported",
+    "category": "outside_context",
+    "language": "en",
+    "platform": "linkedin",
+    "source": "John Montagu, the fourth Earl of Sandwich, often ate meat between slices of bread while playing cards.",
+    "topic": "Explain where the word sandwich comes from.",
+    "draft": "John Montagu, the fourth Earl of Sandwich, often ate meat between slices of bread while playing cards.",
+    "accepted": true
+  },
+  {
+    "name": "outside_context_he_supported",
+    "category": "outside_context",
+    "language": "he",
+    "platform": "facebook",
+    "source": "ג'ון מונטגיו, הרוזן הרביעי מסנדוויץ', נהג לאכול בשר בין פרוסות לחם בזמן משחק קלפים.",
+    "topic": "הסבירו מאיפה הגיעה המילה סנדוויץ'.",
+    "draft": "ג'ון מונטגיו, הרוזן הרביעי מסנדוויץ', נהג לאכול בשר בין פרוסות לחם בזמן משחק קלפים.",
+    "accepted": true
   }
 ]

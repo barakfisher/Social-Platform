@@ -27,6 +27,14 @@ def generation_key() -> str:
     return ""
 
 
+def attempt_estimate_usd(prompt_tokens: int, output_tokens: int, model: dict) -> Decimal:
+    """Worst-case cost of one completion attempt, before retries."""
+    return (
+        Decimal(prompt_tokens + 128) * model["prompt_price"]
+        + Decimal(output_tokens) * model["completion_price"]
+    )
+
+
 def model_details(model_id: str | None = None) -> dict:
     settings = get_settings()
     try:
@@ -75,9 +83,10 @@ def chat_completion(
         raise GenerationError("generation_not_configured")
     model_id = model_id or settings.generation_model
     model = model_details(model_id)
+    # Callers default to the writer limit; only the reviewer asks for its larger limit.
     output_tokens = min(
         output_tokens or settings.generation_max_output_tokens,
-        settings.generation_max_output_tokens,
+        max(settings.generation_max_output_tokens, settings.generation_review_max_output_tokens),
     )
     budget_usd = min(
         budget_usd if budget_usd is not None else settings.generation_max_request_usd,
@@ -85,10 +94,7 @@ def chat_completion(
     )
     if prompt_tokens + output_tokens > model["context_length"]:
         raise GenerationError("generation_context_limit")
-    estimate = (
-        Decimal(prompt_tokens + 128) * model["prompt_price"]
-        + Decimal(output_tokens) * model["completion_price"]
-    )
+    estimate = attempt_estimate_usd(prompt_tokens, output_tokens, model)
     if estimate * (settings.generation_retries + 1) > Decimal(str(budget_usd)):
         raise GenerationError("generation_spending_limit")
     schema = schema or {

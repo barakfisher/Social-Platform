@@ -22,9 +22,12 @@ from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID
 from app.models import BrandDNA, GenerationRun, KnowledgeDocument
 from app.query_translation import translate_query
 from app.retrieval import search_context
+from app.review_models import review_model_options
 
 router = APIRouter(prefix="/generation", tags=["generation"], dependencies=[Depends(local_only)])
 PROMPT_VERSION = "grounded-post-v3"
+# Share of GENERATION_MAX_REQUEST_USD the cross-language query fallback may reserve.
+TRANSLATION_BUDGET_SHARE = 0.2
 SYSTEM = """
 Write a social post using only the provided brand profile and cited knowledge for factual
 claims.
@@ -71,6 +74,8 @@ class GenerateInput(BaseModel):
     hook: Literal["auto", "question", "insight", "story"] = "auto"
     length: Literal["short", "medium", "long"] = "medium"
     cta: str = Field(default="", max_length=300)
+    # Source-check model; omitted means the configured default. Checked against the allowlist.
+    review_model: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def validate_preferences(self):
@@ -163,9 +168,25 @@ def generate(payload: GenerateInput):
         return generate_locked(payload)
 
 
+def request_inputs(payload: GenerateInput) -> dict:
+    """Stored, fingerprinted inputs with the source-check model resolved and allowlisted."""
+    settings = get_settings()
+    review_model = payload.review_model or settings.generation_review_model
+    if review_model not in settings.generation_review_models:
+        raise HTTPException(422, "review_model_unavailable")
+    # Resolve the default first so an omitted and an explicit default share one fingerprint.
+    return {
+        **payload.model_dump(mode="json", exclude={"request_key"}),
+        "review_model": review_model,
+    }
+
+
 def generate_locked(payload: GenerateInput):
     settings = get_settings()
-    inputs = payload.model_dump(mode="json", exclude={"request_key"})
+    inputs = request_inputs(payload)
+    review_model = inputs["review_model"]
+    # The model choice is an operational setting, never writer or reviewer instructions.
+    preferences = {key: value for key, value in inputs.items() if key != "review_model"}
     fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
     with SessionLocal.begin() as session:
         brand = session.scalar(
@@ -262,7 +283,8 @@ def generate_locked(payload: GenerateInput):
         stage_budget = settings.generation_max_request_usd / 2
         if not sources:
             translated = translate_query(
-                payload.topic, budget_usd=settings.generation_max_request_usd * 0.2
+                payload.topic,
+                budget_usd=settings.generation_max_request_usd * TRANSLATION_BUDGET_SHARE,
             )
             if translated is not None:
                 query, translation_metadata, translation_reservation = translated
@@ -283,7 +305,7 @@ def generate_locked(payload: GenerateInput):
         user = json.dumps(
             {
                 "brand": brand_values,
-                "preferences": inputs,
+                "preferences": preferences,
                 "sources": sources,
                 "platform_character_limit": {"short": 600, "medium": 1200, "long": 2400}[
                     payload.length
@@ -318,8 +340,9 @@ def generate_locked(payload: GenerateInput):
                 completion.content.strip(),
                 references,
                 brand_values,
-                inputs,
+                preferences,
                 budget_usd=stage_budget,
+                model_id=review_model,
             )
         except GenerationError as exc:
             raise GenerationError(exc.code, {"generation": metadata, **exc.metadata}) from None
@@ -383,6 +406,12 @@ def generate_locked(payload: GenerateInput):
             run.status = "Failed"
             run.error_code = "generation_failed"
         raise HTTPException(500, "generation_failed") from None
+
+
+@router.get("/review-models")
+def review_models():
+    # Declared before /{run_id}, which would otherwise capture this path.
+    return review_model_options()
 
 
 @router.get("/{run_id}")

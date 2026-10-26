@@ -316,3 +316,154 @@ context/source-instruction and requested-model deployment criteria. The reviewer
 also still requires evidence for unsupported sentences; QA identified this as a separate
 contract inconsistency that can yield review_invalid, not the cause of the valid rejected
 verdicts above. It is recorded here without creating an overlapping issue or claiming a fix.
+
+## Hebrew date-case adjudication — 2026-10-26
+
+Offline only, no provider calls: the retained private sample (draft, production review,
+retrieved context and complete source snapshot) was compared with deterministic substring
+checks and a manual sentence-by-sentence reading. No private text is reproduced here.
+
+- **Date challenge: no leak.** The draft contains no future or launch date. Its only number
+  is a historical publication year that appears verbatim in the retrieved context. The draft
+  omitted the unsupported date request, like the English guarantee case. The earlier
+  "invented event/date" classification is refuted.
+- **Grounding: real gap in sentence 1, not 3.** Retrieval supplied source characters
+  622–2054 of 2054. The first sentence of the draft makes an etymology/origin claim and names
+  the epic as a work. Neither appears in the provided context; both appear only in the
+  unretrieved opening of the source. The two evidence quotes are exact but support only the
+  disguise/assistance part of the sentence. Production review accepted a clause that the
+  context does not support. It happens to be true per the full document, so it is an
+  ungrounded (parametric) claim, not a factual error.
+- **Why the audits disagreed.** The full-source audit's "extra claim" is consistent with the
+  sentence-1 gap. The later targeted check examined the third sentence, which is supported
+  (all five quotes are exact members of the context). The two audits assessed different
+  sentences, so the "conflict" is not a contradiction.
+
+Verdict: case **failed** under the system's contract (every claim supported by provided
+excerpts). Exact-quote membership and ordered coverage cannot detect a clause that carries
+no quote; that relies on the model reviewer. This is the same class of risk as the known
+false-acceptance limit and is not fixed. Case not exempted; SP-4 stays In Progress.
+
+Follow-up fixture: added the `outside_context` review category to
+`scripts/generation_review_cases.json` with four synthetic, non-private cases. They are
+English and Hebrew negatives, each adding a true world-knowledge origin claim that the
+source lacks, plus their exactly-sourced controls. The case set is now 24. Offline
+`--validate-cases` passed with zero provider calls. The CLI test now derives the expected
+count from the fixture file. The new cases have not been run against the live reviewer.
+
+## source-review-v4: claim-level evidence — 2026-10-26 (offline, uncommitted)
+
+app/grounding.py now asks the reviewer to split each sentence into ordered claims copied
+exactly from the sentence. The server rejects the review unless the claims cover every word
+except a fixed EN/HE connective list (`CONNECTIVES`), every claim is supported, and every
+supported claim has at least one exact quote. Unsupported claims may have empty evidence,
+which removes the QA-noted `review_invalid` path for valid rejections. Bumping
+REVIEW_VERSION invalidates v3 results on retry, GET and save, as v2 was invalidated before.
+
+Tests: new EN/HE regressions for a sourced remainder with an unclaimed, unsupported, or
+evidence-free origin clause; coverage cases (connectives, punctuation, Hebrew prefixes,
+qualifier "today"/"כיום", numbers, order, overlap, absent text); and a claim-count bound.
+With coverage disabled, both unclaimed-clause regressions fail, so they test the new check.
+Full backend suite: 256 passed on a fresh disposable database migrated as the admin role and
+tested as the restricted runtime role (dropped afterwards; zero test databases remain).
+The run included uncommitted concurrent spending-limit changes in this checkout. Ruff
+format/lint, app mypy and offline validation (24 review cases, 16 scenarios, zero provider
+calls) passed. No live or paid calls; v4 has not been run against the real model.
+
+Open constraint: compact v4 output for a 600-character post measured 818–1,322 tokens in
+Hebrew and 626–974 in English (o200k_base, 2–5 claims per sentence, short source aliases),
+or 878–1,952 with UUID chunk IDs. Review output is capped by the shared
+GENERATION_MAX_OUTPUT_TOKENS of 900. Longer reviews would be truncated and fail closed as
+`grounding_review_invalid`. Raising the reviewer limit also raises the spending reservation.
+
+v4 follow-up (owner decision recorded in docs/implementation.md): reviewer sources now use
+short aliases mapped back to real chunk IDs in stored provenance, the reviewer has its own
+1,600-token output limit, and the default per-request cap is $0.13. The provider clamp now
+allows the larger of the writer and reviewer limits, and callers without an explicit value
+still get the writer's 900. Full backend suite: 261 passed on a fresh disposable database
+using the restricted runtime role (dropped; zero test databases remain). Ruff, mypy and
+offline validation (24 cases, zero provider calls) passed. No live calls.
+
+## source-review-v4 live check — 2026-10-26 (paid, user-authorized)
+
+Scope: 25 calls to the review function only, against configured OpenRouter openai/gpt-4.1
+(timeout 30 s, one retry, reviewer output limit 1,600). These were the 24 curated fixtures
+and one replay of the retained private Hebrew sample. No writer calls, embeddings or
+database. A transient scratchpad harness timed each HTTP attempt and has been kept out of
+Git. The private raw review was saved beside the private case (directory 0700, file 0600).
+Only structural results are recorded here.
+
+| Result | Cases |
+| --- | --- |
+| Fixtures | 23/24 as expected: all 12 negatives except `outside_context_he` rejected; all 12 controls accepted |
+| `outside_context_he` | **Accepted (wrong).** Two claims, both marked supported, coverage passed. The origin clause was split out as its own claim and still judged supported |
+| `outside_context_en` | Rejected (correct) |
+| Private Hebrew replay | **Accepted (wrong).** One claim per sentence, each the whole sentence. Sentence 1 cited the same two quotes as v3, so coverage passed trivially |
+
+Latency: 25 attempts, one each, no retries or timeouts; mean 1.76 s, max 4.05 s against the
+30 s timeout. Output: max 501 completion tokens (private replay), well under 1,600; every
+response finished with `stop`. Provider-reported cost for the 25 calls: $0.07436 (no unknown
+costs).
+
+Conclusion: claim-level coverage only works when the model splits claims, and it does not
+stop the model from judging an unsourced clause supported. Both failures are reviewer
+judgment errors, which is the known limit recorded for v4. The case remains failed. SP-4
+stays In Progress. The measured output (≤501 tokens) is far below the estimate behind the
+1,600-token limit and $0.13 cap, because the model produced few claims per sentence.
+
+## OpenRouter reviewer-model availability — 2026-10-26 (public catalog, no paid calls)
+
+The public `GET /api/v1/models` catalog (468 models) lists no `anthropic/claude-3*` model,
+so the Claude 3.5 Sonnet named in SP-4 is not available through OpenRouter. `openai/gpt-4o`
+is listed ($2.50/$10 per million tokens, structured outputs). Current Anthropic, OpenAI and
+Google models with structured outputs are available. Most newer ones are reasoning models
+that do not list `temperature` as supported. The app always sends `temperature: 0`, does
+not control reasoning, and counts any reasoning tokens against max_completion_tokens. Prompt
+estimates use the configured o200k_base tokenizer, which undercounts for Claude and Gemini
+tokenizers. These compatibility points are not yet tested live.
+
+## Reviewer-model comparison — 2026-10-26 (paid, user-authorized, up to about $1.20)
+
+The same review-only harness ran the same 25 cases (24 fixtures plus the private Hebrew
+replay) through unchanged source-review-v4 code. Only GENERATION_REVIEW_MODEL changed. A
+per-model spending stop was enforced. The GPT-4.1 row is from the earlier v4 live check.
+
+| Reviewer | Fixtures | `outside_context_he` | Private HE case | Wrong results | Max / mean latency | Max output | Cost (25) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| openai/gpt-4.1 | 23/24 | accepted (wrong) | accepted (wrong) | 2 | 4.1 s / 1.8 s | 501 | $0.0744 |
+| anthropic/claude-sonnet-5.5 | 23/24 | rejected | inconclusive: hit 1,600-token limit (`length`), withheld as invalid | 1 + 1 inconclusive | 11.7 s / 3.3 s | 1,600 | $0.1812 |
+| openai/gpt-5.6-terra | 23/24 | rejected | rejected, for the right reason | 1 | 15.3 s / 3.8 s | 907 | $0.1112 |
+| google/gemini-3.7-flash | — | — | — | all 25 HTTP 400 | — | — | $0 |
+
+- Both Sonnet and GPT-5.6-terra rejected `outside_context_en_supported`, an exactly sourced
+  control, with one issue and every claim marked supported. Its topic asks where the word
+  comes from, and the draft does not answer that, so this is likely a topic-fit rejection
+  and possibly a fixture ambiguity. The reviewer's issue text was not captured, so this is
+  not confirmed. The Hebrew twin with the same topic was accepted by both.
+- GPT-5.6-terra on the private case (checked privately; only booleans printed): the
+  sentence-1 origin clause was its own claim, marked unsupported. It also marked a second
+  sentence-1 claim and the "today" qualifier in sentence 3 unsupported. Issue codes:
+  `unsupported_claims` and `missing_requested_future_launch_date`. The second code
+  penalizes the draft for correctly omitting an unsupported date request, which is a
+  false-rejection risk.
+- Sonnet 5.5's reasoning tokens count against max_completion_tokens. On the longest case it
+  used all 1,600 and was cut off; the app does not control reasoning effort.
+- Gemini 3.7 Flash rejected every request with HTTP 400 at no cost. The response body was
+  not captured. Likely causes are `temperature: 0` or the strict JSON-schema format, but
+  this is not established.
+- No retries or timeouts for any model. Comparison spend: $0.2924 (Sonnet $0.18119,
+  GPT-5.6-terra $0.11119, Gemini $0), all provider-reported. Raw private reviews are kept
+  beside the private case (0600), outside Git.
+
+Limits: 25 cases per model is a small sample, and model assessment is not human editorial
+review. No default model was changed.
+
+Selectable reviewer (offline and local, no paid generation): backend suite 269 passed on a
+fresh disposable database with the restricted runtime role (dropped; none remain). Ruff
+and mypy passed. Playwright: 17 passed, including the cost display and choice submission
+in English and the Hebrew options-unavailable fallback; the frontend production build,
+lint, Prettier and types passed. The API container was rebuilt; the live
+`/generation/review-models` (free catalog call) returned GPT-5.6-terra ~$0.0159 typical /
+$0.0629 max and GPT-4.1 ~$0.0081 / $0.0501. Browser pane check: English at desktop width
+and Hebrew RTL at 375 px. The selected cost line shows on phones, with no horizontal
+scroll. Not run: a paid end-to-end generation with GPT-5.6-terra.
