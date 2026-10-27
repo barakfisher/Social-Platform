@@ -1,115 +1,107 @@
-# Social Platform continuation handoff — 2026-10-26
+# Social Platform continuation handoff — 2026-10-26 (evening)
 
-## Delivery and startup
+## Startup
 
-The user requested merge, handoff and a fresh session for this delivery. Read AGENTS.md,
-this file, docs/HANDOFF.md, docs/implementation.md and verification/generation-grounding.md.
-Read .ai/codex-rules.md and .ai/project-memory.md if they exist (currently absent).
-Inspect Git status/log, origin/main and the delivery PR's actual merge/check/review status.
-The previous PR #1 was merged as d36d3a4; its historical review blocker is resolved.
-This delivery is on codex/cross-language-grounding-handoff. Final PR/merge state must be
-read from GitHub, not inferred from a startup handoff written before delivery finishes.
+The user asked for handoff + merge + a fresh session. Read AGENTS.md, this file,
+docs/implementation.md (decision entries at the end) and verification/generation-grounding.md
+(latest sections at the end). Inspect git status/log and confirm this delivery's PR is merged
+by content on `main` (e.g. `grep -n source-review-v4 backend/app/grounding.py`). Then give a
+short next-step summary and wait. Do not start engineering, paid calls, pushes or PRs on
+startup. Linear works through the Linear MCP in Claude Code sessions (project Social Platform).
 
-Never print, overwrite or stage ignored backend/.env. Preserve user Brand DNA, Ready
-sources and saved posts. No policy/billing changes or merge bypasses. The user authorized
-paid model validation in the preceding work; it does not authorize new paid calls merely
-because a new chat starts. Existing evaluator defaults offline. Future implementation
-stays local until another delivery request. A fresh chat was explicitly requested.
+Never print, overwrite or stage ignored backend/.env (it sets no GENERATION_REVIEW_MODEL(S),
+MAX_REQUEST_USD, output-token or retry overrides; code defaults apply). Preserve user Brand
+DNA v2, the one Ready Hebrew source and saved posts. Paid model calls need explicit
+authorization each time.
 
-## Current change
+## What this delivery contains
 
-- app/query_translation.py: bounded EN/HE fallback using configured writer GPT-4.1 only
-  when original scoped retrieval returns no hits. Opposite topic script, strict JSON/query
-  validation, max450 output tokens/1000 characters. No EN/HE letters means no paid fallback.
-- app/generation.py: retry same scope/Ready/profile/cosine cutoff/context budget with the
-  translated query; retain original preferences. Existing hits removed by context trimming
-  never trigger translation. Translated text is not evidence and is not returned in metadata.
-- Translation preflights at most20% of completion allowance including retries. On completion,
-  per-attempt estimate × attempts actually made remains consumed. Writer/reviewer each get
-  half the remainder including all their possible retries. Invalid/nonfinite reservations
-  fail closed. Direct retrieval stays50/50. Translation usage retained on failures and added
-  to successful cost totals. Extra embedding cost is outside completion accounting; estimates
-  are not provider billing caps.
-- app/grounding.py: source-review-v3 explicitly requires separate contiguous exact excerpts;
-  server substring/coverage checks unchanged. Old v2 retry/read/save approval invalidated.
-  Actual model had stitched nonadjacent passages, omitting126 source characters.
-- New tests test_query_translation.py and test_grounding_evidence.py; expanded
-  test_generation.py. docs/implementation.md and verification/generation-grounding.md record
-  behavior, actual paid history, failures and limitations.
+PR #2 merged as 1347763. This delivery adds:
 
-## Evidence and unresolved scope
+1. **Spending-limit fix, written by a separate concurrent session.** Per-request cap
+   $0.05 → $0.10. Adds `attempt_estimate_usd`, `TRANSLATION_BUDGET_SHARE`,
+   tests/test_generation_budget.py and an EN/HE `generation_spending_limit` UI message. The
+   decision is in docs/implementation.md. That session's state was unknown at delivery; its
+   files had been unchanged for over an hour and pass every check.
+2. **Hebrew date-case adjudication** (offline): no date leaked. Sentence 1 carried an origin
+   clause absent from the retrieved context (chars 622–2054 of 2054 were retrieved); its
+   exact quotes supported only the rest of the sentence. The earlier "conflicting audits"
+   looked at different sentences.
+3. **`outside_context` review fixtures**: 24 cases in total, EN/HE.
+4. **source-review-v4**: the reviewer splits sentences into claims copied exactly from them.
+   The server requires the claims to cover every word except a fixed EN/HE connective list,
+   requires every claim supported with exact quotes, and allows empty evidence for
+   unsupported claims. Reviewers cite short source aliases (S1…), mapped back to real
+   chunk IDs in stored provenance. v3 results are invalidated on retry/GET/save.
+5. **Reviewer output limit**: GENERATION_REVIEW_MAX_OUTPUT_TOKENS=1600, separate from the
+   writer's 900. The provider clamp is the larger of the two limits.
+6. **Default reviewer `openai/gpt-5.6-terra`, user-selectable per draft** from the
+   allowlist GENERATION_REVIEW_MODELS (GPT-5.6-terra, GPT-4.1). `GET /generation/review-models`
+   returns typical and maximum source-check cost from the live catalog. Create Post has a
+   "Source check model" select in its advanced options. Unlisted models get 422
+   `review_model_unavailable` before any provider call. Cap is now $0.16.
 
-Final local backend suite:231 passed in a fresh disposable migrated DB; providers mocked.
-Ruff format/lint, app mypy and offline20-review/16-scenario validation passed. Existing
-Starlette/httpx warning only. No frontend changes/tests rerun during this slice.
-Fresh separate QA added tests for exact/stitched EN/HE evidence, malformed/null boundaries,
-legacy v2 approvals, translation/schema/attempt/reservation boundaries, scoped fallback,
-remaining budgets, usage, idempotency, failure persistence and context trimming.
-Fresh independent pre-merge security audit reviewed the complete delivery diff/new files:
-no blocking findings. No private data/credentials read or paid calls by auditors.
+## Lessons (do not re-learn)
 
-Live GPT-4.1 source-review-v3 regression:20/20 fixtures passed (10 controls,10 negatives).
-Actual Brand DNA v2 / existing Hebrew Ready source: fresh supported EN LinkedIn and HE
-Facebook drafts passed exact review and save/read/delete across targeted runs. English used
-translation; Hebrew did not. Do not describe this as one uninterrupted green matrix.
-Six unsupported-detail challenges: EN price/date withheld; EN guarantee omitted in accepted
-source-supported draft; HE price/guarantee withheld. HE date case remains UNRESOLVED:
-production accepted with exact evidence, full-source audit flagged an extra claim, later
-focused source/sentence check judged it supported. Initial classifier's invented-date claim
-is not established. The six-challenge run exited unsuccessfully and no exception was added.
-Some withheld drafts were judged safe by extra audits. False rejection/model disagreement
-remain. Model assessment is not independent human editorial verification.
+- v4 coverage only helps when the model splits claims. Live GPT-4.1 under v4 returned whole
+  sentences as single claims and still accepted the private case and `outside_context_he`.
+  The misses are reviewer judgment, so a different reviewer model fixed them, not more
+  structure.
+- Reasoning models spend reasoning tokens against max_completion_tokens. Sonnet 5.5 hit
+  1,600 on the longest case (withheld as invalid). The app sends `temperature: 0` and no
+  reasoning control. Gemini 3.7 Flash returned HTTP 400 for every request (cause not
+  captured).
+- Measured review size (≤501 tokens GPT-4.1, ≤907 GPT-5.6-terra) was far below my
+  pre-measurement estimate. Measure before sizing limits.
+- `npm test` runs Playwright, which starts `npm run dev` on 53073 and writes `.next`.
+  Always rebuild production after it before `npm run start`.
+- Disposable test DBs: create as `social_admin` (local dev credentials are in
+  docker-compose.yml), apply docker/postgres-init.sql grants, migrate as admin, and test as
+  `social_app`. Owning the DB as `social_app` fails test_runtime_cannot_create_tables.
 
-Private disputed sample retained outside Git (directory0700,file0600):
-/var/folders/0w/spf_k7c124l8t8rztmqk721m0000gn/T/social-grounding-review-j6qu9t1z/case.json
-Contains private draft/input/source snapshot and production review; never print or commit it.
-Use privately for the next adjudication; do not regenerate a different case and call it fixed.
-Other transient scripts/captures removed. All disposable DBs removed; final catalog count0.
-Original fingerprints matched after each run. Total experiment billing not measured.
+## Open risks and debt
 
-QA also noted existing unsupported sentence schema still requires nonempty evidence;
-this can yield review_invalid and is NOT fixed or the cause of valid rejected reviews.
+- GPT-5.6-terra is stricter. On the private case it also raised
+  `missing_requested_future_launch_date`, penalizing correct omission of an unsupported
+  request. End-to-end generation with it has NOT been run (user declined for now).
+- Both strong reviewers rejected the exactly-sourced `outside_context_en_supported` control,
+  probably for topic fit (the draft doesn't answer the topic's question). The fixture may be
+  ambiguous; not confirmed because issue text wasn't captured.
+- Typical cost constants (backend/app/review_models.py) come from one realistic review.
+  Remeasure when the review prompt or models change.
+- A reviewer can still pair a claim with an unrelated exact quote. Coverage makes that
+  deliberate, not impossible.
+- The live 16-scenario generation suite has not been rerun since v3.
 
-## Local runtime
+## Private evidence (outside Git; never print or commit contents)
 
-API rebuilt and ready at localhost:58073; reports source-review-v3 and retrieval-translation-v1.
-PostgreSQL55473, Redis56373. Last config:configured=true,brand_ready=true,ready_documents=1;
-Brand DNA v2, zero saved posts. Source2054 characters/three chunks, original data untouched.
-Only brand name/audience populated; voice/positioning/guidelines/prohibited claims empty.
-Do not invent brand settings/sources to improve evaluation.
-Project services had stopped between checks; existing PostgreSQL/Redis/API were restarted
-without resetting volumes. Worker/scheduler were not restarted. Frontend53073 was not
-restarted in this continuation; recheck availability. Never stop another project's port3000.
-No public deployment/authentication/media/publishing delivered.
+/var/folders/0w/spf_k7c124l8t8rztmqk721m0000gn/T/social-grounding-review-j6qu9t1z/ (0700):
+case.json (draft, inputs, complete source snapshot), v4_replay_review*.json (raw reviews
+per model; 0600). Temporary OS directory; it may be cleaned by the system.
+
+## Verification at delivery
+
+Backend 269 passed on a fresh disposable DB as the restricted role (dropped; none remain).
+Ruff format/lint and mypy passed. Offline validation: 24 review cases, 16 scenarios, zero
+provider calls. Frontend: Playwright 17 passed; production build, lint, Prettier and types
+passed. Browser pane: EN desktop and HE RTL at 375 px. Paid today: v4 live check $0.07436 and
+3-model comparison $0.2924 (provider-reported; total billing not measured).
+
+## Runtime
+
+API container rebuilt with this code (default reviewer GPT-5.6-terra). Production frontend
+restarted on 53073 with `npm run start` from the delivering session. Postgres 55473, Redis
+56373. Port 3000 belongs to another project; never stop it.
 
 ## Linear and next task
 
-SP-4 Implement grounded RAG post generation and parent SP-16 remain In Progress.
-https://linear.app/test-bf/issue/SP-4/implement-grounded-rag-post-generation
-No new acceptance checkbox checked. Existing curated-evaluation checkbox was already checked.
-Context/source-instruction release and requested Claude3.5Sonnet/GPT-4o deployment availability
-remain open. Do not close SP-4/parents based on this delivery.
-Evidence and limitations recorded in existing SP-4 comments, latest continuation comment
-69f0a59b-8524-44b3-ac0d-2fd6f3fd9dd9.
+SP-4 and SP-16 In Progress; no acceptance checkbox changed. Evidence is in SP-4 comments
+(latest: reviewer default/selectable) and an SP-5 comment for the UI. Claude 3.5 Sonnet is
+not in the OpenRouter catalog (relevant to SP-4's model criterion); GPT-4o is.
 
-Next existing atomic task: adjudicate retained HE date sample/model-audit disagreement before
-further release claims; then remaining SP-4 release criteria. Recommend only; this merge/
-fresh-session request does not explicitly authorize new engineering or new paid validation.
-If delivery is blocked, the fresh chat's first priority is completing the already-authorized
-normal merge after actual required review/check gates are satisfied. Do not bypass them.
-Broader SP-5,SP-1/2,SP-8/9/10,SP-11/13 remain partial; SP-6 suggestions and SP-3 media Backlog.
-
-## This delivery PR and actual gate
-
-PR: https://github.com/barakfisher/Social-Platform/pull/2
-Implementation/handoff commit:1d1de24 (subsequent delivery-state documentation follows).
-Normal squash merge was attempted and GitHub rejected it under base-branch policy.
-Live PR state:OPEN, mergeStateStatus=BLOCKED, reviewDecision=REVIEW_REQUIRED. The active
-main ruleset requires one approving review and linear history. No admin bypass, self-review,
-policy change or fabricated approval was used. An eligible reviewer must approve before the
-already-authorized normal merge can complete. Check current PR state on resume: human action
-may have resolved it. Do not re-ask permission to merge after legitimate gates are satisfied.
-Hosted frontend/backend/worker-recovery checks were running when this handoff was written;
-no final-head hosted pass is claimed here. Inspect actual final head/check results. The
-fresh requested session should follow delivery first, then recommend the next SP-4 task;
-do not start new engineering or new paid evaluations merely on startup.
+Recommended next existing task: SP-4 criterion "Context is bounded by a token budget and
+source text cannot override system instructions". Map existing budget/untrusted-data code to
+evidence: offline boundary tests for the context budget and writer-side injection fixtures.
+After that: the paid end-to-end GPT-5.6-terra run, then SP-4's model-deployment criterion.
+Other partial issues: SP-5 (suggestions/media), SP-1/SP-2, SP-8/9/10, SP-11/13. Backlog:
+SP-6, SP-3.

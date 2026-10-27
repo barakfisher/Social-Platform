@@ -101,3 +101,112 @@ model disagreement or false rejection; actual-user validation results and remain
 are recorded in verification/generation-grounding.md. SP-4/SP-16 remain In Progress.
 
 Verification: 85 backend tests passed with PostgreSQL, including real separate-connection lock exclusion/release, active-run protection, recovery via POST/GET, no provider replay and fresh-key success. Provider completions remain mocked. Browser suite: all 14 tests passed against the production build. An earlier development-server run had an unrelated navigation timeout that passed in isolation. Both grounding-failure and interruption retry cases passed. Ruff/mypy, frontend production build/lint/format/types and Alembic drift passed. Frontend left running with npm run start on port 53073. API image rebuilt and readiness confirmed locally. No paid provider evaluation or user document changes were performed. SP-4 and parent issues remain In Progress; broad grounding/brand/platform evaluation, requested model deployment checks and actual-user-source validation remain outstanding.
+
+## Decision: per-request completion reservation cap raised to $0.10 — 2026-10-26
+
+Problem: with four Ready sources, every Create Post request failed with
+`generation_spending_limit` before any completion call. The preflight reserves
+(prompt + 128) × prompt price + max output × completion price per attempt, times
+(retries + 1). With GPT-4.1 ($2/$8 per million tokens), 900 output tokens and one retry,
+a $0.025 stage allowance (half of $0.05) fits a prompt of only about 2,500 tokens, while
+GENERATION_CONTEXT_BUDGET alone allows 2,800 source tokens. Small single-source workspaces
+worked; any workspace whose retrieval filled the context budget could never generate.
+
+Choice (owner-approved): default GENERATION_MAX_REQUEST_USD 0.10. The smallest stage
+allowance, after the 20% translation share, is $0.04; the largest prompt the prompt-budget
+guard admits (6,000 tokens) reserves about $0.039 with one retry. Actual spend is unchanged
+by the cap (earlier runs cost roughly $0.005–0.015 per request); it is a reservation ceiling.
+
+Rejected alternatives:
+- Keep $0.05 and shrink GENERATION_CONTEXT_BUDGET to roughly 1,200 tokens: the writer and
+  reviewer would see one or two chunks, raising insufficient-context and unsupported-claim
+  rejections for real topics.
+- Leave the values and only improve the error: every multi-source workspace would still be
+  unable to generate.
+
+Guard: tests/test_generation_budget.py builds Settings from code defaults (no .env) and
+fails if the largest admitted prompt for the default writer or reviewer cannot pass the
+spending preflight. It fails on the old $0.05 default. It pins GPT-4.1 catalog prices, so
+update it when the default model changes. Raising GENERATION_RETRIES to 2 at this cap would
+reintroduce the conflict for maximum-size prompts. The UI now shows a specific EN/HE
+message for `generation_spending_limit` instead of the generic error.
+
+## Decision: claim-level source review (source-review-v4) — 2026-10-26
+
+Problem: under v3 a Hebrew draft passed review even though its first sentence made an
+origin claim that the retrieved context did not contain. Its exact quotes supported only
+the rest of the sentence. Exact-quote and ordered-coverage checks cannot catch a clause
+that no quote is attached to (verification/generation-grounding.md).
+
+Choice (owner-approved):
+- The reviewer splits each sentence into claims copied exactly from it. The server requires
+  the claims to cover every word except a fixed EN/HE connective list, and every claim to
+  be supported by exact quotes. Unsupported claims may have empty evidence.
+- The reviewer cites short aliases (S1, S2...) instead of UUID chunk IDs, mapped back to
+  real IDs in stored provenance.
+- The reviewer gets its own GENERATION_REVIEW_MAX_OUTPUT_TOKENS of 1600; the writer stays
+  at 900.
+- GENERATION_MAX_REQUEST_USD rises from $0.10 to $0.13, superseding the $0.10 entry above.
+  The reviewer's smallest stage share after the 20% translation share is $0.052. Its worst
+  case (6,000-token prompt, 1,600 output tokens, one retry, GPT-4.1 prices) reserves about
+  $0.0501, which exceeds the $0.040 share at $0.10. Actual spend is not set by the cap;
+  it is a reservation ceiling.
+
+Measured basis: compact v4 output for a 600-character post was 818–1,322 tokens in Hebrew
+and 626–974 in English with aliases (2–5 claims per sentence, o200k_base), and up to about
+1,950 with UUIDs.
+
+Rejected alternatives:
+- Stronger v3 prompt wording only: the v3 prompt already forbade world knowledge and
+  required every clause to be checked, and the model still accepted the clause.
+- A second per-sentence verification call: about double the review cost and still relies
+  on the model.
+- A lexical check of draft words against sources: Hebrew prefixes and inflection make it
+  wrong in both directions.
+- Aliases with the shared 900-token limit: full-length Hebrew posts would often truncate
+  the review and fail as grounding_review_invalid.
+
+Known limits: a reviewer can still pair a claim with an unrelated exact quote; coverage
+makes that deliberate rather than an omission, but does not prevent it. A 1,600-token
+review may approach the 30-second GENERATION_TIMEOUT; this is not measured. v4 has not
+been run against the live model. tests/test_generation_budget.py now checks each stage
+with its own output limit and fails at $0.10.
+
+## Decision: GPT-5.6-terra default reviewer, user-selectable per draft — 2026-10-26
+
+Problem: GPT-4.1 accepted an unsourced origin clause in the private Hebrew case and in the
+`outside_context_he` fixture, even under source-review-v4. In the paid 25-case comparison,
+GPT-5.6-terra was the only candidate that rejected both, with no truncation or retries
+(verification/generation-grounding.md).
+
+Choice (owner-approved):
+- GENERATION_REVIEW_MODEL defaults to `openai/gpt-5.6-terra`.
+- Users choose the source-check model per draft in Create Post's advanced options, from
+  the server allowlist GENERATION_REVIEW_MODELS (GPT-5.6-terra, GPT-4.1). The API resolves
+  an omitted choice to the default before fingerprinting, rejects unlisted models with 422
+  `review_model_unavailable`, stores the choice in run inputs and keeps it out of the writer
+  and reviewer prompts. review_draft re-checks the allowlist.
+- `GET /generation/review-models` returns, per model, a typical cost (one measured
+  realistic review's tokens × the live catalog price) and a maximum (the reservation for the
+  largest admitted prompt, full reviewer output limit and every retry). Models missing from
+  the catalog are listed but cannot be chosen. The UI shows the selected model's cost
+  below the select, because closed selects truncate options on phones.
+- GENERATION_MAX_REQUEST_USD rises from $0.13 to $0.16, superseding the $0.13 entry above.
+  GPT-5.6-terra's worst-case review reserves about $0.0629 against a $0.064 share. The
+  budget guard test now checks every selectable reviewer.
+
+Rejected alternatives:
+- A workspace-wide setting, or both a setting and a per-draft override: switching models to
+  compare would take more steps, or more UI and API surface for one user.
+- Offering Claude Sonnet 5.5 now: its reasoning used the whole 1,600-token output limit on
+  the longest case, and the app does not control reasoning effort yet.
+- Showing only the maximum cost (overstates typical spend about four times) or only the
+  typical cost (hides the server's per-draft ceiling).
+- Keeping $0.13 with a 1,000-token reviewer limit: GPT-5.6-terra's longest review already
+  used 907 tokens including reasoning.
+
+Known limits: the typical cost comes from one realistic review, so remeasure when the
+review prompt or models change. Estimates cover the source check only; writing, query
+translation and embeddings are separate. GPT-5.6-terra can penalize a draft for omitting
+an unsupported request (`missing_requested_future_launch_date`), which is a false-rejection
+risk. Generation with GPT-5.6-terra has not been run end to end.

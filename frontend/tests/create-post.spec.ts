@@ -214,7 +214,22 @@ test("history conflicts preserve edits until an explicit reload", async ({
   expect(conflict).toBe(false);
 });
 
-for (const failure of ["grounding_review_failed", "generation_interrupted"]) {
+const failureMessages: Record<string, { status: number; text: string }> = {
+  grounding_review_failed: {
+    status: 409,
+    text: "did not pass its source check",
+  },
+  generation_interrupted: {
+    status: 409,
+    text: "Generation was interrupted",
+  },
+  generation_spending_limit: {
+    status: 503,
+    text: "per-request AI cost limit",
+  },
+};
+
+for (const [failure, expected] of Object.entries(failureMessages)) {
   test(`${failure} withholds output and preserves topic for retry`, async ({
     page,
   }) => {
@@ -231,7 +246,7 @@ for (const failure of ["grounding_review_failed", "generation_interrupted"]) {
       keys.push(route.request().postDataJSON().request_key);
       if (attempts === 1) {
         await route.fulfill({
-          status: 409,
+          status: expected.status,
           json: { error: { message: failure } },
         });
       } else {
@@ -248,17 +263,8 @@ for (const failure of ["grounding_review_failed", "generation_interrupted"]) {
       .getByRole("button", { name: "Generate draft", exact: true })
       .click();
     await expect(
-      page.getByRole("alert").filter({
-        hasText:
-          failure === "generation_interrupted"
-            ? "Generation was interrupted"
-            : "did not pass its source check",
-      }),
-    ).toContainText(
-      failure === "generation_interrupted"
-        ? "Generation was interrupted"
-        : "did not pass its source check",
-    );
+      page.getByRole("alert").filter({ hasText: expected.text }),
+    ).toContainText(expected.text);
     await expect(page.getByLabel("Your draft", { exact: true })).toHaveCount(0);
     await expect(
       page.getByLabel("What would you like to write about?"),
@@ -270,3 +276,98 @@ for (const failure of ["grounding_review_failed", "generation_interrupted"]) {
     expect(keys[1]).not.toBe(keys[0]);
   });
 }
+
+const reviewModels = {
+  default: "openai/gpt-5.6-terra",
+  models: [
+    {
+      id: "openai/gpt-5.6-terra",
+      available: true,
+      typical_usd: 0.016,
+      max_usd: 0.063,
+    },
+    {
+      id: "openai/gpt-4.1",
+      available: true,
+      typical_usd: 0.008,
+      max_usd: 0.05,
+    },
+    {
+      id: "vendor/delisted",
+      available: false,
+      typical_usd: null,
+      max_usd: null,
+    },
+  ],
+};
+
+test("source check model shows estimated costs and the choice is sent", async ({
+  page,
+}) => {
+  let sent: Record<string, unknown> | null = null;
+  await page.route("**/api/generation**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/review-models")) {
+      await route.fulfill({ json: reviewModels });
+      return;
+    }
+    if (request.method() === "GET") {
+      await route.fulfill({
+        json: { configured: true, brand_ready: true, ready_documents: 1 },
+      });
+      return;
+    }
+    sent = request.postDataJSON();
+    await route.fulfill({
+      json: { ...run, language: "en", platform: "linkedin" },
+    });
+  });
+  await page.goto("/en/create");
+  await page.getByText("Writing preferences", { exact: true }).click();
+  const select = page.getByLabel("Source check model", { exact: true });
+  await expect(select).toHaveValue("openai/gpt-5.6-terra");
+  await expect(select.locator("option")).toHaveText([
+    "GPT-5.6 Terra (recommended, stricter) — ~$0.016 per draft · up to $0.063",
+    "GPT-4.1 (cheaper, less strict) — ~$0.008 per draft · up to $0.05",
+    "vendor/delisted — unavailable",
+  ]);
+  await expect(select.locator("option").nth(2)).toBeDisabled();
+  const cost = page.getByTestId("review-model-cost");
+  await expect(cost).toHaveText("~$0.016 per draft · up to $0.063");
+  await select.selectOption("openai/gpt-4.1");
+  await expect(cost).toHaveText("~$0.008 per draft · up to $0.05");
+  await page
+    .getByLabel("What would you like to write about?", { exact: true })
+    .fill("Community garden herbs");
+  await page
+    .getByRole("button", { name: "Generate draft", exact: true })
+    .click();
+  await expect.poll(() => sent?.review_model).toBe("openai/gpt-4.1");
+});
+
+test("unavailable model options fall back to the default source check", async ({
+  page,
+}) => {
+  await page.route("**/api/generation/review-models", (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: { message: "api_unavailable" } },
+    }),
+  );
+  await page.route("**/api/generation/configuration", (route) =>
+    route.fulfill({
+      json: { configured: true, brand_ready: true, ready_documents: 1 },
+    }),
+  );
+  await page.goto("/he/create");
+  await page.getByText("העדפות כתיבה", { exact: true }).click();
+  await expect(
+    page.getByText(
+      "לא הצלחנו לטעון את אפשרויות המודל. תתבצע בדיקת המקורות המוגדרת כברירת מחדל.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "יצירת טיוטה", exact: true }),
+  ).toBeEnabled();
+});

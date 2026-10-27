@@ -99,3 +99,10 @@ backend tests, static checks and20 live review fixtures passed. Actual supported
 passed targeted runs; a Hebrew date challenge remains unresolved due conflicting model audits.
 Read the private evidence location, budget behavior, current runtime and delivery status in
 `.ai/handoff.md`; inspect GitHub for the final new PR merge/check status. SP-4/SP-16 stay open.
+
+## Reviewer delivery — 2026-10-26 (evening)
+
+The current handoff is `.ai/handoff.md`, rewritten for this delivery. It supersedes the PR #2
+gate notes above: PR #2 merged as 1347763. This delivery adds source-review-v4, GPT-5.6-terra
+as the default user-selectable reviewer with cost estimates, the $0.16 request cap and a
+concurrent session's spending-limit fix. Check GitHub and `main` by content for its merge.

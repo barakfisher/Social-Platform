@@ -28,7 +28,12 @@ class ReviewCase(BaseModel):
 
     name: str = Field(min_length=1)
     category: Literal[
-        "conflicting_facts", "irrelevant_source", "unsupported_request", "brand", "platform"
+        "conflicting_facts",
+        "irrelevant_source",
+        "unsupported_request",
+        "brand",
+        "platform",
+        "outside_context",
     ]
     accepted: bool
     language: Literal["en", "he"]
@@ -54,6 +59,7 @@ def load_review_cases() -> list[ReviewCase]:
             "unsupported_request",
             "brand",
             "platform",
+            "outside_context",
         )
         for language in ("en", "he")
         for accepted in (False, True)
