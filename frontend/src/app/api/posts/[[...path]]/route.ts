@@ -6,7 +6,13 @@ async function proxy(
   context: { params: Promise<{ path?: string[] }> },
 ) {
   const { path = [] } = await context.params;
-  if (path.length > 1 || path.some((p) => !/^[a-zA-Z0-9-]+$/.test(p)))
+  // One segment, or "{id}/review" for "Check again" (POST only).
+  const review =
+    path.length === 2 && path[1] === "review" && request.method === "POST";
+  if (
+    (path.length > 1 && !review) ||
+    path.some((p) => !/^[a-zA-Z0-9-]+$/.test(p))
+  )
     return NextResponse.json(
       { error: { message: "invalid_path" } },
       { status: 400 },

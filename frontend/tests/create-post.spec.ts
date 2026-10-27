@@ -15,10 +15,18 @@ const run = {
       source_location: {},
     },
   ],
+  offer_details: "",
   metadata: {
     model: "test/model",
     brand_version: 1,
-    prompt_version: "grounded-post-v1",
+    prompt_version: "grounded-post-v4",
+    grounding_review: {
+      status: "checked",
+      findings: [],
+      reason: null,
+      retryable: false,
+    },
+    preferences: { review_model: "openai/gpt-5.6-terra" },
   },
 };
 const draft = {
@@ -30,6 +38,9 @@ const draft = {
   version: 1,
   sources: run.sources,
   generation_run_id: run.id,
+  generation_settings: {
+    grounding_review: { ...run.metadata.grounding_review, checked_version: 1 },
+  },
   created_at: "2026-10-25T10:00:00Z",
 };
 
@@ -215,9 +226,9 @@ test("history conflicts preserve edits until an explicit reload", async ({
 });
 
 const failureMessages: Record<string, { status: number; text: string }> = {
-  grounding_review_failed: {
+  draft_blocked: {
     status: 409,
-    text: "did not pass its source check",
+    text: "instructions aimed at the AI",
   },
   generation_interrupted: {
     status: 409,

@@ -94,8 +94,14 @@ def create_draft(payload: CreateDraft):
             ):
                 raise HTTPException(409, "generation_review_required")
             sources = run.result["sources"]
+            review = run.result["metadata"]["grounding_review"]
             metadata = {
                 **run.result["metadata"],
+                # The review applies to this draft only if it was saved unedited.
+                "grounding_review": {
+                    **review,
+                    "checked_version": 1 if payload.content == run.result["content"] else None,
+                },
                 "warnings": run.result["warnings"],
                 "grounded": run.result["grounded"] and payload.content == run.result["content"],
                 "grounding_review_scope": "original_generation",

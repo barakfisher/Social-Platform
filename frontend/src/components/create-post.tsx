@@ -3,10 +3,12 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, PenLine, Save, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ReviewFindings } from "@/components/review-findings";
 import {
   apiRequest,
   inputClass,
   type GeneratedPost,
+  type Review,
   type SavedPost,
 } from "@/lib/posts";
 import type { Locale } from "@/lib/i18n";
@@ -33,10 +35,38 @@ const copy = {
     review:
       "Check factual claims against the sources before using this draft. AI may add unsupported details.",
     warnings: "Review notes",
-    groundingFailed:
-      "The draft did not pass its source check and was withheld. Try a narrower topic or add supporting knowledge.",
-    noSources:
-      "No source references were returned. Review factual claims carefully.",
+    blocked:
+      "The draft was withheld: a source or your offer details seem to contain instructions aimed at the AI. Check them for text like that and try again.",
+    other: "Other…",
+    otherTone: "Describe the tone",
+    otherCta: "Describe the call to action",
+    offer: "Offer details (optional)",
+    offerHint:
+      "Facts the post may use about your offer, such as a course name, date or link. The post will not invent details you leave out.",
+    offerNeeded:
+      "This call to action works best with offer details: add the link or the offer's name and date.",
+    offerSource: "Offer details (from you)",
+    tones: {
+      brand_voice: "Brand voice",
+      professional: "Professional and authoritative",
+      educational: "Explanatory",
+      friendly: "Friendly and conversational",
+      storytelling: "Storytelling",
+      inspirational: "Inspirational",
+      humorous: "Light and humorous",
+      concise: "Direct and concise",
+    } as Record<string, string>,
+    ctas: {
+      none: "None",
+      comment: "Ask for comments",
+      save: "Save the post",
+      tag: "Tag someone",
+      follow: "Follow for more",
+      message: "Send a private message",
+      read_more: "Read more at a link",
+      signup: "Sign up for a course or event",
+      contact: "Get in touch",
+    } as Record<string, string>,
     interrupted:
       "Generation was interrupted. Your inputs are preserved; try again to start a new request.",
     error:
@@ -108,9 +138,38 @@ const copy = {
     review:
       "יש לבדוק את הטענות מול המקורות לפני שימוש בטיוטה. AI עלול להוסיף פרטים שאינם מבוססים.",
     warnings: "הערות לבדיקה",
-    groundingFailed:
-      "הטיוטה לא עברה את בדיקת המקורות ולא הוצגה. אפשר למקד את הנושא או להוסיף מקורות תומכים.",
-    noSources: "לא הוחזרו הפניות למקורות. חשוב לבדוק את הטענות העובדתיות.",
+    blocked:
+      "הטיוטה לא הוצגה: נראה שמקור או פרטי ההצעה מכילים הוראות שמכוונות ל-AI. כדאי לבדוק אותם ולנסות שוב.",
+    other: "אחר…",
+    otherTone: "תיאור הטון",
+    otherCta: "תיאור ההנעה לפעולה",
+    offer: "פרטי ההצעה (רשות)",
+    offerHint:
+      "עובדות על ההצעה שהפוסט יכול להשתמש בהן, כמו שם קורס, תאריך או קישור. הפוסט לא ימציא פרטים שלא כתבת.",
+    offerNeeded:
+      "ההנעה לפעולה הזו עובדת הכי טוב עם פרטי ההצעה: כדאי להוסיף קישור או שם ותאריך.",
+    offerSource: "פרטי ההצעה (ממך)",
+    tones: {
+      brand_voice: "קול המותג",
+      professional: "מקצועי וסמכותי",
+      educational: "מסביר",
+      friendly: "ידידותי ושיחתי",
+      storytelling: "סיפורי",
+      inspirational: "השראתי",
+      humorous: "הומוריסטי קליל",
+      concise: "ישיר ותמציתי",
+    } as Record<string, string>,
+    ctas: {
+      none: "ללא",
+      comment: "שאלה לתגובות",
+      save: "שמירת הפוסט",
+      tag: "תיוג מישהו",
+      follow: "מעקב לעוד תוכן",
+      message: "הודעה פרטית",
+      read_more: "קריאה נוספת בקישור",
+      signup: "הרשמה לקורס או אירוע",
+      contact: "יצירת קשר",
+    } as Record<string, string>,
     interrupted:
       "יצירת הטיוטה הופסקה. הפרטים שהזנת נשמרו; נסו שוב כדי להתחיל בקשה חדשה.",
     error: "לא הצלחנו להשלים את הבקשה. הקלט והעריכות שלך עדיין כאן.",
@@ -193,10 +252,13 @@ export function CreatePost({ locale }: { locale: Locale }) {
     language: locale,
     topic: "",
     goal: locale === "he" ? "שיתוף ידע" : "Educate",
-    tone: "",
+    tone: "brand_voice",
+    tone_other: "",
     hook: "auto",
     length: "medium",
-    cta: "",
+    cta: "none",
+    cta_other: "",
+    offer_details: "",
     // Empty means the server's default source-check model.
     review_model: "",
   });
@@ -207,7 +269,10 @@ export function CreatePost({ locale }: { locale: Locale }) {
   const [content, setContent] = useState("");
   const [saved, setSaved] = useState<SavedPost | null>(null);
   const [savedContent, setSavedContent] = useState("");
-  const [busy, setBusy] = useState<"generate" | "save" | null>(null);
+  // The review on screen and the exact text it applies to.
+  const [review, setReview] = useState<Review | undefined>(undefined);
+  const [reviewedText, setReviewedText] = useState("");
+  const [busy, setBusy] = useState<"generate" | "save" | "review" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const request = useRef<{ signature: string; key: string } | null>(null);
   const saveKey = useRef<string>("");
@@ -260,6 +325,8 @@ export function CreatePost({ locale }: { locale: Locale }) {
       });
       setGenerated(result);
       setContent(result.content);
+      setReview(result.metadata.grounding_review);
+      setReviewedText(result.content);
       setSaved(null);
       setSavedContent("");
       saveKey.current = crypto.randomUUID();
@@ -304,33 +371,81 @@ export function CreatePost({ locale }: { locale: Locale }) {
       setBusy(null);
     }
   }
+  // "Check again" reviews the server-saved text: the saved draft when it matches the editor,
+  // otherwise the original generation when the editor still holds it.
+  const recheckable =
+    !!generated &&
+    ((!!saved && content === savedContent) ||
+      (!saved && content === generated.content));
+  async function recheck() {
+    if (!generated || !recheckable) return;
+    setBusy("review");
+    setError(null);
+    const body = { review_model: form.review_model || undefined };
+    try {
+      if (saved) {
+        const result = await apiRequest<SavedPost>(
+          `/api/posts/${saved.id}/review`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...body, version: saved.version }),
+          },
+        );
+        setSaved(result);
+        setReview(result.generation_settings.grounding_review);
+        setReviewedText(result.content);
+      } else {
+        const result = await apiRequest<GeneratedPost>(
+          `/api/generation/${generated.id}/review`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        );
+        setGenerated(result);
+        setReview(result.metadata.grounding_review);
+        setReviewedText(result.content);
+      }
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "api_unavailable";
+      setError(code);
+      // The server withdrew a blocked generation; stop showing it too.
+      if (code === "draft_blocked" && !saved) {
+        setGenerated(null);
+        setContent("");
+        setReview(undefined);
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
   const allowed =
     !!capability?.configured &&
     capability.brand_ready &&
     capability.ready_documents > 0;
-  const message = [
-    "grounding_review_failed",
-    "grounding_review_invalid",
-    "insufficient_grounding",
-  ].includes(error ?? "")
-    ? t.groundingFailed
-    : error === "generation_interrupted"
-      ? t.interrupted
-      : error === "insufficient_context"
-        ? t.insufficient
-        : error === "brand_setup_required"
-          ? t.setupBrand
-          : error === "draft_edit_conflict"
-            ? t.conflict
-            : ["generation_prompt_limit", "generation_topic_too_long"].includes(
-                  error ?? "",
-                )
-              ? t.brandLimit
-              : error === "generation_spending_limit"
-                ? t.spendingLimit
-                : error === "review_model_unavailable"
-                  ? t.reviewModelUnavailable
-                  : t.error;
+  const message =
+    error === "draft_blocked"
+      ? t.blocked
+      : error === "generation_interrupted"
+        ? t.interrupted
+        : error === "insufficient_context"
+          ? t.insufficient
+          : error === "brand_setup_required"
+            ? t.setupBrand
+            : error === "draft_edit_conflict"
+              ? t.conflict
+              : [
+                    "generation_prompt_limit",
+                    "generation_topic_too_long",
+                  ].includes(error ?? "")
+                ? t.brandLimit
+                : error === "generation_spending_limit"
+                  ? t.spendingLimit
+                  : error === "review_model_unavailable"
+                    ? t.reviewModelUnavailable
+                    : t.error;
   return (
     <section aria-labelledby="create-title" className="mt-10 space-y-6">
       <div className="rounded-2xl border border-border bg-card p-6 sm:p-9">
@@ -449,14 +564,33 @@ export function CreatePost({ locale }: { locale: Locale }) {
                   <label htmlFor="post-tone" className="mb-2 block text-sm">
                     {t.tone}
                   </label>
-                  <input
+                  <select
                     id="post-tone"
                     className={inputClass}
-                    maxLength={200}
-                    dir="auto"
                     value={form.tone}
                     onChange={(e) => setForm({ ...form, tone: e.target.value })}
-                  />
+                  >
+                    {Object.entries(t.tones).map(([key, label]) => (
+                      <option key={key} value={key}>
+                        {label}
+                      </option>
+                    ))}
+                    <option value="other">{t.other}</option>
+                  </select>
+                  {form.tone === "other" && (
+                    <input
+                      aria-label={t.otherTone}
+                      placeholder={t.otherTone}
+                      className={inputClass + " mt-2"}
+                      required
+                      maxLength={200}
+                      dir="auto"
+                      value={form.tone_other}
+                      onChange={(e) =>
+                        setForm({ ...form, tone_other: e.target.value })
+                      }
+                    />
+                  )}
                 </div>
                 <div>
                   <label htmlFor="post-hook" className="mb-2 block text-sm">
@@ -500,14 +634,59 @@ export function CreatePost({ locale }: { locale: Locale }) {
                   <label htmlFor="post-cta" className="mb-2 block text-sm">
                     {t.cta}
                   </label>
-                  <input
+                  <select
                     id="post-cta"
                     className={inputClass}
-                    maxLength={300}
-                    dir="auto"
                     value={form.cta}
                     onChange={(e) => setForm({ ...form, cta: e.target.value })}
+                  >
+                    {Object.entries(t.ctas).map(([key, label]) => (
+                      <option key={key} value={key}>
+                        {label}
+                      </option>
+                    ))}
+                    <option value="other">{t.other}</option>
+                  </select>
+                  {form.cta === "other" && (
+                    <input
+                      aria-label={t.otherCta}
+                      placeholder={t.otherCta}
+                      className={inputClass + " mt-2"}
+                      required
+                      maxLength={300}
+                      dir="auto"
+                      value={form.cta_other}
+                      onChange={(e) =>
+                        setForm({ ...form, cta_other: e.target.value })
+                      }
+                    />
+                  )}
+                </div>
+                <div className="sm:col-span-2">
+                  <label htmlFor="post-offer" className="mb-2 block text-sm">
+                    {t.offer}
+                  </label>
+                  <textarea
+                    id="post-offer"
+                    className={inputClass}
+                    rows={2}
+                    maxLength={1000}
+                    dir="auto"
+                    aria-describedby="post-offer-hint"
+                    value={form.offer_details}
+                    onChange={(e) =>
+                      setForm({ ...form, offer_details: e.target.value })
+                    }
                   />
+                  <p
+                    id="post-offer-hint"
+                    className="mt-2 text-xs text-muted-foreground"
+                  >
+                    {["read_more", "signup"].includes(form.cta) &&
+                    !form.offer_details.trim()
+                      ? t.offerNeeded
+                      : t.offerHint}
+                  </p>
                 </div>
                 <div className="sm:col-span-2">
                   <label
@@ -590,13 +769,12 @@ export function CreatePost({ locale }: { locale: Locale }) {
         <div className="rounded-2xl border border-border bg-card p-6 sm:p-9">
           <h3 className="text-lg font-semibold">{t.output}</h3>
           <p className="mt-2 text-sm text-muted-foreground">{t.review}</p>
-          {(!generated.grounded || generated.warnings.length > 0) && (
+          {generated.warnings.length > 0 && (
             <div
               role="note"
               className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm"
             >
               <p className="font-medium">{t.warnings}</p>
-              {!generated.grounded && <p className="mt-2">{t.noSources}</p>}
               {generated.warnings
                 .filter((w) => w !== "insufficient_grounding")
                 .map((w, i) => (
@@ -623,6 +801,15 @@ export function CreatePost({ locale }: { locale: Locale }) {
             {content.length} {t.chars} · {t.usage}{" "}
             {generated.metadata.brand_version}
           </p>
+          <ReviewFindings
+            locale={locale}
+            review={review}
+            stale={content !== reviewedText}
+            canRecheck={recheckable}
+            busy={busy === "review"}
+            cost={selectedModel ? modelCost(selectedModel) : undefined}
+            onRecheck={() => void recheck()}
+          />
           <div className="mt-5 flex flex-wrap items-center gap-4">
             <Button
               disabled={
@@ -642,12 +829,24 @@ export function CreatePost({ locale }: { locale: Locale }) {
               </Link>
             )}
           </div>
-          {generated.sources.length > 0 && (
+          {(generated.sources.length > 0 || generated.offer_details) && (
             <details className="mt-6 border-t border-border pt-4">
               <summary className="cursor-pointer text-sm font-medium">
-                {t.sources} ({generated.sources.length})
+                {t.sources} (
+                {generated.sources.length + (generated.offer_details ? 1 : 0)})
               </summary>
               <ul className="mt-4 space-y-4">
+                {generated.offer_details && (
+                  <li className="rounded-lg bg-background p-4">
+                    <p className="font-medium">{t.offerSource}</p>
+                    <p
+                      dir="auto"
+                      className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted-foreground"
+                    >
+                      {generated.offer_details}
+                    </p>
+                  </li>
+                )}
                 {generated.sources.map((s) => (
                   <li key={s.chunk_id} className="rounded-lg bg-background p-4">
                     <p className="font-medium" dir="auto">

@@ -210,3 +210,83 @@ review prompt or models change. Estimates cover the source check only; writing, 
 translation and embeddings are separate. GPT-5.6-terra can penalize a draft for omitting
 an unsupported request (`missing_requested_future_launch_date`), which is a false-rejection
 risk. Generation with GPT-5.6-terra has not been run end to end.
+
+## Decision: advisory source review — drafts are always shown — 2026-10-27
+
+Problem: drafts were withheld whenever the reviewer found any sentence without an exact
+quote. Humor, questions and calls to action (CTAs) always failed, because they carry no
+quotable fact. Three real Hebrew attempts ("מה זה מנטורינג", humorous tone, "הרשמה לקורס"
+CTA) were billed (~$0.024 each) and discarded with a generic message. Ready sources were
+retrieved in every attempt.
+
+Choices (owner-approved, one question at a time):
+1. Claims are typed. A factual claim still needs exact quotes. A creative claim (humor,
+   metaphor, a question, an invitation) passes without evidence if it states no fact. The
+   CTA the user chose is the owner's intent, not a fact to prove.
+2. Web search is deferred. It will be decided from how many drafts still get findings for
+   missing facts once (1) ships.
+3. Tone and CTA are preset selects with "Other…" free text. The server validates preset IDs
+   and maps them to writer instructions, so a preset's needs (an offer, a link) are known.
+4. Optional "offer details" (course name, date, link). It is owner-provided evidence for
+   that post only, treated as data. The writer may use it freely, but any fact it takes from
+   it must match it. A CTA with no details may only invite in general terms.
+5. A draft is always persisted and shown. Review problems become findings: a sentence
+   excerpt plus a problem code, rendered in a separate "Points to check" panel and never
+   inline in the text. Only copied source instructions or revealed system instructions
+   block a draft.
+6. A technical reviewer failure (timeout, malformed review, unavailable model) still shows
+   the draft, marked unchecked, with a reason. "Check again" is offered only when a retry
+   can help; spending, context or configuration limits do not offer it.
+7. "Check again" reviews the server-saved version (generation result or saved draft),
+   replaces the stored findings and records which version was checked.
+
+Rejected alternatives:
+- Keep fail-closed and rely on more sources or web search: humor and CTAs still fail,
+  because they contain nothing to quote.
+- Let the model use world knowledge without sources: it removes the only evidence that a
+  fact is true. The model cannot tell a fluent hallucination from a fact.
+- Inline highlights in the editable text: they mix review marks into the content the owner
+  edits and publishes.
+- Block brand-rule violations: it brings back "error with no draft" for a quality issue the
+  owner can fix by editing.
+- Free text with suggestion chips for tone and CTA: the server cannot tell which preset was
+  chosen, so it cannot know a CTA needs an offer.
+- Re-check only the original generation: after an edit the button would have no use.
+
+Why the blocks remain: when instructions copied from a source appear in the draft, the
+writing step was steered by source text, and the findings for that draft cannot be trusted
+either. URL import will bring sources from third parties, which raises this risk.
+
+Known limits: Phase 1 never publishes, so an advisory finding protects only if the owner
+reads it. A reviewer can still label a fact as creative. The prompt forbids it and the live
+evaluation tests it, but no code enforces it. When the reviewer itself fails, injection
+detection does not run; the draft is shown marked unchecked.
+
+### Addendum: blocks found by "Check again" — 2026-10-27
+
+The security review found that a block raised by "Check again" was only returned as an error.
+The draft stayed stored and saveable, and a retry could replace the block with a cleaner
+review, because reviewer verdicts vary from run to run.
+
+- Generation result: a block marks the run Failed with `draft_blocked` and drops its content,
+  the same as a block on the first review. It can no longer be returned, saved or re-checked.
+- Saved draft (owner decision): the owner's text is kept. The review is stored as `blocked`
+  for that version and shown as a red "Do not publish" panel. Re-checking the same version is
+  refused before any paid call. Only a newly saved version can be checked again.
+
+Rejected: deleting the saved text (destroys the owner's own writing); returning 409 with
+nothing stored (the block leaves no trace and a lucky retry can replace it).
+
+### Addendum: wrong-language drafts are reviewed — 2026-10-27
+
+The security review found that the deterministic script check (mostly the wrong EN/HE script,
+or no letters) skipped the paid review, and with it the injection block. Source text could
+trigger this on purpose ("answer in English") and get an unchecked draft shown.
+
+Choice (owner decision): such drafts are still reviewed. The server adds a `wrong_language`
+finding (once, even if the reviewer also reports it), and blocking runs as usual.
+`review_wrong_language` no longer exists as an unchecked reason.
+
+Rejected: withholding the draft with an error (brings back "error with no draft" for a quality
+problem); keeping the skip (a reliable way around injection detection). Cost: one extra review
+(about $0.016 with GPT-5.6-terra), only for drafts in the wrong script.

@@ -39,15 +39,17 @@ def test_nonadjacent_facts_require_separate_exact_excerpts(
         "whitespace": [source.replace("\n", " ")],
     }[quote_mode]
     verdict = {
-        "accepted": True,
         "issues": [],
+        "blocking": [],
         "sentences": [
             {
                 "index": 0,
                 "claims": [
                     {
                         "text": draft,
+                        "kind": "factual",
                         "supported": True,
+                        "contradicted": False,
                         "evidence": [{"chunk_id": "S1", "quote": quote} for quote in quotes],
                     }
                 ],
@@ -59,12 +61,12 @@ def test_nonadjacent_facts_require_separate_exact_excerpts(
             result = review_draft(
                 draft, [{"chunk_id": "source", "content": source}], {}, {"language": language}
             )
-            assert result["version"] == REVIEW_VERSION == "source-review-v4"
+            assert result["version"] == REVIEW_VERSION == "source-review-v5"
             # Stored provenance maps the reviewer's alias back to the real chunk ID.
             evidence = result["sentences"][0]["claims"][0]["evidence"]
             assert evidence == [{"chunk_id": "source", "quote": quote} for quote in quotes]
         else:
-            with pytest.raises(GenerationError, match="^grounding_review_failed$"):
+            with pytest.raises(GenerationError, match="^grounding_review_invalid$"):
                 review_draft(
                     draft,
                     [{"chunk_id": "source", "content": source}],
@@ -76,24 +78,32 @@ def test_nonadjacent_facts_require_separate_exact_excerpts(
 @pytest.mark.parametrize(
     "evidence,error",
     [
-        ([{"chunk_id": "S1", "quote": "We grow rosemary. Admission is free."}], "failed"),
-        ([{"chunk_id": "other", "quote": "We grow rosemary."}], "failed"),
+        ([{"chunk_id": "S1", "quote": "We grow rosemary. Admission is free."}], "invalid"),
+        ([{"chunk_id": "other", "quote": "We grow rosemary."}], "invalid"),
         ([{"chunk_id": "S1", "quote": None}], "invalid"),
         ([{"chunk_id": None, "quote": "We grow rosemary."}], "invalid"),
         ([{"chunk_id": "S1", "quote": ""}], "invalid"),
         ([{"chunk_id": "S1"}], "invalid"),
-        ([], "failed"),
+        ([], "invalid"),
         (None, "invalid"),
     ],
 )
-def test_evidence_boundaries_fail_closed(evidence: object, error: str) -> None:
+def test_unverifiable_evidence_is_a_technical_failure(evidence: object, error: str) -> None:
     verdict = {
-        "accepted": True,
         "issues": [],
+        "blocking": [],
         "sentences": [
             {
                 "index": 0,
-                "claims": [{"text": "We grow rosemary.", "supported": True, "evidence": evidence}],
+                "claims": [
+                    {
+                        "text": "We grow rosemary.",
+                        "kind": "factual",
+                        "supported": True,
+                        "contradicted": False,
+                        "evidence": evidence,
+                    }
+                ],
             }
         ],
     }
@@ -119,7 +129,7 @@ ORIGIN_CLAUSES = {
 
 
 def review(language: str, draft: str, claims: list[dict]) -> dict:
-    verdict = {"accepted": True, "issues": [], "sentences": [{"index": 0, "claims": claims}]}
+    verdict = {"issues": [], "blocking": [], "sentences": [{"index": 0, "claims": claims}]}
     with patch("app.grounding.chat_completion", return_value=(json.dumps(verdict), {})):
         return review_draft(
             draft,
@@ -130,12 +140,18 @@ def review(language: str, draft: str, claims: list[dict]) -> dict:
 
 
 def sourced(text: str, quote: str) -> dict:
-    return {"text": text, "supported": True, "evidence": [{"chunk_id": "S1", "quote": quote}]}
+    return {
+        "text": text,
+        "kind": "factual",
+        "supported": True,
+        "contradicted": False,
+        "evidence": [{"chunk_id": "S1", "quote": quote}],
+    }
 
 
 @pytest.mark.parametrize("language", ["en", "he"])
 @pytest.mark.parametrize("mode", ["unclaimed", "unsupported", "unsupported_without_evidence"])
-def test_unsourced_clause_fails_even_when_rest_of_sentence_is_quoted(
+def test_unsourced_clause_is_found_even_when_rest_of_sentence_is_quoted(
     language: str, mode: str
 ) -> None:
     unsourced, sourced_text = ORIGIN_CLAUSES[language]
@@ -147,30 +163,48 @@ def test_unsourced_clause_fails_even_when_rest_of_sentence_is_quoted(
         "unsupported": [
             {
                 "text": unsourced.strip(),
+                "kind": "factual",
                 "supported": False,
+                "contradicted": False,
                 "evidence": [{"chunk_id": "S1", "quote": quote}],
             },
             sourced(sourced_text, quote),
         ],
         "unsupported_without_evidence": [
-            {"text": unsourced.strip(), "supported": False, "evidence": []},
+            {
+                "text": unsourced.strip(),
+                "kind": "factual",
+                "supported": False,
+                "contradicted": False,
+                "evidence": [],
+            },
             sourced(sourced_text, quote),
         ],
     }[mode]
-    with pytest.raises(GenerationError, match="^grounding_review_failed$"):
-        review(language, draft, claims)
+    if mode == "unclaimed":
+        # Coverage the server cannot verify is a failed review, never a clean pass.
+        with pytest.raises(GenerationError, match="^grounding_review_invalid$"):
+            review(language, draft, claims)
+        return
+    result = review(language, draft, claims)
+    assert result["findings"] == [
+        {"code": "unsupported_claim", "sentence": draft, "claim": unsourced.strip()}
+    ]
 
 
 @pytest.mark.parametrize("language", ["en", "he"])
 def test_fully_claimed_sourced_sentence_passes(language: str) -> None:
     _, sourced_text = ORIGIN_CLAUSES[language]
     result = review(language, sourced_text + ".", [sourced(sourced_text, sourced_text)])
-    assert result["status"] == "passed"
+    assert result["status"] == "checked" and result["findings"] == []
     assert result["version"] == REVIEW_VERSION
 
 
 def claims(*texts: str) -> list[Claim]:
-    return [Claim(text=text, supported=True, evidence=[]) for text in texts]
+    return [
+        Claim(text=text, kind="factual", supported=True, contradicted=False, evidence=[])
+        for text in texts
+    ]
 
 
 @pytest.mark.parametrize(
@@ -223,20 +257,24 @@ def test_reviewer_sees_aliases_and_unknown_aliases_fail() -> None:
         {"chunk_id": "0b7d1c9e-0000-4000-8000-000000000002", "content": "We grow sage."},
     ]
     verdict = {
-        "accepted": True,
         "issues": [],
+        "blocking": [],
         "sentences": [
             {
                 "index": 0,
                 "claims": [
                     {
                         "text": "We grow rosemary",
+                        "kind": "factual",
                         "supported": True,
+                        "contradicted": False,
                         "evidence": [{"chunk_id": "S1", "quote": "We grow rosemary."}],
                     },
                     {
                         "text": "sage",
+                        "kind": "factual",
                         "supported": True,
+                        "contradicted": False,
                         "evidence": [{"chunk_id": "S2", "quote": "We grow sage."}],
                     },
                 ],
@@ -250,24 +288,26 @@ def test_reviewer_sees_aliases_and_unknown_aliases_fail() -> None:
     assert all(source["chunk_id"] not in complete.call_args.args[1] for source in sources)
     cited = [e["chunk_id"] for c in result["sentences"][0]["claims"] for e in c["evidence"]]
     assert cited == [sources[0]["chunk_id"], sources[1]["chunk_id"]]
-    # A real chunk ID is not an alias the reviewer was given, so citing it fails closed.
+    # A real chunk ID is not an alias the reviewer was given, so the review is unverifiable.
     verdict["sentences"][0]["claims"][1]["evidence"][0]["chunk_id"] = sources[1]["chunk_id"]
     with patch("app.grounding.chat_completion", return_value=(json.dumps(verdict), {})):
-        with pytest.raises(GenerationError, match="^grounding_review_failed$"):
+        with pytest.raises(GenerationError, match="^grounding_review_invalid$"):
             review_draft("We grow rosemary and sage.", sources, {}, {"language": "en"})
 
 
 def test_reviewer_requests_its_own_output_limit() -> None:
     verdict = {
-        "accepted": True,
         "issues": [],
+        "blocking": [],
         "sentences": [
             {
                 "index": 0,
                 "claims": [
                     {
                         "text": "We grow rosemary.",
+                        "kind": "factual",
                         "supported": True,
+                        "contradicted": False,
                         "evidence": [{"chunk_id": "S1", "quote": "We grow rosemary."}],
                     }
                 ],
