@@ -136,4 +136,31 @@ test.describe("csrf guard in the browser", () => {
     }, target.href);
     expect((await response).status()).toBe(403);
   });
+
+  test("cross-site POST to a Check again route is rejected", async ({
+    page,
+    baseURL,
+  }) => {
+    // The guard runs before the "{id}/review" path rule, so nothing is forwarded.
+    const attacker = new URL("/en", baseURL);
+    attacker.hostname =
+      attacker.hostname === "localhost" ? "127.0.0.1" : "localhost";
+    await page.goto(attacker.href);
+    for (const route of ["generation", "posts"]) {
+      const target = new URL(
+        `/api/${route}/00000000-0000-4000-8000-000000000000/review`,
+        baseURL,
+      );
+      const response = page.waitForResponse(target.href);
+      await page.evaluate((url) => {
+        void fetch(url, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "text/plain;application/json" },
+          body: "{}",
+        });
+      }, target.href);
+      expect((await response).status()).toBe(403);
+    }
+  });
 });

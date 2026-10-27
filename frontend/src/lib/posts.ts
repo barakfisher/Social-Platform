@@ -5,15 +5,38 @@ export type Source = {
   content: string;
   source_location: Record<string, unknown>;
 };
+export type Finding = {
+  code: string;
+  sentence: string | null;
+  claim: string | null;
+};
+export type Review = {
+  // "blocked": saved drafts only; the text is kept but must not be published.
+  status: "checked" | "unchecked" | "blocked";
+  findings: Finding[];
+  // Unchecked only: why the check did not complete, and whether retrying can help.
+  reason: string | null;
+  retryable: boolean;
+  checked_at?: string;
+  // Saved drafts only: the draft version the review applies to; null means an edited copy.
+  checked_version?: number | null;
+};
 export type GeneratedPost = {
   id: string;
   platform: "linkedin" | "facebook";
   language: "en" | "he";
   content: string;
   sources: Source[];
+  offer_details: string;
   warnings: string[];
   grounded: boolean;
-  metadata: { model: string; brand_version: number; prompt_version: string };
+  metadata: {
+    model: string;
+    brand_version: number;
+    prompt_version: string;
+    grounding_review: Review;
+    preferences: { review_model: string };
+  };
 };
 export type SavedPost = {
   id: string;
@@ -24,6 +47,10 @@ export type SavedPost = {
   version: number;
   sources: Source[];
   generation_run_id: string | null;
+  generation_settings: {
+    grounding_review?: Review;
+    preferences?: { review_model?: string };
+  };
   created_at: string;
 };
 export async function apiRequest<T>(

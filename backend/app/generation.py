@@ -16,16 +16,17 @@ from app.db import SessionLocal
 from app.db import engine as lock_engine
 from app.embeddings import EmbeddingError, embed_texts, profile_key
 from app.generation_provider import GenerationError, chat_completion, generation_key
-from app.grounding import REVIEW_VERSION, review_draft
+from app.grounding import REVIEW_VERSION, check_draft
 from app.grounding import prompt_tokens as generation_tokens
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID
 from app.models import BrandDNA, GenerationRun, KnowledgeDocument
+from app.post_presets import CTAS, OTHER, TONES, CtaId, ToneId
 from app.query_translation import translate_query
 from app.retrieval import search_context
 from app.review_models import review_model_options
 
 router = APIRouter(prefix="/generation", tags=["generation"], dependencies=[Depends(local_only)])
-PROMPT_VERSION = "grounded-post-v3"
+PROMPT_VERSION = "grounded-post-v4"
 # Share of GENERATION_MAX_REQUEST_USD the cross-language query fallback may reserve.
 TRANSLATION_BUDGET_SHARE = 0.2
 SYSTEM = """
@@ -52,12 +53,15 @@ Build a private list of supported facts before drafting. Every factual statement
 be a faithful paraphrase or translation of one of those facts.
 Example: a source saying only "we grow rosemary and sage" supports naming the herbs;
 it does NOT support adding that they are aromatic, improve cooking, help health or biodiversity.
-Keep the post narrowly about the supplied facts. Do not add persuasive product descriptions.
-Omit unsupported details instead
-of filling space. Warmth may come from wording and questions, not invented factual descriptions.
+Keep factual statements narrowly about the supplied facts. Do not add persuasive product
+descriptions. Omit unsupported details instead of filling space.
+Creative sentences are welcome when they state no fact: humor, metaphor, questions to the
+reader, the author's framing, and the requested call to action. A joke must never carry a
+new fact. Follow preferences.tone and preferences.cta.
+preferences.offer_details, when present, is written by the brand owner about their own offer.
+You may use any of it, in your own words. Every offer detail you mention must match it.
+Without offer details, invite in general terms only: no names, dates, prices or links.
 If the topic asks for an unsupported claim, exclude it and explain that exclusion in warnings.
-Use two or three short factual sentences when sources are brief. Do not add introductions,
-benefits, enthusiasm, audience descriptions or invitations beyond the supplied facts.
 Length is a maximum: short 600 characters, medium 1200, long 2400. Never pad a short source.
 Prefer a shorter faithful post to a longer one with new details.
 All content must fit the platform character limit supplied in the data."""
@@ -70,20 +74,43 @@ class GenerateInput(BaseModel):
     language: Literal["en", "he"] = "en"
     topic: str = Field(min_length=1, max_length=2000)
     goal: str = Field(default="Educate", max_length=300)
-    tone: str = Field(default="Brand voice", max_length=200)
+    # Preset IDs from app.post_presets; "other" takes the user's own text in *_other.
+    tone: ToneId = "brand_voice"
+    tone_other: str = Field(default="", max_length=200)
     hook: Literal["auto", "question", "insight", "story"] = "auto"
     length: Literal["short", "medium", "long"] = "medium"
-    cta: str = Field(default="", max_length=300)
+    cta: CtaId = "none"
+    cta_other: str = Field(default="", max_length=300)
+    # Owner-written facts about their offer; optional evidence for this post only.
+    offer_details: str = Field(default="", max_length=1000)
     # Source-check model; omitted means the configured default. Checked against the allowlist.
     review_model: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def validate_preferences(self):
-        if any("\x00" in value for value in [self.topic, self.goal, self.tone, self.cta]):
+        texts = [self.topic, self.goal, self.tone_other, self.cta_other, self.offer_details]
+        if any("\x00" in value for value in texts):
             raise ValueError("Null characters are not allowed")
+        if (self.tone == OTHER) != bool(self.tone_other):
+            raise ValueError("tone_other is required with, and only with, tone 'other'")
+        if (self.cta == OTHER) != bool(self.cta_other):
+            raise ValueError("cta_other is required with, and only with, cta 'other'")
         self.goal = self.goal or "Educate"
-        self.tone = self.tone or "Brand voice"
         return self
+
+    def writer_preferences(self) -> dict:
+        """Preferences as the writer and reviewer see them: presets resolved to instructions."""
+        return {
+            "platform": self.platform,
+            "language": self.language,
+            "topic": self.topic,
+            "goal": self.goal,
+            "tone": self.tone_other if self.tone == OTHER else TONES[self.tone],
+            "hook": self.hook,
+            "length": self.length,
+            "cta": self.cta_other if self.cta == OTHER else CTAS[self.cta],
+            "offer_details": self.offer_details,
+        }
 
 
 class Completion(BaseModel):
@@ -142,6 +169,12 @@ def configuration():
     }
 
 
+def brand_constraints(brand: BrandDNA) -> dict:
+    """Brand profile fields the writer and reviewer receive as data."""
+    fields = ["name", "audience", "positioning", "voice", "guidelines", "prohibited_claims"]
+    return {field: getattr(brand, field) for field in [*fields, "version"]}
+
+
 def generation_lock_key(request_key: UUID) -> int:
     identity = f"generation:{LOCAL_WORKSPACE_ID}:{LOCAL_USER_ID}:{request_key}"
     return int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], signed=True)
@@ -186,7 +219,7 @@ def generate_locked(payload: GenerateInput):
     inputs = request_inputs(payload)
     review_model = inputs["review_model"]
     # The model choice is an operational setting, never writer or reviewer instructions.
-    preferences = {key: value for key, value in inputs.items() if key != "review_model"}
+    preferences = payload.writer_preferences()
     fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
     with SessionLocal.begin() as session:
         brand = session.scalar(
@@ -196,18 +229,7 @@ def generate_locked(payload: GenerateInput):
         )
         if brand is None:
             raise HTTPException(409, "brand_setup_required")
-        brand_values = {
-            field: getattr(brand, field)
-            for field in [
-                "name",
-                "audience",
-                "positioning",
-                "voice",
-                "guidelines",
-                "prohibited_claims",
-                "version",
-            ]
-        }
+        brand_values = brand_constraints(brand)
         brand_id = str(brand.id)
         run_id = session.scalar(
             insert(GenerationRun)
@@ -331,22 +353,26 @@ def generate_locked(payload: GenerateInput):
         by_id = {s["chunk_id"]: s for s in sources}
         if any(source_id not in by_id for source_id in completion.source_ids):
             raise GenerationError("generation_invalid_sources", metadata)
-        references = [by_id[source_id] for source_id in dict.fromkeys(completion.source_ids)]
+        # A draft that cites nothing is still shown; it is reviewed against everything the
+        # writer saw, so its factual claims surface as findings rather than an error.
+        references = [
+            by_id[source_id] for source_id in dict.fromkeys(completion.source_ids)
+        ] or sources
         warnings = [warning[:300] for warning in completion.warnings]
-        if not references:
-            raise GenerationError("insufficient_grounding", metadata)
         try:
-            review = review_draft(
+            review = check_draft(
                 completion.content.strip(),
                 references,
                 brand_values,
                 preferences,
+                offer_details=payload.offer_details,
                 budget_usd=stage_budget,
                 model_id=review_model,
             )
         except GenerationError as exc:
             raise GenerationError(exc.code, {"generation": metadata, **exc.metadata}) from None
-        costs = [metadata.get("usage", {}).get("cost_usd"), review.get("usage", {}).get("cost_usd")]
+        review_usage = review.get("usage") or review.get("failure", {}).get("usage") or {}
+        costs = [metadata.get("usage", {}).get("cost_usd"), review_usage.get("cost_usd")]
         if translation_metadata is not None:
             metadata["retrieval_translation"] = translation_metadata
             costs.append(translation_metadata.get("cost_usd"))
@@ -358,8 +384,9 @@ def generate_locked(payload: GenerateInput):
             "language": payload.language,
             "content": completion.content.strip(),
             "sources": references,
+            "offer_details": payload.offer_details,
             "warnings": warnings,
-            "grounded": True,
+            "grounded": review["status"] == "checked" and not review["findings"],
             "metadata": {
                 **metadata,
                 "prompt_version": PROMPT_VERSION,
@@ -393,8 +420,7 @@ def generate_locked(payload: GenerateInput):
                 "insufficient_context",
                 "generation_prompt_limit",
                 "generation_topic_too_long",
-                "insufficient_grounding",
-                "grounding_review_failed",
+                "draft_blocked",
             )
             else 503
         )

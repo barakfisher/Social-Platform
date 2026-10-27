@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { History as HistoryIcon, RefreshCw, Save, Trash2 } from "lucide-react";
+import { ReviewFindings } from "@/components/review-findings";
 import { Button } from "@/components/ui/button";
 import { apiRequest, inputClass, type SavedPost } from "@/lib/posts";
 import type { Locale } from "@/lib/i18n";
@@ -32,6 +33,9 @@ const copy = {
     content: "Draft content",
     sources: "Saved source references",
     deleted: "Draft deleted.",
+    reviewUnavailable:
+      "This draft was not generated with the current source check, so it cannot be checked again.",
+    perDraft: "per check",
   },
   he: {
     title: "כל הטיוטות במקום אחד",
@@ -60,6 +64,9 @@ const copy = {
     content: "תוכן הטיוטה",
     sources: "הפניות שמורות למקורות",
     deleted: "הטיוטה נמחקה.",
+    reviewUnavailable:
+      "הטיוטה לא נוצרה עם בדיקת המקורות הנוכחית, ולכן אי אפשר לבדוק אותה שוב.",
+    perDraft: "לבדיקה",
   },
 };
 export function History({ locale }: { locale: Locale }) {
@@ -77,6 +84,24 @@ export function History({ locale }: { locale: Locale }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<"saved" | "deleted" | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  // Typical source-check cost per model, shown next to "Check again".
+  const [costs, setCosts] = useState<Record<string, number>>({});
+  useEffect(() => {
+    apiRequest<{ models: { id: string; typical_usd: number | null }[] }>(
+      "/api/generation/review-models",
+    )
+      .then((data) =>
+        setCosts(
+          Object.fromEntries(
+            data.models
+              .filter((m) => m.typical_usd !== null)
+              .map((m) => [m.id, m.typical_usd as number]),
+          ),
+        ),
+      )
+      .catch(() => setCosts({}));
+  }, []);
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearch(query);
@@ -126,6 +151,28 @@ export function History({ locale }: { locale: Locale }) {
       setError(error instanceof Error ? error.message : "api_unavailable");
     } finally {
       setBusy(false);
+    }
+  }
+  async function recheck() {
+    if (!selected) return;
+    setReviewing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await apiRequest<SavedPost>(
+        `/api/posts/${selected.id}/review`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ version: selected.version }),
+        },
+      );
+      setSelected(result);
+      setItems(items.map((post) => (post.id === result.id ? result : post)));
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "api_unavailable");
+    } finally {
+      setReviewing(false);
     }
   }
   async function reload() {
@@ -218,7 +265,11 @@ export function History({ locale }: { locale: Locale }) {
           role="alert"
           className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
         >
-          {error === "draft_edit_conflict" ? t.conflict : t.error}
+          {error === "draft_edit_conflict"
+            ? t.conflict
+            : error === "review_unavailable"
+              ? t.reviewUnavailable
+              : t.error}
           {error === "draft_edit_conflict" && (
             <Button
               variant="outline"
@@ -255,10 +306,35 @@ export function History({ locale }: { locale: Locale }) {
             disabled={busy}
             className={inputClass}
           />
+          {(() => {
+            const review = selected.generation_settings.grounding_review;
+            const model =
+              selected.generation_settings.preferences?.review_model ?? "";
+            const cost = costs[model];
+            return (
+              <ReviewFindings
+                locale={locale}
+                review={review}
+                stale={
+                  review?.checked_version !== selected.version ||
+                  content !== selected.content
+                }
+                canRecheck={content === selected.content}
+                busy={reviewing}
+                cost={
+                  cost === undefined
+                    ? undefined
+                    : `~${new Intl.NumberFormat(locale === "he" ? "he-IL" : "en-US", { style: "currency", currency: "USD", maximumSignificantDigits: 2 }).format(cost)} ${t.perDraft}`
+                }
+                onRecheck={() => void recheck()}
+              />
+            );
+          })()}
           <div className="mt-4 flex gap-3">
             <Button
               disabled={
                 busy ||
+                reviewing ||
                 !content.trim() ||
                 content === selected.content ||
                 error === "draft_edit_conflict"
