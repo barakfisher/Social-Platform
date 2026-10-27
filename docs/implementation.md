@@ -211,6 +211,67 @@ translation and embeddings are separate. GPT-5.6-terra can penalize a draft for 
 an unsupported request (`missing_requested_future_launch_date`), which is a false-rejection
 risk. Generation with GPT-5.6-terra has not been run end to end.
 
+## Decision: same-origin guard on API proxy writes — 2026-10-27
+
+Problem: the Next.js proxies under `frontend/src/app/api` accepted a write when
+`content-type` merely contained `application/json`, and nothing checked where a request
+came from (`middleware.ts` skips `/api`). Browsers treat `text/plain;application/json` as
+`text/plain`, a "simple" content type that needs no CORS preflight. Reproduced on a dev
+server whose API_URL pointed at a logging stub (no FastAPI, no provider): a page on
+`http://localhost:53174` sent `fetch(..., {mode: "no-cors"})` to `127.0.0.1`. Both
+`POST /api/generation` (body `text/plain;application/json`) and a bodiless
+`POST /api/knowledge/<id>/embed` reached the stub, so any open site could start paid
+generations or embeddings. A page on another local port (same site, different origin)
+could do the same. After the fix both get 403 and nothing reaches the stub.
+
+Choice: `frontend/src/lib/csrf-guard.ts` (`rejectUnsafeWrite`), called first by every
+proxy route, before path validation and before any upstream call.
+- GET/HEAD/OPTIONS are never blocked.
+- A write is rejected with 403 `cross_site_request` when `Sec-Fetch-Site` is present and
+  not `same-origin`, or when `Origin` is present and differs from the request's own
+  protocol plus `Host`. Using the request's `Host` keeps both `127.0.0.1:53073` and
+  `localhost:53073` working.
+- A write whose body is forwarded must have content-type essence exactly
+  `application/json`, or it gets 415 `invalid_content_type`.
+- A write with neither `Origin` nor `Sec-Fetch-Site` is allowed. Current browsers send
+  `Origin` on every cross-origin POST, so only non-browser clients (curl, scripts) omit
+  both, and those cannot use the user's browser.
+
+Rejected alternatives:
+- Fix only the content-type check: bodiless POSTs (knowledge retry/embed) send no body
+  to check, so cross-site paid embeddings would remain.
+- Check only `Sec-Fetch-Site`: browsers without Fetch Metadata (older Safari) send only
+  `Origin`, and they would pass.
+- Rejecting writes without `Origin`: breaks curl and scripts against the local API
+  without stopping any browser attack.
+- Comparing `Origin` with one fixed configured origin: opening the app as `localhost` vs
+  `127.0.0.1` would reject the owner's own saves. An allowlist of both hosts would work and
+  would also stop DNS rebinding; it is deferred as a follow-up, not rejected.
+- Enforcing in `middleware.ts`: middleware currently excludes `/api`. Next.js advises
+  against relying on middleware alone for access checks (CVE-2025-29927 bypassed it), and
+  routes already decide which writes forward a body. A test instead fails if any
+  `route.ts` under `src/app/api` stops calling `rejectUnsafeWrite`.
+- CSRF tokens: needs per-session state and client changes in every form. For a
+  single-user local app, same-origin checks give the same protection.
+
+Known limits: DNS rebinding (an attacker domain re-resolved to 127.0.0.1) makes `Host`,
+`Origin` and `Sec-Fetch-Site` look same-origin and passes this guard. Blocking that needs
+a `Host` allowlist; it is not implemented. FastAPI itself (127.0.0.1:58073) has no origin
+check, and a browser page can send simple requests to it directly, bypassing this guard.
+A `no-cors` POST whose body is a Blob or ArrayBuffer carries no Content-Type, and FastAPI
+0.162.0 parses a body without Content-Type as JSON (`fastapi/routing.py`, read in source,
+not exercised). So any open page can likely call `POST /generation`, `PUT /brand`,
+`POST /posts` and the bodiless knowledge writes on the backend directly. Chrome's Local
+Network Access prompt may stop public sites, but not a page on another local port. Closing
+this needs a backend check (JSON content type plus Origin on writes); it is a follow-up.
+
+Tests: `frontend/tests/csrf-guard.spec.ts` covers the guard's rules (same-origin allowed;
+other site, other local port, `null` origin, foreign Origin alone and Sec-Fetch-Site
+alone rejected; `text/plain;application/json` rejected; bodiless, non-browser and GET
+allowed), the route coverage check, and two browser cases against the dev server that
+target an invalid path so no request can reach the backend. With the guard disabled, 8
+of the 13 tests fail.
+
 ## Decision: advisory source review — drafts are always shown — 2026-10-27
 
 Problem: drafts were withheld whenever the reviewer found any sentence without an exact

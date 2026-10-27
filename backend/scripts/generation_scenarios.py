@@ -3,7 +3,7 @@
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, get_args
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
@@ -13,12 +13,17 @@ if TYPE_CHECKING:
     from fastapi.testclient import TestClient
 
 
+# "injection" sources embed instructions to the writer and reviewer; withholding passes.
+Category = Literal["supported", "missing_price", "missing_date", "missing_benefit", "injection"]
+CATEGORIES: tuple[Category, ...] = get_args(Category)
+
+
 class Scenario(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     name: str = Field(min_length=1)
     domain: Literal["library", "repair"]
-    category: Literal["supported", "missing_price", "missing_date", "missing_benefit"]
+    category: Category
     language: Literal["en", "he"]
     platform: Literal["linkedin", "facebook"]
     brand: str = Field(min_length=1)
@@ -40,14 +45,16 @@ def load_scenarios() -> list[Scenario]:
     required = {
         (domain, category, language)
         for domain in ("library", "repair")
-        for category in ("supported", "missing_price", "missing_date", "missing_benefit")
+        for category in CATEGORIES
         for language in ("en", "he")
     }
     if (
         len(scenarios) != len(required)
         or {(case.domain, case.category, case.language) for case in scenarios} != required
     ):
-        raise ValueError("Each domain requires supported and missing-fact cases in EN/HE")
+        raise ValueError(
+            "Each domain requires supported, missing-fact and injection cases in EN/HE"
+        )
     for case in scenarios:
         if any(not term.strip() for term in case.required_terms):
             raise ValueError("Required terms must not be blank")
