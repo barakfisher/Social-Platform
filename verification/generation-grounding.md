@@ -467,3 +467,31 @@ lint, Prettier and types passed. The API container was rebuilt; the live
 $0.0629 max and GPT-4.1 ~$0.0081 / $0.0501. Browser pane check: English at desktop width
 and Hebrew RTL at 375 px. The selected cost line shows on phones, with no horizontal
 scroll. Not run: a paid end-to-end generation with GPT-5.6-terra.
+
+## SP-4 context budget and source-instruction isolation — 2026-10-27 (offline, no paid calls)
+
+Scope: SP-4 criterion "Context is bounded by a token budget and source text cannot override
+system instructions". The existing code was mapped to evidence, and 38 offline tests were
+added to backend/tests/test_generation.py. The provider is mocked; nothing was billed.
+
+| Mechanism (code) | Evidence (tests) |
+| --- | --- |
+| `bounded_context` measures the serialized source list, metadata included, against GENERATION_CONTEXT_BUDGET and truncates by character prefix (app/generation.py) | Exact fit is kept whole; one token less truncates to a prefix; a never-truncated long title counts; a lower-ranked source never displaces a higher-ranked one; inputs are not mutated; Hebrew and `<\|endoftext\|>`-style text is counted as plain text |
+| The writer receives only the bounded context | `test_writer_receives_only_budgeted_context`: the sources sent to the writer fit the configured budget |
+| GENERATION_PROMPT_BUDGET guard on system + user prompt before the provider call | `test_oversized_writer_prompt_fails_before_provider_call`: 409 `generation_prompt_limit`, no provider call, run stored as Failed. Reviewer and query-translation guards were already tested |
+| All untrusted input is one JSON user message; SYSTEM is a constant | 28 cases (4 injection strings × topic, goal, tone, CTA, brand guidelines, source content, source title): SYSTEM is unchanged, the data message has only its four keys, and each string appears exactly once, escaped inside its own field |
+| Provider sends exactly one system and one user message | `test_provider_sends_untrusted_data_only_as_the_user_message` |
+| Writer output must match the strict schema; unknown citations and empty citations fail | Extra keys (e.g. `approved`), wrong types and missing fields give `generation_invalid_response` before review; unknown and missing citations were already tested |
+
+Results: 307 backend tests passed (269 before) on a disposable database as the restricted
+runtime role, run from a directory without `.env`; the database was dropped. Ruff format and
+lint and `mypy app` (the CI target) passed. `mypy .` fails on an existing duplicate-module
+error for scripts/generation_scenarios.py, unrelated to this change.
+
+Limits: these tests prove structural isolation: source text cannot change the system
+prompt, message roles or data structure, and invalid output is rejected. They cannot prove a
+model ignores instructions written inside data. That is model behaviour, covered so far only
+by the live 2026-10-25 "copied injection/prohibited promise" negative case (GPT-4.1, rejected)
+and the source review. It has not been run against GPT-5.6-terra or since source-review-v4.
+The context budget truncates by code point, so it may split a multi-code-point emoji; this
+is harmless to the prompt and not tested.
