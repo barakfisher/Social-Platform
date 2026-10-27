@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rejectUnsafeWrite } from "@/lib/csrf-guard";
 export const dynamic = "force-dynamic";
 async function proxy(
   request: NextRequest,
@@ -6,6 +7,9 @@ async function proxy(
 ) {
   const requestId = crypto.randomUUID();
   const { path = [] } = await context.params;
+  const body = request.method === "POST" && path[0] === "text";
+  const rejected = rejectUnsafeWrite(request, { jsonBody: body });
+  if (rejected) return rejected;
   if (path.length > 2 || path.some((part) => !/^[a-zA-Z0-9-]+$/.test(part))) {
     return NextResponse.json(
       { error: { code: "invalid_path", request_id: requestId } },
@@ -13,25 +17,12 @@ async function proxy(
     );
   }
   try {
-    if (
-      request.method === "POST" &&
-      path[0] === "text" &&
-      !request.headers.get("content-type")?.includes("application/json")
-    ) {
-      return NextResponse.json(
-        { error: { code: "invalid_content_type", request_id: requestId } },
-        { status: 415 },
-      );
-    }
     const response = await fetch(
       `${process.env.API_URL ?? "http://127.0.0.1:58073"}/knowledge${path.length ? "/" + path.join("/") : ""}${request.nextUrl.search}`,
       {
         method: request.method,
         headers: { "Content-Type": "application/json" },
-        body:
-          request.method === "POST" && path[0] === "text"
-            ? JSON.stringify(await request.json())
-            : undefined,
+        body: body ? JSON.stringify(await request.json()) : undefined,
         cache: "no-store",
         signal: AbortSignal.timeout(10000),
       },

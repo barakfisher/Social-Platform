@@ -1,23 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rejectUnsafeWrite } from "@/lib/csrf-guard";
 export const dynamic = "force-dynamic";
 async function proxy(request: NextRequest) {
   const requestId = crypto.randomUUID();
+  const rejected = rejectUnsafeWrite(request, { jsonBody: true });
+  if (rejected) return rejected;
   try {
-    if (
-      request.method === "PUT" &&
-      !request.headers.get("content-type")?.includes("application/json")
-    ) {
-      return NextResponse.json(
-        {
-          error: {
-            code: "invalid_content_type",
-            message: "Use application/json.",
-            request_id: requestId,
-          },
-        },
-        { status: 415 },
-      );
-    }
     const response = await fetch(
       `${process.env.API_URL ?? "http://127.0.0.1:58073"}/brand`,
       {
