@@ -76,6 +76,10 @@ const copy: Record<Locale, Copy> = {
         "The checking service did not respond. Another try usually works.",
       grounding_review_invalid:
         "The checker returned an invalid answer. Try again, or choose another source check model.",
+      grounding_review_truncated:
+        "The checker ran out of room before it finished, so nothing was checked. Check again; if it keeps happening, choose another source check model.",
+      generation_invalid_response:
+        "The checker answered in an unexpected format. Choose another source check model.",
       review_model_unavailable:
         "The source check model is not available right now. Choose another model and try again.",
       generation_model_unavailable:
@@ -136,6 +140,10 @@ const copy: Record<Locale, Copy> = {
         "שירות הבדיקה לא הגיב. בדרך כלל ניסיון נוסף מצליח.",
       grounding_review_invalid:
         "הבודק החזיר תשובה לא תקינה. אפשר לנסות שוב או לבחור מודל בדיקה אחר.",
+      grounding_review_truncated:
+        "לבודק נגמר המקום לפני שסיים, ולכן שום דבר לא נבדק. אפשר לבדוק שוב, ואם זה חוזר, לבחור מודל בדיקה אחר.",
+      generation_invalid_response:
+        "הבודק ענה בפורמט לא צפוי. אפשר לבחור מודל בדיקה אחר.",
       review_model_unavailable:
         "מודל הבדיקה לא זמין כרגע. אפשר לבחור מודל אחר ולנסות שוב.",
       generation_model_unavailable:

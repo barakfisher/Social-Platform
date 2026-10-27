@@ -679,6 +679,29 @@ def test_provider_retries_tracks_usage_and_rejects_malformed_output(provider, se
         chat_completion("system", "user", 100)
 
 
+def test_provider_reports_output_cut_off_by_the_limit_without_retrying(provider, settings):
+    calls = []
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=catalog())
+        calls.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "model": settings.generation_model,
+                "choices": [{"finish_reason": "length", "message": {"content": None}}],
+                "usage": {"prompt_tokens": 50, "completion_tokens": 10, "cost": 0.00001},
+            },
+        )
+
+    with provider(handler), pytest.raises(GenerationError) as raised:
+        chat_completion("system", "user", 100)
+    assert raised.value.code == "generation_output_truncated"
+    assert raised.value.metadata["output_tokens"] == settings.generation_max_output_tokens
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize(
     "verdict",
     [
