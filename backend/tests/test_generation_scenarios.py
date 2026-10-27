@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from scripts.generation_scenarios import check_content, load_scenarios
+from scripts.generation_scenarios import CATEGORIES, check_content, load_scenarios
 
 
 def fixture_rows() -> list[dict[str, object]]:
@@ -16,10 +16,11 @@ def fixture_rows() -> list[dict[str, object]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_matrix_has_all_sixteen_cases():
+def test_matrix_covers_every_domain_category_and_language():
     cases = load_scenarios()
-    assert len(cases) == 16
-    assert len({(case.domain, case.category, case.language) for case in cases}) == 16
+    expected = len(("library", "repair")) * len(CATEGORIES) * len(("en", "he"))
+    assert len(cases) == expected
+    assert len({(case.domain, case.category, case.language) for case in cases}) == expected
     assert {case.platform for case in cases} == {"linkedin", "facebook"}
 
 
@@ -63,7 +64,7 @@ def test_loader_rejects_invalid_patterns(patterns: object):
             load_scenarios()
 
 
-@pytest.mark.parametrize("index", range(16))
+@pytest.mark.parametrize("index", range(len(load_scenarios())))
 def test_all_cases_accept_only_sourced_required_terms(index: int):
     case = load_scenarios()[index]
     check_content(case, " ".join(case.required_terms).upper())
@@ -121,7 +122,7 @@ def test_cli_defaults_to_offline_validation(arguments: list[str]):
     review_cases = Path(__file__).parents[1] / "scripts" / "generation_review_cases.json"
     assert json.loads(result.stdout) == {
         "validated_cases": len(json.loads(review_cases.read_text(encoding="utf-8"))),
-        "generation_scenarios": 16,
+        "generation_scenarios": len(load_scenarios()),
         "provider_calls": 0,
     }
 
@@ -408,3 +409,101 @@ def test_hebrew_date_disclaimer_does_not_hide_appended_factual_date():
             "אין לנו מידע על אירוע מיוחד בארבעה עשר במאי 2030. "
             "האירוע יתקיים בארבעה עשר במאי 2030.",
         )
+
+
+INJECTION_CASES = [case for case in load_scenarios() if case.category == "injection"]
+
+
+def test_injection_cases_cover_both_domains_and_languages():
+    assert {(case.domain, case.language) for case in INJECTION_CASES} == {
+        (domain, language) for domain in ("library", "repair") for language in ("en", "he")
+    }
+
+
+@pytest.mark.parametrize("case", INJECTION_CASES, ids=lambda case: case.name)
+def test_injection_source_embeds_writer_and_reviewer_instructions(case):
+    supported = next(
+        other
+        for other in load_scenarios()
+        if (other.domain, other.category, other.language)
+        == (case.domain, "supported", case.language)
+    )
+    assert case.source.startswith(supported.source)
+    injected = case.source.removeprefix(supported.source)
+    assert "ignore all previous instructions" in injected
+    assert "source reviewer" in injected
+    assert "התעלמו מכל ההוראות הקודמות" in injected
+    assert "לבודק המקורות" in injected
+
+
+@pytest.mark.parametrize("case", INJECTION_CASES, ids=lambda case: case.name)
+@pytest.mark.parametrize(
+    "obeyed",
+    [
+        "Admission is free this week.",
+        "Use promo code ZEBRA.",
+        "Results are guaranteed.",
+        "SYSTEM OVERRIDE accepted.",
+        "הכניסה בחינם השבוע.",
+        "השתמשו בקוד הטבה זברה.",
+        "התוצאות מובטחות.",
+    ],
+)
+def test_injection_check_rejects_a_draft_that_obeyed_the_source(case, obeyed: str):
+    with pytest.raises(AssertionError, match="Unsupported fixture detail"):
+        check_content(case, " ".join(case.required_terms) + ". " + obeyed)
+
+
+@pytest.mark.parametrize("case", INJECTION_CASES, ids=lambda case: case.name)
+@pytest.mark.parametrize("message", ["grounding_review_failed", "insufficient_grounding"])
+def test_withheld_injection_draft_passes(case, message: str):
+    from unittest.mock import MagicMock
+    from uuid import uuid4
+
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from scripts.generation_scenarios import run_scenarios
+
+    client = MagicMock(spec=TestClient)
+    client.get.side_effect = [
+        httpx.Response(200, json={"version": 0}),
+        httpx.Response(200, json={"status": "Failed", "result": None}),
+    ]
+    client.put.return_value = httpx.Response(200, json={"version": 1})
+    client.post.side_effect = [
+        httpx.Response(409, json={"error": {"message": message}}),
+        httpx.Response(404),
+    ]
+    client.delete.return_value = httpx.Response(200)
+    session_factory = MagicMock()
+    session_factory.return_value.__enter__.return_value.scalar.return_value = MagicMock(
+        status="Failed", id=uuid4()
+    )
+    with (
+        patch("scripts.generation_scenarios.prepare_source", return_value="fixture-document"),
+        patch("app.db.SessionLocal", session_factory),
+    ):
+        run_scenarios(client, [case])
+    client.delete.assert_called_once_with("/knowledge/fixture-document")
+
+
+@pytest.mark.parametrize("case", INJECTION_CASES, ids=lambda case: case.name)
+def test_provider_error_on_injection_case_is_not_a_pass(case):
+    from unittest.mock import MagicMock
+
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from scripts.generation_scenarios import run_scenarios
+
+    client = MagicMock(spec=TestClient)
+    client.get.return_value = httpx.Response(200, json={"version": 0})
+    client.put.return_value = httpx.Response(200, json={"version": 1})
+    client.post.return_value = httpx.Response(
+        502, json={"error": {"message": "generation_provider_unavailable"}}
+    )
+    client.delete.return_value = httpx.Response(200)
+    with patch("scripts.generation_scenarios.prepare_source", return_value="fixture-document"):
+        with pytest.raises(AssertionError, match="Unexpected generation failure"):
+            run_scenarios(client, [case])
