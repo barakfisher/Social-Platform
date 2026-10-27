@@ -16,7 +16,7 @@ from typing import Literal
 from unittest.mock import patch
 from uuid import uuid4
 
-from generation_scenarios import load_scenarios, run_scenarios
+from generation_scenarios import load_scenarios, review_outcome, run_scenarios
 from pydantic import BaseModel, ConfigDict, Field
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -133,7 +133,6 @@ def evaluate(scenarios_only: bool = False, scenario_names: list[str] | None = No
             )
         )
     embed_document(job_id)
-    from app.generation_provider import GenerationError
     from app.grounding import review_draft
 
     review_sources = [{"chunk_id": "garden", "content": source}]
@@ -157,49 +156,46 @@ def evaluate(scenarios_only: bool = False, scenario_names: list[str] | None = No
         ),
         ("wrong_language", "המתנדבים נפגשים ביום חמישי.", "en"),
     ]
+    # source-review-v5 shows drafts with findings. An unsupported draft must be flagged or
+    # blocked; a clean verdict on it is a reviewer miss.
     for name, draft, language in negative_cases:
-        try:
-            review_draft(
-                draft,
-                review_sources,
-                review_brand,
-                {
-                    "language": language,
-                    "topic": "Garden volunteer meetings",
-                    "platform": "linkedin",
-                },
-            )
-        except GenerationError as exc:
-            assert exc.code == "grounding_review_failed", exc.code
-            print(json.dumps({"case": name, "unsupported_draft_rejected": True}), flush=True)
-        else:
-            raise AssertionError("Reviewer accepted unsupported case: " + name)
+        outcome, codes = review_outcome(
+            review_draft,
+            draft,
+            review_sources,
+            review_brand,
+            {
+                "language": language,
+                "topic": "Garden volunteer meetings",
+                "platform": "linkedin",
+            },
+        )
+        if outcome == "clean" or (name == "wrong_language" and "wrong_language" not in codes):
+            raise AssertionError(f"Reviewer missed unsupported case: {name}: {codes}")
+        print(json.dumps({"case": name, "outcome": outcome, "findings": codes}), flush=True)
     for review_case in curated_cases:
-        try:
-            review_draft(
-                review_case.draft,
-                [{"chunk_id": review_case.name, "content": review_case.source}],
-                review_brand,
-                {
-                    "language": review_case.language,
-                    "topic": review_case.topic,
-                    "platform": review_case.platform,
-                },
-            )
-        except GenerationError as exc:
-            if exc.code != "grounding_review_failed" or review_case.accepted:
-                raise AssertionError("Curated case failed: " + review_case.name) from exc
-            accepted = False
-        else:
-            accepted = True
-        if accepted != review_case.accepted:
-            raise AssertionError("Reviewer accepted curated negative case: " + review_case.name)
+        outcome, codes = review_outcome(
+            review_draft,
+            review_case.draft,
+            [{"chunk_id": review_case.name, "content": review_case.source}],
+            review_brand,
+            {
+                "language": review_case.language,
+                "topic": review_case.topic,
+                "platform": review_case.platform,
+            },
+        )
+        # "accepted" now means the reviewer reports nothing; a negative case must be flagged
+        # or blocked.
+        if (outcome == "clean") != review_case.accepted:
+            raise AssertionError(f"Curated case failed: {review_case.name}: {outcome} {codes}")
         print(
             json.dumps(
                 {
                     "case": review_case.name,
                     "category": review_case.category,
-                    "accepted": accepted,
+                    "outcome": outcome,
+                    "findings": codes,
                     "passed": True,
                 }
             ),
@@ -239,7 +235,8 @@ def evaluate(scenarios_only: bool = False, scenario_names: list[str] | None = No
         assert response.status_code == 200, response.text
         result = response.json()
         content = result["content"]
-        assert result["metadata"]["grounding_review"]["status"] == "passed"
+        review = result["metadata"]["grounding_review"]
+        assert review["status"] == "checked" and review["findings"] == [], review
         assert result["grounded"] and any(
             s["document_id"] == document_id for s in result["sources"]
         )

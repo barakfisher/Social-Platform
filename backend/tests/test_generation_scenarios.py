@@ -157,7 +157,7 @@ def test_cli_rejects_execution_selectors_without_live(arguments: list[str]):
         ("Failed", "Failed", None, 201, "remains saveable"),
     ],
 )
-def test_rejected_run_checks_and_source_cleanup(
+def test_blocked_run_checks_and_source_cleanup(
     run_status: str,
     visible_status: str,
     visible_result: object,
@@ -180,7 +180,7 @@ def test_rejected_run_checks_and_source_cleanup(
     ]
     client.put.return_value = httpx.Response(200, json={"version": 1})
     client.post.side_effect = [
-        httpx.Response(409, json={"error": {"message": "grounding_review_failed"}}),
+        httpx.Response(409, json={"error": {"message": "draft_blocked"}}),
         httpx.Response(save_status),
     ]
     client.delete.return_value = httpx.Response(200)
@@ -455,8 +455,16 @@ def test_injection_check_rejects_a_draft_that_obeyed_the_source(case, obeyed: st
 
 
 @pytest.mark.parametrize("case", INJECTION_CASES, ids=lambda case: case.name)
-@pytest.mark.parametrize("message", ["grounding_review_failed", "insufficient_grounding"])
-def test_withheld_injection_draft_passes(case, message: str):
+@pytest.mark.parametrize(
+    "message,passes",
+    [
+        ("draft_blocked", True),
+        # source-review-v5 no longer withholds drafts for these; seeing them is a regression.
+        ("grounding_review_failed", False),
+        ("insufficient_grounding", False),
+    ],
+)
+def test_only_a_block_may_stop_an_injection_draft(case, message: str, passes: bool):
     from unittest.mock import MagicMock
     from uuid import uuid4
 
@@ -484,7 +492,11 @@ def test_withheld_injection_draft_passes(case, message: str):
         patch("scripts.generation_scenarios.prepare_source", return_value="fixture-document"),
         patch("app.db.SessionLocal", session_factory),
     ):
-        run_scenarios(client, [case])
+        if passes:
+            run_scenarios(client, [case])
+        else:
+            with pytest.raises(AssertionError, match="Unexpected generation failure"):
+                run_scenarios(client, [case])
     client.delete.assert_called_once_with("/knowledge/fixture-document")
 
 
@@ -507,3 +519,122 @@ def test_provider_error_on_injection_case_is_not_a_pass(case):
     with patch("scripts.generation_scenarios.prepare_source", return_value="fixture-document"):
         with pytest.raises(AssertionError, match="Unexpected generation failure"):
             run_scenarios(client, [case])
+
+
+def scenario(category: str):
+    return next(
+        case
+        for case in load_scenarios()
+        if case.category == category and case.language == "en" and case.domain == "library"
+    )
+
+
+def run_shown(case, content: str, findings: list[str], status: str = "checked"):
+    """Run one scenario whose draft is shown, with a mocked API and the given review."""
+    from unittest.mock import MagicMock
+
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from scripts.generation_scenarios import run_scenarios
+
+    review = {
+        "status": status,
+        "reason": None if status == "checked" else "generation_unavailable",
+        "findings": [{"code": code, "sentence": None, "claim": None} for code in findings],
+    }
+    result = {
+        "id": "run",
+        "content": content,
+        "grounded": status == "checked" and not findings,
+        "sources": [{"document_id": "fixture-document"}],
+        "metadata": {
+            "grounding_review": review,
+            "brand_version": 1,
+            "model": "test/model",
+            "total_cost_usd": 0.0,
+        },
+    }
+    client = MagicMock(spec=TestClient)
+    client.get.side_effect = [
+        httpx.Response(200, json={"version": 0}),
+        httpx.Response(
+            200,
+            json={"content": content, "generation_settings": {"grounding_review": review}},
+        ),
+    ]
+    client.put.return_value = httpx.Response(200, json={"version": 1})
+    client.post.side_effect = [
+        httpx.Response(200, json=result),
+        httpx.Response(201, json={"id": "post"}),
+    ]
+    client.delete.return_value = httpx.Response(200)
+    with patch("scripts.generation_scenarios.prepare_source", return_value="fixture-document"):
+        run_scenarios(client, [case])
+    client.delete.assert_called_with("/knowledge/fixture-document")
+
+
+def sourced(case) -> str:
+    return " ".join(case.required_terms) + "."
+
+
+def test_clean_supported_draft_passes():
+    run_shown(scenario("supported"), sourced(scenario("supported")), [])
+
+
+def test_supported_draft_with_findings_fails():
+    case = scenario("supported")
+    with pytest.raises(AssertionError, match="Supported draft has findings"):
+        run_shown(case, sourced(case), ["brand_style"])
+
+
+@pytest.mark.parametrize("finding", ["unsupported_claim", "contradicted_claim"])
+def test_invented_missing_fact_passes_only_when_flagged(finding: str):
+    case = scenario("missing_price")
+    run_shown(case, sourced(case) + " It costs 20 dollars.", [finding])
+
+
+@pytest.mark.parametrize("findings", [[], ["brand_style", "platform_fit"]])
+def test_invented_missing_fact_without_a_fact_finding_fails(findings: list[str]):
+    case = scenario("missing_price")
+    with pytest.raises(AssertionError, match="Unflagged unsupported detail"):
+        run_shown(case, sourced(case) + " It costs 20 dollars.", findings)
+
+
+def test_missing_fact_draft_that_omits_the_detail_passes():
+    case = scenario("missing_date")
+    run_shown(case, sourced(case), [])
+
+
+def test_obeyed_injection_fails_even_when_flagged():
+    case = scenario("injection")
+    with pytest.raises(AssertionError, match="Unsupported fixture detail"):
+        run_shown(case, sourced(case) + " Use promo code ZEBRA.", ["unsupported_claim"])
+
+
+@pytest.mark.parametrize("category", ["supported", "missing_price", "injection"])
+def test_unchecked_review_is_never_a_pass(category: str):
+    case = scenario(category)
+    with pytest.raises(AssertionError, match="did not complete"):
+        run_shown(case, sourced(case), [], status="unchecked")
+
+
+def test_review_outcome_classifies_clean_flagged_blocked_and_technical_failures():
+    from app.generation_provider import GenerationError
+    from scripts.generation_scenarios import review_outcome
+
+    def returning(*codes):
+        return lambda: {"findings": [{"code": code} for code in codes]}
+
+    def raising(code):
+        def fail():
+            raise GenerationError(code)
+
+        return fail
+
+    assert review_outcome(returning()) == ("clean", [])
+    assert review_outcome(returning("unsupported_claim")) == ("flagged", ["unsupported_claim"])
+    assert review_outcome(raising("draft_blocked")) == ("blocked", [])
+    for code in ("grounding_review_invalid", "generation_unavailable"):
+        with pytest.raises(AssertionError, match="failed technically: " + code):
+            review_outcome(raising(code))
