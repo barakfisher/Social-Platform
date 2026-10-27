@@ -1,11 +1,11 @@
-# Social Platform continuation handoff — 2026-10-27 (after PR #5)
+# Social Platform continuation handoff — 2026-10-27 (after PR #7)
 
 ## Startup
 
 The user asked for handoff + merge + a fresh session. Read AGENTS.md, this file,
 docs/implementation.md (decision entries at the end) and verification/generation-grounding.md
-(latest sections at the end). Inspect git status/log and confirm PR #5 is on `main` by
-content: `git grep -n test_withheld_injection_draft_passes origin/main -- backend/tests`.
+(latest sections at the end). Inspect git status/log and confirm PR #7 is on `main` by
+content: `git grep -n "export function rejectUnsafeWrite" origin/main -- frontend/src/lib`.
 Then give a short next-step summary and wait. Do not start engineering, paid calls, pushes or
 PRs on startup. Linear works through the Linear MCP in Claude Code sessions (project Social
 Platform).
@@ -23,7 +23,27 @@ v2, the one Ready Hebrew source and saved posts. Paid model calls need explicit
 authorization each time. Merging needs an admin bypass of the required review, approved by
 the user each time.
 
-## What this delivery contains
+## Latest delivery: CSRF guard on the Next.js proxies (PR #7, ddfd470)
+
+- **Hole:** the proxies under frontend/src/app/api accepted writes whose content-type merely
+  *contained* `application/json`, and nothing checked where a request came from. A page on
+  any site sent `no-cors` POSTs (`text/plain;application/json`, or no body) to
+  `/api/generation` and `/api/knowledge/<id>/embed`; both reached the backend. Reproduced
+  against a logging stub, not FastAPI, with no paid calls.
+- **Fix:** frontend/src/lib/csrf-guard.ts `rejectUnsafeWrite`, called first in all four
+  routes. Writes get 403 `cross_site_request` when `Sec-Fetch-Site` is not `same-origin` or
+  `Origin` differs from the request's own protocol plus Host. Forwarded bodies need content
+  type exactly `application/json` (415). GET is unchanged; writes with neither header
+  (curl) pass. Decision, rejected alternatives and limits: last entry of
+  docs/implementation.md.
+- **Tests:** frontend/tests/csrf-guard.spec.ts, 13 tests (8 fail with the guard disabled).
+  Full Playwright 30/30, lint, tsc, Prettier passed; hosted CI 6/6 passed. Merged with a
+  user-approved admin bypass. A bf-security-reviewer pass found no code defect; its one
+  blocking note (understated FastAPI risk) was corrected in the decision log.
+- **Not tied to a Linear issue.** No issue was created or updated for it.
+- PR #6 (6c6142e) was the previous handoff refresh; its delivery is described below.
+
+## Earlier delivery: live source-injection scenarios (PR #5)
 
 PR #5 (merged as e92f421) closes the live part of SP-4's "source text cannot override system
 instructions". No application code changed.
@@ -46,6 +66,17 @@ instructions". No application code changed.
 
 ## Lessons (do not re-learn)
 
+- **`npm test` locally hits the wrong server while 53073 is up.** playwright.config.ts uses
+  `reuseExistingServer`, so it tests the main checkout's production build, not your code.
+  Run `npx next dev --hostname 127.0.0.1 --port <other>` from your worktree (optionally
+  with `API_URL` pointing at a stub) and a temporary config that sets that baseURL; delete
+  the config afterwards.
+- **Chromium blocks local requests from pages Playwright fulfils itself** (they count as
+  public under Local Network Access). Serve test pages from a real local server; the CSRF
+  browser test opens the app under `localhost` to attack `127.0.0.1`.
+- **localhost and 127.0.0.1 are different sites; other ports on the same host are the same
+  site.** A guard must reject `Sec-Fetch-Site: same-site`, or another local dev server
+  (port 3000) can write.
 - **Linear closes SP-4 on every merge whose branch name contains `sp-4`.** It happened after
   PR #4 and PR #5. After merging, check SP-4 and move it back to In Progress while criteria
   are open (AGENTS.md). Prefer branch names without the identifier.
@@ -69,6 +100,22 @@ instructions". No application code changed.
 
 ## Open risks and debt
 
+- **FastAPI (127.0.0.1:58073) is still open to cross-site writes, bypassing the new guard.**
+  A `no-cors` POST with a Blob/ArrayBuffer body sends no Content-Type, and FastAPI 0.162.0
+  parses such a body as JSON (`fastapi/routing.py` ~line 462; read in source, not
+  exercised). Likely reachable: `POST /generation` (paid), `PUT /brand`, `POST /posts`,
+  `POST /knowledge/text|search`, and bodiless `/knowledge/{id}/embed|retry`. CORS in
+  backend/app/main.py only withholds response headers; it does not block. Chrome's Local
+  Network Access prompt may stop public sites but not other local ports.
+- **DNS rebinding passes the proxy guard** (Host, Origin and Sec-Fetch-Site all look
+  same-origin). A Host allowlist in csrf-guard.ts would close it.
+- **The production frontend on 53073 is still the pre-#7 build** until the main checkout
+  pulls `main`, rebuilds and restarts. The main checkout is on the advisory branch with
+  uncommitted edits, so do not do this without the owner.
+- `GET /generation/{run_id}` can change an orphaned Processing run's state; the guard never
+  blocks GET (low impact, needs the run UUID).
+- The guard-coverage test only greps each route.ts for the call; it would pass if the call
+  came after the upstream fetch.
 - **The advisory source-review change (in progress elsewhere) changes blocking behaviour.**
   Drafts would always be shown; only copied source instructions or revealed system
   instructions block. Rerun the 4 injection scenarios after it lands (about $0.03, needs
@@ -105,6 +152,18 @@ frontend on 53073 (`npm run start`), Postgres 55473, Redis 56373. Port 3000 belo
 another project; never stop it.
 
 ## Linear and next task
+
+**Recommended next task: block cross-site writes directly to FastAPI** (risk above). Add a
+Starlette middleware in backend/app: writes with a body need content type exactly
+`application/json` (415); writes whose `Origin` is present and not in `cors_origins`, or
+whose `Sec-Fetch-Site` is not `same-origin`/`none`, get 403. The Next.js proxy sends
+neither header and must keep working. Reproduce first with a hermetic `TestClient` test
+(`client.put("/brand", content=...)` sends no Content-Type). Then add the Host allowlist to
+csrf-guard.ts and strengthen the coverage test. This is not a Linear issue yet; ask before
+creating one. **Overlap:** the advisory branch edits backend/app/main.py and appends to
+docs/implementation.md, so expect a small merge conflict there; branch from `main`.
+
+Then, as before:
 
 SP-4 In Progress: the model-availability criterion and 8 advisory source-review criteria are
 open. SP-16 In Progress. SP-5 In Progress.
