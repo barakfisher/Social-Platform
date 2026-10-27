@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rejectUnsafeWrite } from "@/lib/csrf-guard";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 async function proxy(
@@ -6,21 +7,15 @@ async function proxy(
   context: { params: Promise<{ path?: string[] }> },
 ) {
   const { path = [] } = await context.params;
+  const body = ["POST", "PUT"].includes(request.method);
+  const rejected = rejectUnsafeWrite(request, { jsonBody: body });
+  if (rejected) return rejected;
   if (path.length > 1 || path.some((p) => !/^[a-zA-Z0-9-]+$/.test(p)))
     return NextResponse.json(
       { error: { message: "invalid_path" } },
       { status: 400 },
     );
   try {
-    const body = ["POST", "PUT"].includes(request.method);
-    if (
-      body &&
-      !request.headers.get("content-type")?.includes("application/json")
-    )
-      return NextResponse.json(
-        { error: { message: "invalid_content_type" } },
-        { status: 415 },
-      );
     const response = await fetch(
       `${process.env.API_URL ?? "http://127.0.0.1:58073"}/generation${path.length ? "/" + path.join("/") : ""}${request.nextUrl.search}`,
       {
