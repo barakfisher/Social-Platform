@@ -1277,3 +1277,230 @@ def test_review_models_route_is_not_captured_by_run_lookup(service_api):
         response = client.get("/generation/review-models")
     assert response.status_code == 200
     assert response.json() == {"default": "x", "models": []}
+
+
+@pytest.fixture
+def second_writer(settings):
+    """A second listed writer with a heavier tokenizer and a larger output limit."""
+    from decimal import Decimal
+
+    from app.writer_models import WRITER_PROFILES, WriterProfile
+
+    model_id = "test/heavy-writer"
+    profile = WriterProfile(
+        token_ratio=Decimal("1.8"), typical_tokens=(4000, 600), output_tokens=2000
+    )
+    settings.generation_writer_models = [settings.generation_model, model_id]
+    with patch.dict(WRITER_PROFILES, {model_id: profile}):
+        yield model_id, profile
+
+
+def test_user_chosen_writer_is_used_stored_and_kept_out_of_prompts(
+    service_api, settings, second_writer
+):
+    import math
+
+    from sqlalchemy import select
+
+    client, factory, _, generation = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    model_id, profile = second_writer
+    body = payload(writer_model=model_id)
+    with patch("app.grounding.chat_completion", side_effect=fake_review) as review:
+        result = client.post("/generation", json=body)
+    assert result.status_code == 200, result.text
+    call = generation.call_args
+    assert call.kwargs["model_id"] == model_id
+    assert call.kwargs["output_tokens"] == profile.output_tokens
+    # Budgets count o200k tokens; the provider call carries the writer's own count.
+    estimate = result.json()["metadata"]["prompt_tokens_estimate"]
+    assert call.args[2] == math.ceil(estimate * profile.token_ratio)
+    assert result.json()["metadata"]["writer_token_ratio"] == str(profile.token_ratio)
+    assert "writer_model" not in json.loads(call.args[1])["preferences"]
+    assert "writer_model" not in json.loads(review.call_args.args[1])["preferences"]
+    with factory.begin() as session:
+        run = session.scalar(
+            select(GenerationRun).where(GenerationRun.request_key == body["request_key"])
+        )
+        assert run.inputs["writer_model"] == model_id
+
+
+def test_writer_choice_is_part_of_the_request_fingerprint(service_api, settings, second_writer):
+    client, factory, _, _ = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    body = payload()
+    first = client.post("/generation", json=body)
+    assert first.status_code == 200, first.text
+    # Retrying with the default named explicitly is the same request, not a conflict.
+    repeat = client.post("/generation", json={**body, "writer_model": settings.generation_model})
+    assert repeat.status_code == 200 and repeat.json()["id"] == first.json()["id"]
+    # The same request key with another writer is a different request.
+    other = client.post("/generation", json={**body, "writer_model": second_writer[0]})
+    assert other.status_code == 409
+    assert other.json()["error"]["message"] == "generation_request_conflict"
+
+
+def test_default_writer_uses_its_profile_limits(service_api, settings):
+    from app.writer_models import WRITER_PROFILES
+
+    client, factory, _, generation = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    assert client.post("/generation", json=payload()).status_code == 200
+    call = generation.call_args
+    assert call.kwargs["model_id"] == settings.generation_model
+    expected = WRITER_PROFILES[settings.generation_model].output_tokens
+    assert call.kwargs["output_tokens"] == (expected or settings.generation_max_output_tokens)
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-4o", " openai/gpt-4.1x", "listed-unmeasured"])
+def test_unlisted_or_unmeasured_writer_is_rejected_before_any_provider_call(
+    service_api, settings, model
+):
+    client, factory, embeddings, generation = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    if model == "listed-unmeasured":
+        # Listed in settings but without a measured profile: still not choosable.
+        model = "vendor/unmeasured"
+        settings.generation_writer_models = [settings.generation_model, model]
+    response = client.post("/generation", json=payload(writer_model=model))
+    assert response.status_code == 422
+    assert response.json()["error"]["message"] == "writer_model_unavailable"
+    embeddings.assert_not_called()
+    generation.assert_not_called()
+
+
+def test_default_writer_must_be_offered():
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError, match="GENERATION_WRITER_MODELS"):
+        Settings(
+            _env_file=None,
+            generation_model="openai/gpt-4o",
+            generation_writer_models=["openai/gpt-4.1"],
+        )
+
+
+def test_every_default_writer_has_a_measured_profile():
+    from app.config import Settings
+    from app.writer_models import WRITER_PROFILES
+
+    for model_id in Settings(_env_file=None).generation_writer_models:
+        assert model_id in WRITER_PROFILES, model_id
+
+
+def test_writer_cut_off_by_its_limit_fails_with_its_own_code(service_api):
+    client, factory, _, generation = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    generation.side_effect = GenerationError(
+        "generation_output_truncated", {"attempts": 1, "output_tokens": 900}
+    )
+    response = client.post("/generation", json=payload())
+    assert response.status_code == 503
+    assert response.json()["error"]["message"] == "generation_output_truncated"
+
+
+def test_writer_model_options_price_with_token_ratio_and_mark_unusable_models(
+    provider, settings, second_writer
+):
+    from decimal import Decimal
+
+    from app.generation_provider import attempt_estimate_usd
+    from app.writer_models import WRITER_PROFILES, provider_tokens, writer_model_options
+
+    heavy, profile = second_writer
+    default = settings.generation_model
+    delisted, unmeasured = "vendor/delisted-writer", "vendor/unmeasured"
+    settings.generation_writer_models = [default, heavy, delisted, unmeasured]
+    prices = {"prompt": "0.000002", "completion": "0.00001"}
+
+    def handler(request):
+        entries = [
+            {"id": model_id, "pricing": prices, "context_length": 1000000}
+            for model_id in (default, heavy, unmeasured)
+        ]
+        return httpx.Response(200, json={"data": entries})
+
+    with provider(handler), patch.dict(WRITER_PROFILES, {delisted: profile}):
+        options = writer_model_options()
+    model = {
+        "prompt_price": Decimal(prices["prompt"]),
+        "completion_price": Decimal(prices["completion"]),
+    }
+
+    def expected(model_id):
+        writer = WRITER_PROFILES.get(model_id) or profile
+        prompt, completion = writer.typical_tokens
+        output = writer.output_tokens or settings.generation_max_output_tokens
+        return {
+            "id": model_id,
+            "available": True,
+            "typical_usd": float(
+                prompt * model["prompt_price"] + completion * model["completion_price"]
+            ),
+            "max_usd": float(
+                attempt_estimate_usd(
+                    provider_tokens(settings.generation_prompt_budget, writer), output, model
+                )
+                * (settings.generation_retries + 1)
+            ),
+        }
+
+    assert options["default"] == default
+    assert options["models"] == [
+        expected(default),
+        expected(heavy),
+        {"id": delisted, "available": False, "typical_usd": None, "max_usd": None},
+        {"id": unmeasured, "available": False, "typical_usd": None, "max_usd": None},
+    ]
+    # The ratio raises the reserved worst case above the unscaled estimate.
+    assert options["models"][1]["max_usd"] > float(
+        attempt_estimate_usd(settings.generation_prompt_budget, profile.output_tokens, model)
+        * (settings.generation_retries + 1)
+    )
+
+
+def test_writer_models_route_is_not_captured_by_run_lookup(service_api):
+    client, _, _, _ = service_api
+    with patch("app.generation.writer_model_options", return_value={"default": "x", "models": []}):
+        response = client.get("/generation/writer-models")
+    assert response.status_code == 200
+    assert response.json() == {"default": "x", "models": []}
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"token_ratio": 1.8},
+        {"token_ratio": __import__("decimal").Decimal("0")},
+        {"token_ratio": __import__("decimal").Decimal("NaN")},
+        {"output_tokens": 0},
+        {"typical_tokens": (-1, 10)},
+    ],
+)
+def test_writer_profiles_reject_values_that_would_misreserve(values):
+    from decimal import Decimal
+
+    from app.writer_models import WriterProfile
+
+    with pytest.raises(ValueError):
+        WriterProfile(**{"token_ratio": Decimal("1"), "typical_tokens": (1, 1), **values})
+
+
+def test_writer_profile_output_limits_fit_the_provider_ceiling():
+    from app.config import Settings
+    from app.writer_models import WRITER_PROFILES
+
+    # chat_completion caps every call at the larger of the two output settings' maxima.
+    ceiling = max(
+        next(m.le for m in Settings.model_fields[field].metadata if hasattr(m, "le"))
+        for field in ("generation_max_output_tokens", "generation_review_max_output_tokens")
+    )
+    for model_id, profile in WRITER_PROFILES.items():
+        assert profile.output_tokens is None or profile.output_tokens <= ceiling, model_id

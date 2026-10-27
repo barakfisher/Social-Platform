@@ -455,3 +455,128 @@ still approach the 40 s timeout; not measured on 1,200- or 2,400-character draft
 writer path still shows its own truncation as the generic error. The connective list is
 not a full Hebrew grammar; a reviewer that ignores the listed words can still fail coverage
 as `grounding_review_invalid`. The v6 prompt has not yet passed the paid review evaluation.
+
+## Decision: token estimates for writers with other tokenizers (SP-22) — 2026-10-27
+
+Problem: budgets and cost reservations count prompt tokens locally with `o200k_base`
+(`prompt_tokens` in app/grounding.py). That is accurate for GPT-4.1: stored Hebrew runs
+under-count by a constant 29 tokens. Measured on synthetic EN/HE writer prompts
+(verification/generation-grounding.md, "Writer tokenizer ratios"), other families count more
+tokens for the same text. For long source text the provider-reported count approaches
+o200k × 1.66 (EN) / 1.78 (HE) for Claude Haiku/Sonnet 5.5, and about × 1.2 (HE) for Gemini
+3.8 Flash, DeepSeek v4.1 Flash and Nemotron. Without a correction, a Claude writer's
+reservation and displayed cost would be about 40% too low.
+
+Choice (owner-approved):
+- Each writer in the writer allowlist carries a measured token ratio: the larger of the EN and
+  HE ratios measured on long source text, rounded up (initially GPT-4.1 1.0, Claude 5.5 family
+  1.8, Gemini/DeepSeek/Qwen 1.25). Tests assert the named constant, not a number.
+- The ratio applies to the cost reservation (spending-limit preflight), the cost estimate
+  shown in Create Post, and the context-length check against the catalog.
+- The prompt and context budgets (GENERATION_PROMPT_BUDGET, GENERATION_CONTEXT_BUDGET) stay in
+  o200k units, so every writer receives the same retrieved sources and evaluations compare
+  writers, not context sizes.
+- Provider-reported prompt tokens stay stored next to `prompt_tokens_estimate`, so a ratio can
+  be rechecked from real runs. A candidate writer gets a ratio measured before it is listed.
+
+Rejected:
+- A local tokenizer per model: Claude 5.x has no public tokenizer, and Gemini's needs a new
+  package; an unmapped model would silently fall back to a wrong count.
+- Provider-reported counts only: they arrive after the call, so the spending cap could not be
+  checked beforehand.
+- Shrinking the prompt budget by the ratio: a Claude writer would get about 45% less source
+  text, and its evaluation would mix model quality with missing context.
+- One global safety margin: 1.8 for every model would overstate GPT-4.1 costs by 80%; a smaller
+  margin would under-reserve Claude.
+
+Limits: one measurement per case on one synthetic topic; Qwen long Hebrew and Gemma were
+rate-limited and not measured. Ratios can drift when a provider changes tokenizers under the
+same model ID; recheck from stored runs when costs look off.
+
+### SP-22 acceptance criteria (owner-approved) — 2026-10-27
+
+Selection and cost:
+- The writer select lists only allowlisted, evaluated models; each option shows its writing
+  cost, typical and maximum.
+- One line below both selects shows the estimated total per draft (writing + the chosen source
+  check), typical and maximum; it updates when either select changes and is visible on phones.
+  Assumption agreed: option labels carry only the writing cost, so they do not change with the
+  reviewer.
+- Per-model cost comes from live catalog prices × the model's token ratio; the same ratio
+  drives the spending-limit reservation and the context-length check.
+
+API and data:
+- An unlisted model is rejected with 422 `writer_model_unavailable` before any provider call.
+  An omitted choice resolves to the default with the same fingerprint as an explicit default.
+- The chosen writer is stored with the run and in the fingerprint, never in the prompts. A
+  retry with another writer is a new request.
+- The writer output limit is set per model so a reasoning writer can finish;
+  `test_generation_budget.py` passes for every listed writer at its worst case.
+
+States:
+- Loading: select disabled with "Loading models…", total line hidden; generating still works
+  with the default.
+- Error (catalog or API unreachable): the select is replaced by "the default writer will be
+  used"; the total line shows "cost unavailable".
+- Empty: settings forbid an empty allowlist; an empty response is treated as the error state.
+- Model unavailable: a delisted or unpriced model is a disabled "unavailable" option. If it
+  disappears between load and submit, an EN/HE message asks for another model; inputs stay.
+- Writer cut off: `generation_output_truncated` from the writer has its own EN/HE message,
+  retry allowed, inputs preserved.
+
+Quality and records:
+- Every listed writer is compared with the GPT-4.1 baseline on the same 20 scenarios
+  (unsupported additions, meta notes, latency, cost) in verification/generation-grounding.md.
+- The default changes only if a candidate has fewer unsupported additions than GPT-4.1 and
+  fails no injection case; a candidate that fails an injection case is not listed.
+- Each candidate's token ratio is measured before it is listed.
+- Decisions and rejected alternatives are recorded here.
+
+### SP-22 candidate decision: Claude Sonnet 5.5 dropped — 2026-10-27
+
+Owner decision after the 20-scenario run (verification/generation-grounding.md, "Writer
+candidates on the 20 scenarios"): Claude Sonnet 5.5 is not listed. It ended 16/20 drafts with
+a meta note about its sources (baseline GPT-4.1: 8/20), added 6 unsupported details, and one
+supported Hebrew draft was blocked as `copied_instructions` because the note echoed the brand
+guideline. Its writing costs about 2× GPT-4.1 per draft. Rejected alternative: keeping it and
+tuning the prompt against meta notes (a prompt change is outside SP-22 and would need a new
+baseline for every writer). Gemini 3.8 Flash and GPT-5.6-luna stay candidates pending a
+confirmation run and luna's 7 missing reviews.
+
+### SP-22 slice 1: writer choice plumbing — 2026-10-27
+
+Built while OpenRouter credits were exhausted, so no paid calls; every check is offline.
+
+- `GENERATION_WRITER_MODELS` (default GPT-4.1 only, the one evaluated writer) mirrors the
+  reviewer allowlist; `GENERATION_MODEL` must be in it. app/writer_models.py holds a measured
+  `WriterProfile` per writer: token ratio, typical provider tokens for the cost estimate, and an
+  optional output limit for reasoning writers.
+- `writer_model` in `POST /generation` resolves to the default, is stored in the run inputs
+  and fingerprint, and never reaches the prompts. An unlisted writer, or a listed one without a
+  profile, gets 422 `writer_model_unavailable` before any provider call.
+- The prompt-budget check stays in o200k units; the writer call receives o200k × ratio
+  (rounded up), which drives the spending reservation and the context-length check.
+  `writer_token_ratio` is stored with each result for recalibration.
+- `GET /generation/writer-models` prices each writer from the live catalog: typical = profile
+  tokens × price; maximum = full prompt budget × ratio, profile output limit, every retry.
+- Create Post: a writer select above the source-check select, the chosen writer's cost below
+  it, and a total line (writing + chosen source check). States follow the agreed criteria;
+  `generation_output_truncated` and `writer_model_unavailable`/`generation_model_unavailable`
+  have their own EN/HE messages.
+
+Decision (low risk, not argued): a candidate gets its profile only when it is listed, with
+typical tokens measured on a realistic prompt. Gemini 3.8 Flash and GPT-5.6-luna therefore
+have no profile yet; a candidate evaluation that sets GENERATION_MODEL on this code must also
+add its measured profile and set GENERATION_WRITER_MODELS. Rejected: deriving typical tokens
+from the one-sentence scenario drafts (Gemini's 697 mean completion tokens there would misstate
+a real post).
+
+Security review (bf-security-reviewer, read-only): no confirmed vulnerability; allowlist, spend
+reservation, fingerprint and prompt isolation held. Acted on its low-severity notes: profiles
+reject a float, zero or non-finite ratio and non-positive token counts at import; a test keeps
+profile output limits under the provider ceiling; the cross-language query translation (run by
+the default writer) now scales its count by that writer's ratio; "Check again" maps
+`generation_model_unavailable` to the source-check message. Accepted as fail-safe: runs stored
+before this change have no `writer_model`, so retrying such an old request key returns 409
+`generation_request_conflict`; a writer removed from the allowlist returns 422 even for a retry
+of a finished run.

@@ -24,6 +24,12 @@ from app.post_presets import CTAS, OTHER, TONES, CtaId, ToneId
 from app.query_translation import translate_query
 from app.retrieval import search_context
 from app.review_models import review_model_options
+from app.writer_models import (
+    provider_tokens,
+    writer_model_options,
+    writer_output_tokens,
+    writer_profile,
+)
 
 router = APIRouter(prefix="/generation", tags=["generation"], dependencies=[Depends(local_only)])
 PROMPT_VERSION = "grounded-post-v4"
@@ -85,6 +91,8 @@ class GenerateInput(BaseModel):
     offer_details: str = Field(default="", max_length=1000)
     # Source-check model; omitted means the configured default. Checked against the allowlist.
     review_model: str | None = Field(default=None, max_length=200)
+    # Writer model; omitted means the configured default. Checked against the allowlist.
+    writer_model: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def validate_preferences(self):
@@ -202,15 +210,22 @@ def generate(payload: GenerateInput):
 
 
 def request_inputs(payload: GenerateInput) -> dict:
-    """Stored, fingerprinted inputs with the source-check model resolved and allowlisted."""
+    """Stored, fingerprinted inputs with the writer and source-check models resolved and
+    allowlisted."""
     settings = get_settings()
     review_model = payload.review_model or settings.generation_review_model
     if review_model not in settings.generation_review_models:
         raise HTTPException(422, "review_model_unavailable")
-    # Resolve the default first so an omitted and an explicit default share one fingerprint.
+    writer_model = payload.writer_model or settings.generation_model
+    try:
+        writer_profile(writer_model)
+    except GenerationError:
+        raise HTTPException(422, "writer_model_unavailable") from None
+    # Resolve the defaults first so an omitted and an explicit default share one fingerprint.
     return {
         **payload.model_dump(mode="json", exclude={"request_key"}),
         "review_model": review_model,
+        "writer_model": writer_model,
     }
 
 
@@ -218,7 +233,9 @@ def generate_locked(payload: GenerateInput):
     settings = get_settings()
     inputs = request_inputs(payload)
     review_model = inputs["review_model"]
-    # The model choice is an operational setting, never writer or reviewer instructions.
+    writer_model = inputs["writer_model"]
+    profile = writer_profile(writer_model)
+    # The model choices are operational settings, never writer or reviewer instructions.
     preferences = payload.writer_preferences()
     fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
     with SessionLocal.begin() as session:
@@ -338,7 +355,16 @@ def generate_locked(payload: GenerateInput):
         prompt_tokens = generation_tokens(SYSTEM) + generation_tokens(user) + 32
         if prompt_tokens > settings.generation_prompt_budget:
             raise GenerationError("generation_prompt_limit")
-        raw, metadata = chat_completion(SYSTEM, user, prompt_tokens, budget_usd=stage_budget)
+        # The budget above counts o200k tokens so every writer gets the same sources; cost
+        # and context length use the writer's own (measured) token count.
+        raw, metadata = chat_completion(
+            SYSTEM,
+            user,
+            provider_tokens(prompt_tokens, profile),
+            budget_usd=stage_budget,
+            output_tokens=writer_output_tokens(profile),
+            model_id=writer_model,
+        )
         try:
             completion = Completion.model_validate_json(raw)
         except ValidationError:
@@ -395,6 +421,7 @@ def generate_locked(payload: GenerateInput):
                 "embedding_profile": profile_key(),
                 "preferences": inputs,
                 "prompt_tokens_estimate": prompt_tokens,
+                "writer_token_ratio": str(profile.token_ratio),
             },
         }
         with SessionLocal.begin() as session:
@@ -438,6 +465,12 @@ def generate_locked(payload: GenerateInput):
 def review_models():
     # Declared before /{run_id}, which would otherwise capture this path.
     return review_model_options()
+
+
+@router.get("/writer-models")
+def writer_models():
+    # Declared before /{run_id}, which would otherwise capture this path.
+    return writer_model_options()
 
 
 @router.get("/{run_id}")

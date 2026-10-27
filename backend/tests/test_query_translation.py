@@ -138,3 +138,26 @@ def test_completed_reservation_cannot_exceed_stage_allocation_or_configured_atte
     ):
         with pytest.raises(GenerationError, match="generation_spending_limit"):
             translate_query("garden", budget_usd=0.001)
+
+
+def test_translation_scales_its_token_count_by_the_default_writer_ratio():
+    from decimal import Decimal
+
+    from app.writer_models import WRITER_PROFILES, WriterProfile, provider_tokens
+
+    settings = get_settings()
+    metadata = {"usage": {"cost_usd": 0.00001}, "estimated_max_usd": 0.0001, "attempts": 1}
+    unit = WriterProfile(token_ratio=Decimal("1"), typical_tokens=(1, 1))
+    heavy = WriterProfile(token_ratio=Decimal("1.8"), typical_tokens=(1, 1))
+    counts = []
+    for profile in (unit, heavy):
+        with (
+            patch.dict(WRITER_PROFILES, {settings.generation_model: profile}),
+            patch(
+                "app.query_translation.chat_completion",
+                return_value=('{"query":"גינה"}', metadata),
+            ) as provider,
+        ):
+            translate_query("garden rosemary", budget_usd=0.001)
+        counts.append(provider.call_args.args[2])
+    assert counts[1] == provider_tokens(counts[0], heavy) > counts[0]

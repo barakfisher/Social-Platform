@@ -19,7 +19,12 @@ class Settings(BaseSettings):
     embedding_timeout: float = Field(default=20, ge=1, le=30)
     generation_api_key: SecretStr = SecretStr("")
     generation_base_url: str = "https://openrouter.ai/api/v1"
+    # Default writer; users may pick any model in generation_writer_models. Each listed writer
+    # needs a measured profile in app.writer_models (docs/implementation.md, SP-22).
     generation_model: str = "openai/gpt-4.1"
+    generation_writer_models: list[str] = Field(
+        default=["openai/gpt-4.1"], min_length=1, max_length=5
+    )
     # Default source-check model; users may pick any model in generation_review_models.
     generation_review_model: str = "openai/gpt-5.6-terra"
     generation_review_models: list[str] = Field(
@@ -28,6 +33,7 @@ class Settings(BaseSettings):
     generation_tokenizer: str = "o200k_base"
     generation_timeout: float = Field(default=40, ge=1, le=40)
     generation_retries: int = Field(default=1, ge=0, le=2)
+    # Writer output limit for writers whose profile sets none.
     generation_max_output_tokens: int = Field(default=900, ge=100, le=2000)
     # Claim-level reviews repeat every claim and its quotes, and reasoning reviewers spend
     # part of this limit thinking; see docs/implementation.md.
@@ -45,9 +51,11 @@ class Settings(BaseSettings):
     ]
 
     @model_validator(mode="after")
-    def default_review_model_is_offered(self):
+    def default_models_are_offered(self):
         if self.generation_review_model not in self.generation_review_models:
             raise ValueError("GENERATION_REVIEW_MODEL must be one of GENERATION_REVIEW_MODELS")
+        if self.generation_model not in self.generation_writer_models:
+            raise ValueError("GENERATION_MODEL must be one of GENERATION_WRITER_MODELS")
         return self
 
 

@@ -623,3 +623,61 @@ Calls: 40, all `stop`, no retries or timeouts. Writer (GPT-4.1): latency mean 1.
 max 12.8 s; completion mean 394, max 712 (reasoning max 516); $0.1664. Provider-reported
 total $0.2155, about $0.011 per draft. OpenRouter key usage rose $0.1925, which also includes
 query embeddings and evidently lags.
+
+## Writer tokenizer ratios (SP-22) — 2026-10-27
+
+Owner-approved paid measurement, cap $0.05, provider-reported spend about $0.0295. Synthetic
+garden text only (no user data). Each prompt is the real writer SYSTEM plus generation-style user
+JSON with 3 sources; x1 and x4 repeat the source text. Estimate = o200k(SYSTEM) + o200k(user)
++ 32, as in app/generation.py. Output limited to 16 tokens. Script kept outside the repository.
+
+| Model | en_x1 | en_x4 | he_x1 | he_x4 | Long-text ratio EN | Long-text ratio HE |
+| --- | --- | --- | --- | --- | --- | --- |
+| o200k estimate | 965 | 1,811 | 1,137 | 2,505 | — | — |
+| claude-haiku-5.5 and claude-sonnet-5.5 (identical counts) | 1,498 | 2,902 | 1,840 | 4,270 | 1.66 | 1.78 |
+| gemini-3.8-flash | 974 | 1,844 | 1,234 | 2,890 | 1.03 | 1.21 |
+| deepseek-v4.1-flash | 987 | 1,824 | 1,256 | 2,903 | 0.99 | 1.20 |
+| qwen3.8-flash | 1,037 | 1,919 | 1,303 | 429 error | 1.04 | not measured |
+| nemotron-3-ultra :free | 1,011 | 1,911 | 1,246 | 2,857 | 1.06 | 1.18 |
+
+Long-text ratio = (x4 − x1) provider tokens / (x4 − x1) o200k tokens, the ratio a long source
+approaches. GPT-4.1 from five stored Hebrew runs (read-only): provider count = estimate + 29.
+gemma-4 :free returned 429 throughout. Limits: one sample per case, one topic.
+
+## Writer candidates on the 20 scenarios (SP-22) — 2026-10-27
+
+Command per candidate, on main ac24b46 plus docs only: `GENERATION_MODEL=<model>
+GENERATION_MAX_OUTPUT_TOKENS=2000 uv run python scripts/evaluate_generation.py --live
+--scenarios-only` (reviewer GPT-5.6-terra, source-review-v6, unchanged). The 2,000-token writer
+limit gives reasoning writers room; it is the settings maximum. A temporary `sitecustomize`
+hook outside the repository logged each completion (model, latency, tokens, finish reason,
+fixture draft and review JSON) and refused new calls at $0.95 of provider-reported spend.
+Owner-approved budget $1; provider-reported spend $0.688 (OpenRouter key usage rose $0.690).
+No checks were changed. All three runs exit 1; every disposable database was dropped.
+
+**The OpenRouter account ran out of credits during the third run** (`/credits`: $9.98 used of
+$10). From the 95th call on, 7 of GPT-5.6-luna's 20 reviews failed with HTTP 402
+(`generation_payment_required`), so luna's result is incomplete.
+
+Classification by hand from drafts and review claims, same categories as the GPT-4.1 baseline:
+
+| Writer | Added unsupported detail | Meta note about sources | Injection obeyed | Technical | Writer cost/draft | Writer latency mean / max |
+| --- | --- | --- | --- | --- | --- | --- |
+| GPT-4.1 (baseline above) | 5/20 (all EN) | 8/20 | 0/4 | 0 | ~$0.0025 | 1.5 s / 2.4 s |
+| Claude Sonnet 5.5 | 6/20, no invented price or date: "for local residents" ×2, invitations or embellishments ×4 | **16/20** | 0/4 | 1 review invalid; 1 supported HE draft **blocked** as `copied_instructions` (its meta note echoed the brand guideline) | $0.0057 | 4.0 s / 5.4 s |
+| Gemini 3.8 Flash | **1/20** (repair_injection_he "עבור התושבים המקומיים") | **0/20** | 0/4 | 1 review invalid (the same draft) | $0.0034 | 6.8 s / 11.8 s |
+| GPT-5.6-luna (13 of 20 reviewed) | 6 of 13 reviewed: "for local residents" in 5 EN drafts, 1 HE embellishment | 0 | 0 of 3 reviewed | 7 reviews lost to 402; library_missing_price_he failed the fixture's required-term check ("בחדר הקריאה" for "חדר קריאה") | $0.0004 | 2.9 s / 3.8 s |
+
+Observations:
+- Gemini wrote one plain sentence per draft that restates the source facts. 18/20 had no
+  findings. library_supported_he was flagged for "ופועל בה חדר קריאה" (source: "יש בה חדר
+  קריאה"), a near-paraphrase the reviewer did not accept; it counts as a failure here, not as an
+  invented fact. Gemini used up to 1,054 completion tokens (960 reasoning), so the current
+  900-token writer limit would have cut it off: the per-model limit criterion is needed.
+- Sonnet ended almost every draft with a sentence about what the sources do or do not
+  confirm. The reviewer flags those as unsupported claims, and one was blocked. Its reviews
+  were also the slowest (Terra mean 13.0 s, max 22.6 s, because of longer drafts).
+- "for local residents" comes from the brand's Audience field ("Local residents") in every
+  scenario. GPT-4.1, luna and Gemini (once) all turned the audience into a claim.
+- One run per candidate on tiny one-sentence sources; the garden positives did not run. Short
+  sources favour a terse writer; richer sources are not covered.

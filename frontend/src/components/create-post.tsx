@@ -98,9 +98,12 @@ const copy = {
     chars: "characters",
     defaults:
       "Defaults: brand voice, automatic hook, medium length, no call to action.",
+    writerModel: "Writing model",
     reviewModel: "Source check model",
     reviewHint:
-      "Estimated cost of the source check per draft: typical, and the most the server will reserve. Writing and search are billed separately.",
+      "Estimated cost per draft: typical, and the most the server will reserve.",
+    total: "Estimated total per draft (writing + source check)",
+    totalHint: "Search for relevant sources is billed separately.",
     perDraft: "per draft",
     upTo: "up to",
     recommended: "recommended",
@@ -109,8 +112,14 @@ const copy = {
     loadingModels: "Loading models…",
     modelsUnavailable:
       "Model options couldn’t be loaded. The default source check will be used.",
+    writerModelsUnavailable:
+      "Writing model options couldn’t be loaded. The default writer will be used.",
     reviewModelUnavailable:
       "The selected source check model is no longer available. Choose another and try again.",
+    writerModelUnavailable:
+      "The selected writing model is no longer available. Choose another and try again.",
+    writerTruncated:
+      "The writing model ran out of room before finishing the draft. Your inputs are preserved; try again or choose another writing model.",
     notes: {
       "openai/gpt-5.6-terra": "stricter",
       "openai/gpt-4.1": "cheaper, less strict",
@@ -200,9 +209,12 @@ const copy = {
     chars: "תווים",
     defaults:
       "ברירת המחדל: קול המותג, פתיחה אוטומטית, אורך בינוני, ללא הנעה לפעולה.",
+    writerModel: "מודל לכתיבה",
     reviewModel: "מודל לבדיקת המקורות",
     reviewHint:
-      "עלות משוערת של בדיקת המקורות לכל טיוטה: עלות טיפוסית, והסכום המרבי שהשרת ישריין. הכתיבה והחיפוש מחויבים בנפרד.",
+      "עלות משוערת לכל טיוטה: עלות טיפוסית, והסכום המרבי שהשרת ישריין.",
+    total: "עלות כוללת משוערת לטיוטה (כתיבה ובדיקת מקורות)",
+    totalHint: "החיפוש במקורות הרלוונטיים מחויב בנפרד.",
     perDraft: "לטיוטה",
     upTo: "עד",
     recommended: "מומלץ",
@@ -211,8 +223,14 @@ const copy = {
     loadingModels: "טוען מודלים…",
     modelsUnavailable:
       "לא הצלחנו לטעון את אפשרויות המודל. תתבצע בדיקת המקורות המוגדרת כברירת מחדל.",
+    writerModelsUnavailable:
+      "לא הצלחנו לטעון את אפשרויות מודל הכתיבה. ייעשה שימוש במודל הכתיבה המוגדר כברירת מחדל.",
     reviewModelUnavailable:
       "המודל שנבחר לבדיקת המקורות כבר לא זמין. יש לבחור מודל אחר ולנסות שוב.",
+    writerModelUnavailable:
+      "מודל הכתיבה שנבחר כבר לא זמין. יש לבחור מודל אחר ולנסות שוב.",
+    writerTruncated:
+      "למודל הכתיבה לא נשאר מקום לסיים את הטיוטה. הפרטים שהזנת נשמרו; אפשר לנסות שוב או לבחור מודל כתיבה אחר.",
     notes: {
       "openai/gpt-5.6-terra": "בדיקה מחמירה",
       "openai/gpt-4.1": "זול יותר, פחות מחמיר",
@@ -224,25 +242,35 @@ type Capability = {
   brand_ready: boolean;
   ready_documents: number;
 };
-type ReviewModelOption = {
+type ModelOption = {
   id: string;
   available: boolean;
   typical_usd: number | null;
   max_usd: number | null;
 };
-type ReviewModels = { default: string; models: ReviewModelOption[] };
+// Writer and source-check options share one shape: the server owns allowlists and prices.
+type ModelOptions = { default: string; models: ModelOption[] };
 // Display names only; the server owns the allowlist and the prices.
 const modelNames: Record<string, string> = {
   "openai/gpt-5.6-terra": "GPT-5.6 Terra",
   "openai/gpt-4.1": "GPT-4.1",
 };
-function isReviewModels(data: unknown): data is ReviewModels {
-  const value = data as ReviewModels | null;
+function isModelOptions(data: unknown): data is ModelOptions {
+  const value = data as ModelOptions | null;
   return (
     typeof value?.default === "string" &&
     Array.isArray(value.models) &&
+    value.models.length > 0 &&
     value.models.every((m) => typeof m?.id === "string")
   );
+}
+function loadModelOptions(
+  path: string,
+  set: (value: ModelOptions | "error") => void,
+) {
+  apiRequest<unknown>(path)
+    .then((data) => set(isModelOptions(data) ? data : "error"))
+    .catch(() => set("error"));
 }
 export function CreatePost({ locale }: { locale: Locale }) {
   const t = copy[locale];
@@ -259,11 +287,15 @@ export function CreatePost({ locale }: { locale: Locale }) {
     cta: "none",
     cta_other: "",
     offer_details: "",
-    // Empty means the server's default source-check model.
+    // Empty means the server's default model.
+    writer_model: "",
     review_model: "",
   });
+  const [writerModels, setWriterModels] = useState<
+    ModelOptions | "error" | null
+  >(null);
   const [reviewModels, setReviewModels] = useState<
-    ReviewModels | "error" | null
+    ModelOptions | "error" | null
   >(null);
   const [generated, setGenerated] = useState<GeneratedPost | null>(null);
   const [content, setContent] = useState("");
@@ -280,36 +312,53 @@ export function CreatePost({ locale }: { locale: Locale }) {
     apiRequest<Capability>("/api/generation/configuration")
       .then(setCapability)
       .catch(() => setError("api_unavailable"));
-    apiRequest<unknown>("/api/generation/review-models")
-      .then((data) => setReviewModels(isReviewModels(data) ? data : "error"))
-      .catch(() => setReviewModels("error"));
+    loadModelOptions("/api/generation/writer-models", setWriterModels);
+    loadModelOptions("/api/generation/review-models", setReviewModels);
   }, []);
   const money = new Intl.NumberFormat(locale === "he" ? "he-IL" : "en-US", {
     style: "currency",
     currency: "USD",
     maximumSignificantDigits: 2,
   });
-  function modelCost(option: ReviewModelOption) {
+  function modelCost(option: ModelOption) {
     return !option.available
       ? t.unavailable
       : option.typical_usd !== null && option.max_usd !== null
         ? `~${money.format(option.typical_usd)} ${t.perDraft} · ${t.upTo} ${money.format(option.max_usd)}`
         : t.costUnavailable;
   }
-  function modelLabel(option: ReviewModelOption, defaultId: string) {
-    const notes = [
+  // Notes describe a model as a source checker, so writer options pass none.
+  function modelLabel(
+    option: ModelOption,
+    defaultId: string,
+    notes: Record<string, string> = {},
+  ) {
+    const labels = [
       option.id === defaultId ? t.recommended : null,
-      t.notes[option.id] ?? null,
+      notes[option.id] ?? null,
     ].filter(Boolean);
-    return `${modelNames[option.id] ?? option.id}${notes.length ? ` (${notes.join(", ")})` : ""} — ${modelCost(option)}`;
+    return `${modelNames[option.id] ?? option.id}${labels.length ? ` (${labels.join(", ")})` : ""} — ${modelCost(option)}`;
+  }
+  function chosen(options: ModelOptions | "error" | null, id: string) {
+    return options && options !== "error"
+      ? options.models.find((option) => option.id === (id || options.default))
+      : undefined;
   }
   // A closed select truncates long options on phones, so the chosen cost is repeated below.
-  const selectedModel =
-    reviewModels && reviewModels !== "error"
-      ? reviewModels.models.find(
-          (option) => option.id === (form.review_model || reviewModels.default),
-        )
-      : undefined;
+  const selectedWriter = chosen(writerModels, form.writer_model);
+  const selectedModel = chosen(reviewModels, form.review_model);
+  // Hidden while either list loads; unknown when either list or price is unavailable.
+  const totalCost =
+    writerModels === null || reviewModels === null
+      ? null
+      : selectedWriter?.available &&
+          selectedModel?.available &&
+          selectedWriter.typical_usd !== null &&
+          selectedWriter.max_usd !== null &&
+          selectedModel.typical_usd !== null &&
+          selectedModel.max_usd !== null
+        ? `~${money.format(selectedWriter.typical_usd + selectedModel.typical_usd)} ${t.perDraft} · ${t.upTo} ${money.format(selectedWriter.max_usd + selectedModel.max_usd)}`
+        : t.costUnavailable;
   async function generate(event: React.FormEvent) {
     event.preventDefault();
     setBusy("generate");
@@ -410,7 +459,12 @@ export function CreatePost({ locale }: { locale: Locale }) {
       }
     } catch (error) {
       const code = error instanceof Error ? error.message : "api_unavailable";
-      setError(code);
+      // Only the source check runs here, so a missing model is the reviewer, not the writer.
+      setError(
+        code === "generation_model_unavailable"
+          ? "review_model_unavailable"
+          : code,
+      );
       // The server withdrew a blocked generation; stop showing it too.
       if (code === "draft_blocked" && !saved) {
         setGenerated(null);
@@ -445,7 +499,14 @@ export function CreatePost({ locale }: { locale: Locale }) {
                   ? t.spendingLimit
                   : error === "review_model_unavailable"
                     ? t.reviewModelUnavailable
-                    : t.error;
+                    : [
+                          "writer_model_unavailable",
+                          "generation_model_unavailable",
+                        ].includes(error ?? "")
+                      ? t.writerModelUnavailable
+                      : error === "generation_output_truncated"
+                        ? t.writerTruncated
+                        : t.error;
   return (
     <section aria-labelledby="create-title" className="mt-10 space-y-6">
       <div className="rounded-2xl border border-border bg-card p-6 sm:p-9">
@@ -691,6 +752,54 @@ export function CreatePost({ locale }: { locale: Locale }) {
                 <div className="sm:col-span-2">
                   <label
                     htmlFor={
+                      writerModels === "error" ? undefined : "post-writer-model"
+                    }
+                    className="mb-2 block text-sm"
+                  >
+                    {t.writerModel}
+                  </label>
+                  {writerModels === "error" ? (
+                    <p role="status" className="text-xs text-muted-foreground">
+                      {t.writerModelsUnavailable}
+                    </p>
+                  ) : (
+                    <select
+                      id="post-writer-model"
+                      className={inputClass}
+                      disabled={writerModels === null}
+                      value={form.writer_model || writerModels?.default || ""}
+                      onChange={(e) =>
+                        setForm({ ...form, writer_model: e.target.value })
+                      }
+                    >
+                      {writerModels === null ? (
+                        <option value="">{t.loadingModels}</option>
+                      ) : (
+                        writerModels.models.map((option) => (
+                          <option
+                            key={option.id}
+                            value={option.id}
+                            disabled={!option.available}
+                          >
+                            {modelLabel(option, writerModels.default)}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  )}
+                  {selectedWriter && (
+                    <p
+                      data-testid="writer-model-cost"
+                      aria-live="polite"
+                      className="mt-2 text-sm"
+                    >
+                      {modelCost(selectedWriter)}
+                    </p>
+                  )}
+                </div>
+                <div className="sm:col-span-2">
+                  <label
+                    htmlFor={
                       reviewModels === "error" ? undefined : "post-review-model"
                     }
                     className="mb-2 block text-sm"
@@ -721,7 +830,7 @@ export function CreatePost({ locale }: { locale: Locale }) {
                             value={option.id}
                             disabled={!option.available}
                           >
-                            {modelLabel(option, reviewModels.default)}
+                            {modelLabel(option, reviewModels.default, t.notes)}
                           </option>
                         ))
                       )}
@@ -743,6 +852,21 @@ export function CreatePost({ locale }: { locale: Locale }) {
                     {t.reviewHint}
                   </p>
                 </div>
+                {totalCost !== null && (
+                  <div className="sm:col-span-2 rounded-lg bg-muted p-3">
+                    <p className="text-sm">{t.total}</p>
+                    <p
+                      data-testid="total-draft-cost"
+                      aria-live="polite"
+                      className="mt-1 text-sm font-medium"
+                    >
+                      {totalCost}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t.totalHint}
+                    </p>
+                  </div>
+                )}
               </div>
             </details>
           </fieldset>

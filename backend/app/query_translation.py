@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.config import get_settings
 from app.generation_provider import GenerationError, chat_completion
 from app.grounding import prompt_tokens
+from app.writer_models import provider_tokens, writer_profile
 
 TRANSLATION_VERSION = "retrieval-translation-v1"
 TRANSLATION_SYSTEM = """
@@ -51,10 +52,11 @@ def translate_query(
     )
     if tokens > settings.generation_prompt_budget:
         raise GenerationError("generation_prompt_limit")
+    # The default writer translates; its own tokenizer sets cost and context length.
     raw, metadata = chat_completion(
         TRANSLATION_SYSTEM,
         user,
-        tokens,
+        provider_tokens(tokens, writer_profile(settings.generation_model)),
         schema=schema,
         budget_usd=budget_usd,
         output_tokens=min(450, settings.generation_max_output_tokens),
