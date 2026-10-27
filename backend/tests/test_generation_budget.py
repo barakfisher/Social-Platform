@@ -6,9 +6,10 @@ import pytest
 from app.config import Settings
 from app.generation import TRANSLATION_BUDGET_SHARE
 from app.generation_provider import attempt_estimate_usd
+from app.writer_models import WRITER_PROFILES, provider_tokens
 
-# OpenRouter catalog pricing (USD per token) for the default writer and every reviewer
-# model users may choose. Update alongside the defaults or GENERATION_REVIEW_MODELS.
+# OpenRouter catalog pricing (USD per token) for every writer and reviewer model users may
+# choose. Update alongside GENERATION_WRITER_MODELS or GENERATION_REVIEW_MODELS.
 DEFAULT_MODEL_PRICING = {
     "openai/gpt-4.1": {
         "prompt_price": Decimal("0.000002"),
@@ -35,23 +36,32 @@ def smallest_stage_budget(settings: Settings) -> Decimal:
     return cap * (1 - Decimal(str(TRANSLATION_BUDGET_SHARE))) / 2
 
 
-def stage_models(settings: Settings) -> list[tuple[str, int]]:
-    return [(settings.generation_model, settings.generation_max_output_tokens)] + [
-        (model, settings.generation_review_max_output_tokens)
+def stage_models(settings: Settings) -> list[tuple[str, int, int]]:
+    """(model, worst-case provider prompt tokens, output limit) for every choosable stage."""
+    writers = [
+        (
+            model,
+            provider_tokens(settings.generation_prompt_budget, WRITER_PROFILES[model]),
+            WRITER_PROFILES[model].output_tokens or settings.generation_max_output_tokens,
+        )
+        for model in settings.generation_writer_models
+    ]
+    return writers + [
+        (model, settings.generation_prompt_budget, settings.generation_review_max_output_tokens)
         for model in settings.generation_review_models
     ]
 
 
 def test_default_budget_affords_largest_allowed_prompt(defaults):
     # Any prompt that passes the prompt-budget guard must also pass the spending preflight,
-    # even after the translation fallback reserves its share, for the writer and for every
-    # reviewer a user may choose. Otherwise a full source context fails with
-    # generation_spending_limit.
-    for model_id, output_limit in stage_models(defaults):
+    # even after the translation fallback reserves its share, for every writer (at its own
+    # token ratio and output limit) and every reviewer a user may choose. Otherwise a full
+    # source context fails with generation_spending_limit.
+    for model_id, prompt_tokens, output_limit in stage_models(defaults):
         model = DEFAULT_MODEL_PRICING[model_id]
-        worst_case = attempt_estimate_usd(
-            defaults.generation_prompt_budget, output_limit, model
-        ) * (defaults.generation_retries + 1)
+        worst_case = attempt_estimate_usd(prompt_tokens, output_limit, model) * (
+            defaults.generation_retries + 1
+        )
         assert worst_case <= smallest_stage_budget(defaults), model_id
 
 
