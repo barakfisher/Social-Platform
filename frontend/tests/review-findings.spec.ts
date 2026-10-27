@@ -252,6 +252,19 @@ test("a non-retryable failure explains why without offering a retry", async ({
   await expect(panel.getByRole("button")).toHaveCount(0);
 });
 
+test("a review cut off by the output limit says so and offers another check", async ({
+  page,
+}) => {
+  await mockGeneration(page, unchecked("grounding_review_truncated", true));
+  await page.goto("/he/create");
+  await page.getByLabel("על מה נכתוב?", { exact: true }).fill("מנטורינג");
+  await page.getByRole("button", { name: "יצירת טיוטה", exact: true }).click();
+  const panel = page.getByTestId("review-findings");
+  await expect(panel).toContainText("לבודק נגמר המקום לפני שסיים");
+  await expect(panel).not.toContainText("הגדרות השירות");
+  await expect(panel.getByRole("button", { name: "בדוק שוב" })).toBeVisible();
+});
+
 test("a blocked saved draft keeps its text, shows do-not-publish, and is checkable only after a new save", async ({
   page,
 }) => {

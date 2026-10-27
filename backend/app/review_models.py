@@ -6,8 +6,10 @@ from app.generation_provider import GenerationError, attempt_estimate_usd, model
 # Provider-reported prompt/completion tokens from one realistic Hebrew review (two retrieved
 # chunks, source-review-v4, 2026-10-26); see verification/generation-grounding.md. Typical
 # cost = these tokens x the model's live price. Remeasure when the review prompt changes.
+# GPT-5.6-terra: middle of three end-to-end reviews of a 505-character Hebrew draft with a
+# 4,000-token limit (1,615-2,699 completion tokens, 2026-10-27; docs/implementation.md).
 TYPICAL_REVIEW_TOKENS = {
-    "openai/gpt-5.6-terra": (2523, 907),
+    "openai/gpt-5.6-terra": (1852, 2019),
     "openai/gpt-4.1": (2021, 501),
 }
 

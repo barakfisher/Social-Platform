@@ -5,7 +5,14 @@ import pytest
 
 from app.config import get_settings
 from app.generation_provider import GenerationError
-from app.grounding import REVIEW_VERSION, Claim, claims_cover, review_draft
+from app.grounding import (
+    CONNECTIVES,
+    REVIEW_SYSTEM,
+    REVIEW_VERSION,
+    Claim,
+    claims_cover,
+    review_draft,
+)
 
 
 @pytest.mark.parametrize(
@@ -61,7 +68,7 @@ def test_nonadjacent_facts_require_separate_exact_excerpts(
             result = review_draft(
                 draft, [{"chunk_id": "source", "content": source}], {}, {"language": language}
             )
-            assert result["version"] == REVIEW_VERSION == "source-review-v5"
+            assert result["version"] == REVIEW_VERSION == "source-review-v6"
             # Stored provenance maps the reviewer's alias back to the real chunk ID.
             evidence = result["sentences"][0]["claims"][0]["evidence"]
             assert evidence == [{"chunk_id": "source", "quote": quote} for quote in quotes]
@@ -214,6 +221,24 @@ def claims(*texts: str) -> list[Claim]:
         ("We grow rosemary, sage.", ["We grow rosemary", "sage"]),
         ("אנחנו מגדלים רוזמרין ומרווה.", ["אנחנו מגדלים רוזמרין", "מרווה"]),
         ("אנחנו מגדלים רוזמרין וגם מרווה.", ["אנחנו מגדלים רוזמרין", "מרווה"]),
+        # A live GPT-5.6-terra review left the opening discourse word outside the claim.
+        (
+            "כך, מנטורינג יוצר מכנה משותף שמאפשר צמיחה והתפתחות בכל תחום בו הוא מיושם.",
+            ["מנטורינג יוצר מכנה משותף שמאפשר צמיחה והתפתחות בכל תחום בו הוא מיושם"],
+        ),
+        ("לכן, אנחנו מגדלים רוזמרין.", ["אנחנו מגדלים רוזמרין"]),
+        ("Therefore, we grow rosemary.", ["we grow rosemary"]),
+        # Relative and listing words a live GPT-5.6-terra review left outside its claims.
+        (
+            "מנטורינג הוא תהליך בו אדם מנוסה משמש כיועץ.",
+            ["מנטורינג הוא תהליך", "אדם מנוסה משמש כיועץ"],
+        ),
+        (
+            "קיימים מודלים שונים, כולל מודל קבוצתי.",
+            ["קיימים מודלים שונים", "מודל קבוצתי"],
+        ),
+        ("זה התחום שבו אנחנו עובדים.", ["זה התחום", "אנחנו עובדים"]),
+        ("המנטור אשר ליווה אותנו.", ["המנטור", "ליווה אותנו"]),
     ],
 )
 def test_connectives_and_punctuation_may_stay_outside_claims(sentence: str, texts: list[str]):
@@ -225,6 +250,8 @@ def test_connectives_and_punctuation_may_stay_outside_claims(sentence: str, text
     [
         ("Today we grow rosemary.", ["we grow rosemary"]),
         ("כיום אנחנו מגדלים רוזמרין.", ["אנחנו מגדלים רוזמרין"]),
+        ("לא אנחנו מגדלים רוזמרין.", ["אנחנו מגדלים רוזמרין"]),
+        ("ביוון, שם מנטור היה חונך.", ["ביוון", "מנטור היה חונך"]),
         ("We grow rosemary since 1762.", ["We grow rosemary since"]),
         ("We grow rosemary and sage.", ["sage", "We grow rosemary"]),
         ("We grow rosemary.", ["We grow rosemary", "rosemary"]),
@@ -234,6 +261,8 @@ def test_connectives_and_punctuation_may_stay_outside_claims(sentence: str, text
     ids=[
         "en-qualifier",
         "he-qualifier",
+        "he-negation",
+        "he-place",
         "number",
         "out-of-order",
         "overlap",
@@ -323,3 +352,45 @@ def test_reviewer_requests_its_own_output_limit() -> None:
         )
     limit = get_settings().generation_review_max_output_tokens
     assert complete.call_args.kwargs["output_tokens"] == limit
+
+
+def test_review_cut_off_by_the_output_limit_has_its_own_code() -> None:
+    truncated = GenerationError("generation_output_truncated", {"output_tokens": 4000})
+    with patch("app.grounding.chat_completion", side_effect=truncated):
+        with pytest.raises(GenerationError, match="^grounding_review_truncated$") as raised:
+            review_draft(
+                "We grow rosemary.",
+                [{"chunk_id": "source", "content": "We grow rosemary."}],
+                {},
+                {"language": "en"},
+            )
+    assert raised.value.metadata == {"output_tokens": 4000}
+
+
+def test_reviewer_prompt_lists_exactly_the_words_coverage_accepts() -> None:
+    # The model and the coverage check must agree on which words may stay outside claims.
+    listed = REVIEW_SYSTEM.split("the words in this list:\n", 1)[1].split("\n", 1)[0]
+    assert set(listed.split()) == CONNECTIVES
+
+
+def test_quote_carrying_one_hebrew_prefix_verifies_and_stores_source_text() -> None:
+    # Live GPT-5.6-terra quoted the draft's "שנהג" for the source's "נהג" (2026-10-27).
+    claim = "שנהג לאכול בשר בין פרוסות לחם"
+    result = review("he", claim + ".", [sourced(claim, claim)])
+    assert result["status"] == "checked" and result["findings"] == []
+    evidence = result["sentences"][0]["claims"][0]["evidence"]
+    assert evidence == [{"chunk_id": "source", "quote": "נהג לאכול בשר בין פרוסות לחם"}]
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "ושנהג לאכול בשר",  # two prefix letters
+        "תנהג לאכול בשר",  # not a prefix letter
+        "ש נהג לאכול בשר",  # prefix detached from the word
+    ],
+)
+def test_prefix_tolerance_is_one_attached_hebrew_prefix_only(quote: str) -> None:
+    claim = "נהג לאכול בשר"
+    with pytest.raises(GenerationError, match="^grounding_review_invalid$"):
+        review("he", claim + ".", [sourced(claim, quote)])

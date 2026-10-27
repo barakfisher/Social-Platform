@@ -151,6 +151,13 @@ def chat_completion(
         try:
             data = response.json()
             choice = data["choices"][0]
+            # The output limit ran out (reasoning tokens count against it): its own code, so
+            # the cause is visible instead of a generic invalid response.
+            if choice.get("finish_reason") == "length":
+                raise GenerationError(
+                    "generation_output_truncated",
+                    {"attempts": attempt + 1, "output_tokens": output_tokens},
+                )
             if choice.get("finish_reason") != "stop":
                 raise ValueError()
             content = choice["message"]["content"]

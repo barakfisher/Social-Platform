@@ -370,3 +370,88 @@ withheld drafts. Every outcome is now one of: clean, flagged (findings) or block
 Rejected: counting any finding as a pass for missing facts (a brand-style note would hide an
 invented price); counting a flagged obeyed injection as a pass (it would accept the case the
 block exists for).
+
+## Decision: room for reasoning reviewers, and a code for cut-off reviews — 2026-10-27
+
+Problem: the first end-to-end generation with the default reviewer GPT-5.6-terra (Hebrew
+LinkedIn post, 505 characters, 4 sentences, offer details) showed every draft as unchecked.
+Measured with one-off paid calls (total $0.086 for the three diagnosis calls below plus one
+earlier call; no code changed):
+- At 1,600 output tokens Terra spent all 1,600 on reasoning, returned no content and stopped
+  with `finish_reason: "length"`. The provider check reported this as the generic
+  `generation_invalid_response`, and the UI showed "check the service settings".
+- At 4,000 tokens the same draft took 1,615–2,699 completion tokens (1,552 reasoning in one
+  run) and finished normally, in up to 32.8 s, above the 30 s GENERATION_TIMEOUT.
+- With room to finish, the server still rejected all three reviews as
+  `grounding_review_invalid`: Terra left the opening "כך," outside the last sentence's claim,
+  and "כך" was not on the connective list, so coverage failed. Evidence quotes were exact.
+- `outside_context_he` at 4,000 tokens: 151 tokens, 3.0 s, correctly flagged.
+
+Choice (owner-approved):
+- GENERATION_REVIEW_MAX_OUTPUT_TOKENS rises from 1,600 to 4,000 (the settings maximum).
+- GENERATION_MAX_REQUEST_USD rises from $0.16 to $0.31, superseding the $0.16 entry above.
+  Terra's worst-case review (6,000-token prompt, 4,000 output tokens, one retry) reserves
+  about $0.1205 against a $0.124 share. Typical actual review cost stays about $0.02–0.03.
+- Terra's typical cost in Create Post is remeasured from the middle of those three reviews
+  (1,852 prompt / 2,019 completion tokens): about $0.028 instead of $0.016, which assumed
+  907 completion tokens.
+- GENERATION_TIMEOUT rises from 30 to 40 seconds (the settings maximum). The Next.js
+  generation proxy already allows 280 seconds.
+- `finish_reason: "length"` raises `generation_output_truncated`; the reviewer reports it as
+  `grounding_review_truncated`, retryable, with its own EN/HE message. The UI also explains a
+  reviewer's `generation_invalid_response` instead of pointing at service settings.
+- The connective list gains discourse words that cannot state a fact on their own: EN
+  therefore, thus, however, moreover, furthermore, additionally; HE כך, וכך, לכן, ולכן,
+  בנוסף, ובנוסף, אולם, אך, כלומר, למשל, ובכן.
+
+Live check after these changes: generation and review completed with no cut-off (3,281
+completion tokens), but the review was still rejected on coverage. A diagnostic rerun
+($0.030) showed Terra leaving בו, שם and כולל outside claims; every evidence quote was exact.
+The reviewer prompt only said "except connecting words", and Terra's idea of a connecting
+word was wider than the server's list.
+
+Follow-up choice (owner-approved), source-review-v6:
+- The reviewer prompt lists the accepted words verbatim, generated from `CONNECTIVES`, and
+  says every other word, including short ones such as "there", "שם" and "לא", belongs inside
+  a claim. A test keeps the prompt list and the coverage list identical.
+- The list gains the relative and listing words בו, שבו, כולל and אשר. שם stays excluded
+  because it is also a place word; a test covers it. Negation, time, place and quantity
+  words stay excluded (tests cover כיום, לא and שם).
+- REVIEW_VERSION becomes `source-review-v6`. As with earlier bumps, stored v5 reviews ask for
+  a new check (`generation_review_required`) on retry, GET and save.
+
+Second follow-up (owner-approved), after the v6 live evaluation stopped on
+`outside_context_he` (verification/generation-grounding.md): Terra quoted the draft's
+"שנהג לאכול…" as evidence for a source that says "נהג לאכול…", so the exact-quote check
+rejected an otherwise correct review.
+- An evidence quote that is not an exact substring is retried once without a single leading
+  Hebrew prefix letter (ו ה ב ל מ ש כ). The rest must be an exact substring that starts with a
+  Hebrew letter. Two prefixes, a detached letter or any other letter still fail.
+- Stored provenance keeps the source text that matched, not the model's quote, so every
+  stored excerpt is still verbatim source text.
+- No prompt change, so REVIEW_VERSION stays `source-review-v6`.
+- Rejected: telling the reviewer to copy quotes from the source (a v7 prompt). The model can
+  still slip, and it costs another version bump and evaluation. Rejected: fuzzy or
+  normalized matching. It would accept stitched or reworded quotes, which the exact-quote
+  rule exists to stop.
+
+Rejected alternatives:
+- Lowering Terra's reasoning effort to fit 1,600 tokens: Terra was chosen because it
+  reasons enough to reject an unsourced clause; a cheaper review that misses it defeats the
+  choice. Not measured.
+- Raising only the token limit: all three reviews that finished were still rejected on
+  coverage, so drafts would stay unchecked.
+- Accepting any uncovered word that the reviewer left out: coverage exists so that no
+  factual phrase escapes review; a fixed list keeps that guarantee.
+- Only adding the words Terra left out: the next unlisted word fails the same way, and
+  adding שם would let a place word escape review.
+- Retrying a cut-off review automatically: reasoning length varies (1,615–2,699 tokens on the
+  same draft), but an automatic retry doubles the spend on every cut-off; the user can
+  Check again instead.
+
+Known limits: 4,000 tokens is the settings ceiling and does not cap reasoning, so a long
+draft can still be cut off; it is then shown as `grounding_review_truncated`. A review can
+still approach the 40 s timeout; not measured on 1,200- or 2,400-character drafts. The
+writer path still shows its own truncation as the generic error. The connective list is
+not a full Hebrew grammar; a reviewer that ignores the listed words can still fail coverage
+as `grounding_review_invalid`. The v6 prompt has not yet passed the paid review evaluation.

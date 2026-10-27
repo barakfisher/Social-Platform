@@ -148,6 +148,7 @@ def test_signs_of_steering_block_the_draft(code):
     [
         ("generation_unavailable", True),
         ("grounding_review_invalid", True),
+        ("grounding_review_truncated", True),
         ("generation_model_unavailable", True),
         ("generation_spending_limit", False),
         ("generation_prompt_limit", False),
