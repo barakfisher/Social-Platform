@@ -19,6 +19,10 @@ DEFAULT_MODEL_PRICING = {
         "prompt_price": Decimal("0.000002"),
         "completion_price": Decimal("0.000012"),
     },
+    "google/gemini-3.8-flash": {
+        "prompt_price": Decimal("0.000000825"),
+        "completion_price": Decimal("0.000004125"),
+    },
 }
 
 

@@ -681,3 +681,80 @@ Observations:
   scenario. GPT-4.1, luna and Gemini (once) all turned the audience into a claim.
 - One run per candidate on tiny one-sentence sources; the garden positives did not run. Short
   sources favour a terse writer; richer sources are not covered.
+
+## Writer candidates: confirmation runs (SP-22) — 2026-10-28
+
+Main ff64810 (slice 1). Writer chosen with `GENERATION_MODEL` and `GENERATION_WRITER_MODELS`.
+A temporary `sitecustomize` hook outside the repository added a run-only profile for the
+candidate (ratio 1.25, output limit 2,000), logged every completion and refused new calls at
+$0.59 of provider-reported spend. Owner-approved cap $0.60; provider-reported spend $0.42.
+Reviewer GPT-5.6-terra, source-review-v6, unchanged. Every disposable database was dropped.
+
+The first attempt stopped after 6 calls with HTTP 403: OpenRouter's **workspace lifetime
+budget** ($10, separate from account credits and from the key limit) was used up. The app
+reports that 403 as `generation_authentication_failed` / `embedding_authentication_failed`.
+The owner raised the budget and the runs were repeated.
+
+Classification by hand, same categories as the baseline:
+
+| Writer | Added unsupported detail | Meta note in the post | Injection obeyed | Writer cost/draft | Writer latency mean / max | Completion max |
+| --- | --- | --- | --- | --- | --- | --- |
+| GPT-4.1 (baseline) | 5/20 | 8/20 | 0/4 | ~$0.0025 | 1.5 s / 2.4 s | — |
+| Gemini 3.8 Flash, second run | **0/20** | **0/20** | 0/4 | $0.0035 | 9.0 s / 21.7 s | 1,055 (902 reasoning) |
+| GPT-5.6-luna, all 20 (13 from 2026-10-27 + 7 now) | 7/20 | 1/20 | 0/4 | $0.0004 | ~3 s / 3.8 s | 170 |
+
+- Gemini, both runs together: 1/40 drafts with an added detail. It puts notes about what it
+  omitted in the `warnings` field, which is not published.
+- Gemini: repair_missing_benefit_en failed only the fixture's required-wording check, because
+  it paraphrased "repairs bicycles" as "provides bicycle repairs". The reviewer also raised a
+  `prohibited_claim` issue on that draft, although it supported every claim.
+- Luna's library_injection_he review was invalid; its draft is clean by hand.
+
+**Garden positives (`--writer-only`, Gemini):** English LinkedIn passed. Hebrew Facebook
+was flagged for "בגינה הקהילתית סידר": Gemini named the garden in Hebrew, but only the English
+line of the source names it, and the reviewer did not accept the name across languages. It
+also opened with the greeting "שלום לשכנים" (creative, not flagged). One sample each.
+
+**Reviewer-only cases:** the full evaluation stopped twice before the garden positives,
+both times with `grounding_review_invalid` (platform_en, then irrelevant_source_en_supported).
+Terra's claim text paraphrased the draft ("museum opens Tuesdays" for "opens on Tuesdays"),
+and the claim-coverage check rejected it. No writer is involved in these cases. `--writer-only`
+skips them so a writer evaluation is not stopped by this reviewer failure.
+
+**Garden positives, three more runs (`--writer-only`, Gemini).** A per-run call limit in the
+hook stopped each run after its 4 garden calls; run 2's scenarios failed only because of that
+limit (`generation_failed`). Provider-reported spend so far $0.51.
+
+| Run | English LinkedIn | Hebrew Facebook |
+| --- | --- | --- |
+| 1 (above) | passed | flagged: "סידר" |
+| 2 | passed | flagged: "סידר", "שלנו" ("our") |
+| 3 | passed | **passed**, also with "סידר" |
+| 4 | flagged: "grown on-site" | not run (the run stops at the first failure) |
+
+Gemini garden drafts: 4 of 7 passed. The reviewer accepted the Hebrew garden name in one run
+and flagged it in two, so part of this comes from the reviewer, not the writer. "on-site" is
+a small embellishment. GPT-4.1 garden positives have not been measured under source-review-v6,
+so there is no baseline for this rate.
+
+**GPT-4.1 garden baseline (`--writer-only`, two runs, same limits).** English LinkedIn was
+flagged both times, for the same embellishment: "Our volunteers gather on Thursdays to support
+the garden together" ("support the garden together"). Hebrew did not run, because the run
+stops at the first failure. GPT-4.1: 0 of 2 garden drafts passed; Gemini: 4 of 7. Provider-reported
+spend for the day: $0.53 of the $0.60 cap.
+
+**Listing decision (owner, 2026-10-28):** Gemini 3.8 Flash listed as an optional writer;
+GPT-4.1 stays the default (docs/implementation.md). Gemini's typical tokens were measured with
+two writer calls on a realistic synthetic LinkedIn prompt ($0.011): HE 2,585 prompt / 1,007
+completion (775 reasoning, 23.2 s); EN 1,833 / 938 (808 reasoning, 8.2 s). Provider-reported
+spend for 2026-10-28: $0.54 of the approved $0.60.
+
+Checks for the listing change: backend 444 passed on a disposable migrated database with the
+runtime role, run from a directory without `.env` (database dropped afterwards); ruff, format
+and mypy passed. Frontend lint, tsc, Prettier and Playwright 47/47 passed. Create Post was
+checked against a local API on this branch with live catalog prices: EN and HE, desktop and
+375 px (no horizontal scroll). Writer options: GPT-4.1 (default) ~$0.0069, up to $0.039;
+Gemini 3.8 Flash ~$0.0063, up to $0.029. With Terra, the total is ~$0.034, up to $0.15.
+One catalog fetch timed out on the first request, and Gemini was briefly shown as
+"unavailable" (the designed state); later requests took 0.4 s. No generation was run through
+the UI with Gemini.

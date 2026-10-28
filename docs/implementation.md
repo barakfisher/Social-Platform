@@ -580,3 +580,39 @@ the default writer) now scales its count by that writer's ratio; "Check again" m
 before this change have no `writer_model`, so retrying such an old request key returns 409
 `generation_request_conflict`; a writer removed from the allowlist returns 422 even for a retry
 of a finished run.
+
+### SP-22: Gemini 3.8 Flash listed as an optional writer; GPT-4.1 stays default — 2026-10-28
+
+Owner decision after the confirmation runs (verification/generation-grounding.md, "Writer
+candidates: confirmation runs"). Gemini 3.8 Flash against GPT-4.1:
+
+| Measure | Gemini 3.8 Flash | GPT-4.1 |
+| --- | --- | --- |
+| Added unsupported details | 1/40 | 5/20 |
+| Meta notes in the post | 0/40 | 8/20 |
+| Injections obeyed | 0 | 0 |
+| Garden drafts passed | 4/7 | 0/2 |
+| Writer cost per draft | $0.0035 | ~$0.0025 |
+| Writer latency | 9.0 s mean, 21.7 s max | 1.5 s |
+
+Gemini meets the agreed rule for becoming the default (fewer additions, no injection failure).
+The owner chose to list it as an optional writer and keep GPT-4.1 as the default.
+
+- Profile: ratio 1.25 (measured, see the tokenizer decision); output limit 2,000, because it
+  reasons before writing and used up to 1,055 completion tokens; typical tokens 2,585 / 1,007
+  from one realistic synthetic Hebrew LinkedIn prompt (EN: 1,833 / 938). GPT-4.1's typical
+  tokens come from a stored real run instead; remeasure both if the writer prompt changes.
+- Worst case at the settings maximum (6,000 o200k prompt tokens × 1.25, 2,000 output tokens,
+  one retry) fits the writer's half of the request budget; `test_generation_budget.py` covers it.
+- GPT-5.6-luna is not listed: 7/20 drafts with added details, worse than GPT-4.1.
+
+Rejected:
+- Making Gemini the default now. The data supports it, but the owner kept the faster GPT-4.1.
+- Listing luna as a cheap option. It adds details more often than the default.
+- Waiting for a clean garden-positive record. The reviewer is inconsistent on the Hebrew
+  garden name ("סידר": accepted once, flagged twice), and GPT-4.1 passed 0 of 2 garden drafts.
+
+`scripts/evaluate_generation.py --live --writer-only` skips the 24 reviewer-only cases, which
+use fixed drafts and no writer call. Terra stopped the full evaluation twice in those cases
+with `grounding_review_invalid` (paraphrased claim text fails the coverage check), which kept
+the garden positives from running.
