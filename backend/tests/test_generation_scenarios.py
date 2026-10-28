@@ -128,7 +128,13 @@ def test_cli_defaults_to_offline_validation(arguments: list[str]):
 
 
 @pytest.mark.parametrize(
-    "arguments", [["--scenarios-only"], ["--isolated"], ["--validate-cases", "--scenarios-only"]]
+    "arguments",
+    [
+        ["--scenarios-only"],
+        ["--isolated"],
+        ["--writer-only"],
+        ["--validate-cases", "--scenarios-only"],
+    ],
 )
 def test_cli_rejects_execution_selectors_without_live(arguments: list[str]):
     import subprocess
@@ -251,7 +257,8 @@ def test_unknown_scenario_rejected_before_live_setup():
     assert not result.stdout
 
 
-def test_selected_names_propagate_to_isolated_child_without_calls():
+def isolated_child_arguments(*arguments) -> list[str]:
+    """Arguments isolated_database passes to its child run, with no database or provider."""
     import runpy
     import sys
     from types import SimpleNamespace
@@ -266,16 +273,20 @@ def test_selected_names_propagate_to_isolated_child_without_calls():
         migration_database_url="postgresql+psycopg://fixture_admin@localhost/fixture",
         database_url="postgresql+psycopg://fixture_runtime@localhost/fixture",
     )
-    selected = ["repair_missing_price_he", "library_supported_en"]
     with (
         patch("sqlalchemy.create_engine", return_value=engine),
         patch("app.config.get_settings", return_value=settings),
         patch("subprocess.run") as subprocess_run,
     ):
-        namespace["isolated_database"](True, selected)
+        namespace["isolated_database"](*arguments)
     assert subprocess_run.call_count == 2
-    child_arguments = subprocess_run.call_args_list[1].args[0]
-    assert child_arguments[2:] == [
+    assert engine.dispose.call_count == 2
+    return subprocess_run.call_args_list[1].args[0][2:]
+
+
+def test_selected_names_propagate_to_isolated_child_without_calls():
+    selected = ["repair_missing_price_he", "library_supported_en"]
+    assert isolated_child_arguments(True, selected) == [
         "--live",
         "--isolated",
         "--scenarios-only",
@@ -284,7 +295,30 @@ def test_selected_names_propagate_to_isolated_child_without_calls():
         "--scenario",
         selected[1],
     ]
-    assert engine.dispose.call_count == 2
+
+
+def test_writer_only_propagates_to_isolated_child_without_calls():
+    assert isolated_child_arguments(False, None, True) == ["--live", "--isolated", "--writer-only"]
+
+
+@pytest.mark.parametrize(
+    "selector", [["--scenarios-only"], ["--scenario", "repair_missing_price_he"]]
+)
+def test_writer_only_rejects_scenario_selectors_before_live_setup(selector: list[str]):
+    import subprocess
+    import sys
+
+    script = Path(__file__).parents[1] / "scripts" / "evaluate_generation.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--live", "--writer-only", *selector],
+        capture_output=True,
+        text=True,
+        env={},
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "cannot be combined" in result.stderr
+    assert not result.stdout
 
 
 def test_exact_reviewed_hebrew_disclaimer_is_allowed_after_sourced_facts():

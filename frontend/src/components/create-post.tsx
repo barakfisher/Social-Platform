@@ -254,6 +254,7 @@ type ModelOptions = { default: string; models: ModelOption[] };
 const modelNames: Record<string, string> = {
   "openai/gpt-5.6-terra": "GPT-5.6 Terra",
   "openai/gpt-4.1": "GPT-4.1",
+  "google/gemini-3.8-flash": "Gemini 3.8 Flash",
 };
 function isModelOptions(data: unknown): data is ModelOptions {
   const value = data as ModelOptions | null;

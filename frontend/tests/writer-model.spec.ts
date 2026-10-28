@@ -10,7 +10,7 @@ const writerModels = {
       max_usd: 0.03,
     },
     {
-      id: "vendor/heavy-writer",
+      id: "google/gemini-3.8-flash",
       available: true,
       typical_usd: 0.004,
       max_usd: 0.02,
@@ -118,7 +118,7 @@ test("writer select shows costs, the total follows both selects and the choice i
   await expect(writer).toHaveValue("openai/gpt-4.1");
   await expect(writer.locator("option")).toHaveText([
     "GPT-4.1 (recommended) — ~$0.007 per draft · up to $0.03",
-    "vendor/heavy-writer — ~$0.004 per draft · up to $0.02",
+    "Gemini 3.8 Flash — ~$0.004 per draft · up to $0.02",
     "vendor/delisted — unavailable",
   ]);
   await expect(writer.locator("option").nth(2)).toBeDisabled();
@@ -128,7 +128,7 @@ test("writer select shows costs, the total follows both selects and the choice i
   const total = page.getByTestId("total-draft-cost");
   // GPT-4.1 writing + GPT-5.6 Terra source check.
   await expect(total).toHaveText("~$0.035 per draft · up to $0.15");
-  await writer.selectOption("vendor/heavy-writer");
+  await writer.selectOption("google/gemini-3.8-flash");
   await expect(total).toHaveText("~$0.032 per draft · up to $0.14");
   await page
     .getByLabel("Source check model", { exact: true })
@@ -140,7 +140,7 @@ test("writer select shows costs, the total follows both selects and the choice i
   await page
     .getByRole("button", { name: "Generate draft", exact: true })
     .click();
-  await expect.poll(() => sent?.writer_model).toBe("vendor/heavy-writer");
+  await expect.poll(() => sent?.writer_model).toBe("google/gemini-3.8-flash");
   await expect.poll(() => sent?.review_model).toBe("openai/gpt-4.1");
 });
 
