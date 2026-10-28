@@ -602,8 +602,9 @@ The owner chose to list it as an optional writer and keep GPT-4.1 as the default
   reasons before writing and used up to 1,055 completion tokens; typical tokens 2,585 / 1,007
   from one realistic synthetic Hebrew LinkedIn prompt (EN: 1,833 / 938). GPT-4.1's typical
   tokens come from a stored real run instead; remeasure both if the writer prompt changes.
-- Worst case at the settings maximum (6,000 o200k prompt tokens × 1.25, 2,000 output tokens,
-  one retry) fits the writer's half of the request budget; `test_generation_budget.py` covers it.
+- Worst case at the settings maximum (6,000 o200k prompt tokens × 1.25, 4,000 output tokens,
+  one retry: about $0.045) fits the writer's stage budget ($0.124); `test_generation_budget.py`
+  covers it. The limit was 2,000 at listing and raised to 4,000 the same day (entry below).
 - GPT-5.6-luna is not listed: 7/20 drafts with added details, worse than GPT-4.1.
 
 Rejected:
@@ -616,3 +617,24 @@ Rejected:
 use fixed drafts and no writer call. Terra stopped the full evaluation twice in those cases
 with `grounding_review_invalid` (paraphrased claim text fails the coverage check), which kept
 the garden positives from running.
+
+## SP-22: Gemini 3.8 Flash output limit raised to 4,000 — 2026-10-28
+
+The first live Create Post draft with Gemini selected (Hebrew, LinkedIn, medium, the owner's
+Hebrew Wikipedia sources) used all 2,000 output tokens and failed with
+`generation_output_truncated`; no draft was produced. The 2,000 limit came from synthetic
+garden and LinkedIn sources (up to 1,055 completion tokens). Real Hebrew knowledge-base
+chunks make Gemini reason longer, and reasoning tokens count against the limit.
+
+- Choice: `output_tokens=4000` in Gemini's profile, the same room the reviewer got in #11.
+  The worst case shown per draft rises from about $0.029 to about $0.045; the typical estimate
+  is unchanged because it comes from measured tokens.
+
+Rejected:
+- Capping Gemini's reasoning (OpenRouter `reasoning` settings). It would make cost more
+  predictable, but it changes the writer that was evaluated, so the 20-scenario and garden
+  results would no longer apply and would need paid re-runs.
+- Retrying with a larger limit after a truncation. It doubles cost on exactly the drafts that
+  are already the most expensive.
+- Keeping 2,000 and asking users to pick GPT-4.1 for long Hebrew drafts. The listed writer
+  would fail on the owner's own sources.
