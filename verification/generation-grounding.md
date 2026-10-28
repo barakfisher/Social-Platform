@@ -758,3 +758,27 @@ Gemini 3.8 Flash ~$0.0063, up to $0.029. With Terra, the total is ~$0.034, up to
 One catalog fetch timed out on the first request, and Gemini was briefly shown as
 "unavailable" (the designed state); later requests took 0.4 s. No generation was run through
 the UI with Gemini.
+
+## Live writer choice from Create Post (SP-22) — 2026-10-28
+
+API containers rebuilt from `main` (28b5027), Next server on 53073. Create Post in Hebrew:
+LinkedIn, medium, brand voice, no CTA, topic "ההבדל בין מנטורינג לאימון אישי", writer
+Gemini 3.8 Flash, reviewer GPT-5.6 Terra, the owner's Ready Hebrew Wikipedia sources. Both runs
+stored `inputs.writer_model = google/gemini-3.8-flash`.
+
+| Run | Output limit | Writer completion tokens | Writer $ | Review | Draft $ total | Wall time |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 (`main`) | 2,000 | 2,000 (`generation_output_truncated`) | ~0.0099 | not called | 0.0099 | ~45 s |
+| 2 (this branch) | 4,000 | 3,294 | 0.0148 | `grounding_review_invalid` ($0.0318) | 0.0466 | 80 s |
+
+- Run 1 failed with the dedicated truncation message (the designed state). Gemini reasons much
+  longer on real Hebrew Wikipedia chunks than on the synthetic sources its limit was set from
+  (up to 1,055 tokens). The limit is now 4,000 (docs/implementation.md).
+- Run 2 produced a Hebrew draft about coaching. Gemini added a warning, outside the post, that
+  the retrieved sources cover coaching but not mentoring. The draft used 82% of the new limit,
+  so the headroom is real but not large.
+- The Terra review hit the known coverage failure (`grounding_review_invalid`), so the draft
+  shows "source check did not finish" with a "Check again" button. "Check again" was not run.
+- Spend, provider-reported from the run metadata: $0.0566 for both runs, **above the
+  approved $0.05 cap by $0.0066**. Run 2 was started with $0.040 of the cap left, against a
+  typical total of $0.034 and a shown maximum of $0.17; the review alone cost $0.032.
