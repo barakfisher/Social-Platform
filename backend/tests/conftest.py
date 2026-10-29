@@ -32,6 +32,6 @@ def api():
             patch("app.worker.SessionLocal", factory),
             patch("app.knowledge.process_text.apply_async") as dispatch,
         ):
-            yield TestClient(app), factory, dispatch
+            yield TestClient(app, base_url="http://127.0.0.1"), factory, dispatch
         transaction.rollback()
     engine.dispose()

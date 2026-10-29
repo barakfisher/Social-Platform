@@ -161,7 +161,7 @@ def evaluate(
     from app.models import IngestionJob
     from app.worker import embed_document, process_text
 
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
     if scenarios_only:
         run_scenarios(client, scenarios)
         return

@@ -2,7 +2,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect } from "@playwright/test";
 import { NextRequest } from "next/server";
-import { isJsonContentType, rejectUnsafeWrite } from "../src/lib/csrf-guard";
+import {
+  allowedHosts,
+  isJsonContentType,
+  rejectUnsafeWrite,
+} from "../src/lib/csrf-guard";
 
 // Every browser request below targets a path the proxy rejects as invalid
 // after the guard, so an allowed request ends in 400 invalid_path and no
@@ -81,6 +85,43 @@ test.describe("csrf guard rules", () => {
   test("leaves GET untouched", () => {
     const request = write({ origin: "https://evil.example" }, "GET");
     expect(rejectUnsafeWrite(request, { jsonBody: false })).toBeNull();
+  });
+
+  for (const method of ["POST", "GET"]) {
+    test(`rejects a ${method} on a rebound Host`, async () => {
+      // DNS rebinding: the attacker's own name now resolves to 127.0.0.1, and
+      // its Origin matches its Host, so only an explicit Host list catches it.
+      const rebound = "http://rebind.evil.example:53073";
+      const request = new NextRequest(`${rebound}/api/generation`, {
+        method,
+        headers: {
+          host: "rebind.evil.example:53073",
+          origin: rebound,
+          "sec-fetch-site": "same-origin",
+          "content-type": "application/json",
+        },
+      });
+      const rejected = rejectUnsafeWrite(request, {
+        jsonBody: method === "POST",
+      });
+      expect(rejected?.status).toBe(403);
+      expect((await rejected?.json()).error.code).toBe("cross_site_request");
+    });
+  }
+
+  test("allows every configured Host", () => {
+    for (const host of allowedHosts()) {
+      const request = new NextRequest(`http://${host}/api/generation`, {
+        method: "POST",
+        headers: {
+          host,
+          origin: `http://${host}`,
+          "sec-fetch-site": "same-origin",
+          "content-type": "application/json",
+        },
+      });
+      expect(rejectUnsafeWrite(request, { jsonBody: true })).toBeNull();
+    }
   });
 
   test("every API proxy route applies the guard", () => {

@@ -43,12 +43,11 @@ class Settings(BaseSettings):
     generation_retrieval_count: int = Field(default=5, ge=1, le=10)
     generation_max_distance: float = Field(default=0.65, ge=0, le=2)
     generation_max_request_usd: float = Field(default=0.31, gt=0, le=1)
-    cors_origins: list[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:53073",
-        "http://127.0.0.1:53073",
-    ]
+    # Origins whose pages may call and write to the API. Only this app's Next server: port
+    # 3000 belongs to other local projects (SP-23).
+    cors_origins: list[str] = ["http://localhost:53073", "http://127.0.0.1:53073"]
+    # Host header values the API answers; anything else is DNS rebinding (SP-23).
+    allowed_hosts: list[str] = ["127.0.0.1", "localhost"]
 
     @model_validator(mode="after")
     def default_models_are_offered(self):
@@ -56,6 +55,9 @@ class Settings(BaseSettings):
             raise ValueError("GENERATION_REVIEW_MODEL must be one of GENERATION_REVIEW_MODELS")
         if self.generation_model not in self.generation_writer_models:
             raise ValueError("GENERATION_MODEL must be one of GENERATION_WRITER_MODELS")
+        # A wildcard silently turns off the Host check or opens CORS to every page (SP-23).
+        if any("*" in value for value in [*self.allowed_hosts, *self.cors_origins]):
+            raise ValueError("ALLOWED_HOSTS and CORS_ORIGINS must list exact values")
         return self
 
 
