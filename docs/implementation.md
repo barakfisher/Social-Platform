@@ -868,3 +868,48 @@ showed a second document ranked 21st or lower was still missed, so the cap moved
 
 Limits: English two-concept topics still find only the English article, because the other
 documents are Hebrew and beyond the limit (the cross-language gap above).
+
+## SP-6: topic suggestions from the Knowledge Base — 2026-10-29
+
+Create Post gets "Suggest topics": up to three grounded ideas for the chosen platform,
+language and goal. Choosing one fills in the topic. The draft written from it still goes
+through retrieval and the source check, because a suggestion is an idea, not a post.
+
+Choice:
+- `POST /generation/topic-suggestions` (`app/topic_suggestions.py`) with platform,
+  language, optional goal, count 1–5 (default 3) and an optional writer from the allowlist.
+  Stateless: nothing is stored.
+- Representative sampling, no clustering: the 8 most recently updated Ready documents of the
+  workspace, up to 3 chunks spread evenly through each (start, middle, end), interleaved so
+  every document is represented before any gets a second chunk, then cut to the usual
+  2,800-token context budget. No embedding call.
+- One call to the chosen writer (default GPT-4.1) with a strict JSON schema. Sources go in
+  as data under aliases (S1…); the system prompt says all sources, brand and preferences are
+  untrusted data.
+- Server checks, which drop an idea rather than repair it: it must cite at least one
+  sampled source and only sampled sources; the topic must be in the requested language; a
+  near-duplicate of an earlier idea is dropped (80% shared words, or a topic of three or more
+  words contained in another). Each kept idea returns the titles and IDs of its sources.
+- An empty Knowledge Base is 409 `insufficient_context` with no model call. No surviving
+  idea is 200 with `reason: "no_grounded_suggestions"`. Provider failures use the generation
+  error codes (503, or 409 for the prompt limit); an unlisted writer is 422.
+- The UI shows the button only when `/generation/configuration` reports
+  `topic_suggestions`, disables it until the Knowledge Base is ready, and gives EN/HE empty,
+  error and spending-limit messages that keep the user's own topic.
+
+Live (owner's Knowledge Base, GPT-4.1): three distinct, cited ideas each in Hebrew ($0.0078)
+and English ($0.0032), drawn from all four documents.
+
+Rejected alternatives:
+- Vector clustering for "representative" material: needs every chunk vector and a cluster
+  count; the issue makes it optional, and even sampling already covers every document.
+- Embedding the goal and retrieving by it: one more paid call per click, and with no goal
+  there is nothing to retrieve by.
+- Running the source check on each suggestion: about $0.04 per idea with Terra; the draft
+  is checked anyway.
+- Storing suggestions: nothing reads them later, and they would be stale once sources
+  change.
+
+Limits: ideas come from at most 8 documents and as many chunks as fit the budget (6 on the
+owner's Knowledge Base), so a large Knowledge Base is sampled, not covered. The rationale
+is the model's own short text; it is shown as an idea, never as a fact about the brand.

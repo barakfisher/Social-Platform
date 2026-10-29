@@ -171,7 +171,7 @@ def configuration():
         "configured": bool(generation_key()),
         "brand_ready": brand is not None,
         "ready_documents": count,
-        "topic_suggestions": False,
+        "topic_suggestions": True,
         "media_upload": False,
         "media_assisted": False,
     }

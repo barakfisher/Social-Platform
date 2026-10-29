@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, PenLine, Save, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ReviewFindings } from "@/components/review-findings";
+import { TopicSuggestions } from "@/components/topic-suggestions";
 import {
   apiRequest,
   inputClass,
@@ -84,7 +85,7 @@ const copy = {
     question: "Question",
     insight: "Insight",
     story: "Story",
-    media: "Images and topic suggestions will be available in a later step.",
+    media: "Images will be available in a later step.",
     history: "Open History",
     insufficient:
       "No sufficiently relevant knowledge was found. Add or enable AI search for sources about this topic.",
@@ -195,7 +196,7 @@ const copy = {
     question: "שאלה",
     insight: "תובנה",
     story: "סיפור",
-    media: "תמונות והצעות לנושאים יתווספו בשלב הבא.",
+    media: "תמונות יתווספו בשלב הבא.",
     history: "פתיחת ההיסטוריה",
     insufficient:
       "לא נמצא ידע רלוונטי מספיק. אפשר להוסיף מקורות בנושא ולהפעיל עבורם חיפוש AI.",
@@ -241,6 +242,7 @@ type Capability = {
   configured: boolean;
   brand_ready: boolean;
   ready_documents: number;
+  topic_suggestions?: boolean;
 };
 type ModelOption = {
   id: string;
@@ -599,6 +601,16 @@ export function CreatePost({ locale }: { locale: Locale }) {
                 value={form.topic}
                 onChange={(e) => setForm({ ...form, topic: e.target.value })}
               />
+              {capability?.topic_suggestions && (
+                <TopicSuggestions
+                  locale={locale}
+                  request={form}
+                  disabled={!allowed}
+                  onChoose={(topic) =>
+                    setForm((current) => ({ ...current, topic }))
+                  }
+                />
+              )}
             </div>
             <div>
               <label

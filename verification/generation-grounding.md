@@ -891,3 +891,18 @@ key usage): both Hebrew supported scenarios clean; both English ones flagged for
 additions ("for visitors" plus a meta note; "Local residents can access these services"),
 the same failures as the v7 run before this change. Each writer received its scenario's
 single source, as before.
+
+## SP-6: topic suggestions, live — 2026-10-29
+
+A local API from the branch (port 58173, the owner's database, read-only for this endpoint)
+answered `POST /generation/topic-suggestions` with GPT-4.1:
+
+| Request | Sampled chunks | Ideas kept | Sources cited | Provider-reported cost |
+| --- | --- | --- | --- | --- |
+| LinkedIn, Hebrew, goal "שיתוף ידע" | 6 | 3 | all four documents across the ideas | $0.0078 |
+| Facebook, English, goal "Educate" | 6 | 3 | all four documents across the ideas | $0.0032 |
+
+Every idea cited only sampled chunks and was in the requested language; no idea was dropped
+by the server checks. Example: "מה ההבדל בין מנטורינג, אימון אישי ומנהיגות…", citing the
+mentoring, coaching, leadership and English Mentorship articles. The UI was checked with
+mocked data in EN/HE at 390 and 1280 px (no horizontal scroll) and by 7 Playwright tests.
