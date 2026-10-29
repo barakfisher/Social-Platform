@@ -865,7 +865,29 @@ ranked by cosine distance inside a READ ONLY transaction; `search_context` and
 | EN The difference between mentoring and coaching | Mentorship ×4 | unchanged | coaching HE 15 (0.718, beyond the limit) |
 | EN How leadership relates to mentoring | Mentorship ×4 | unchanged | leadership HE 15 (0.822, beyond the limit) |
 
+Per chunk, for the Hebrew mentoring-vs-coaching topic before the change (rank, distance,
+document, o200k tokens, reached the writer):
+
+| Rank | Distance | Document | Tokens | Before | After |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 0.415 | coaching | 286 | yes | yes |
+| 2 | 0.446 | coaching | 251 | yes | yes |
+| 3 | 0.499 | coaching | 276 | yes | yes |
+| 4 | 0.513 | coaching | 196 | yes | no (cap) |
+| 5 | 0.514 | coaching | 309 | yes | no (cap) |
+| 6 | 0.562 | coaching | 342 | no (count) | no (cap) |
+| 7 | 0.577 | mentoring | 287 | no (count) | yes |
+| 11 | 0.596 | leadership | — | no (count) | yes |
+
+Method: a run-only script outside the repo embedded each topic once, ranked every chunk
+with `cosine_distance` and replayed `search_context` and `bounded_context`; the "after" column
+is the merged implementation (SQL per-document rank), replayed the same way.
+
 The stored run b861a7ec listed 2 sources because `result.sources` keeps only cited chunks;
-the writer had received 5. Supported generation scenarios are unaffected: each scenario's
-Knowledge Base holds one or two single-chunk documents, so every chunk within the limit is
-returned with or without the cap. No paid generation was run for this change.
+the writer had received 5.
+
+Supported scenarios, live after the change (writer GPT-4.1, reviewer Terra v7, $0.0069
+key usage): both Hebrew supported scenarios clean; both English ones flagged for writer
+additions ("for visitors" plus a meta note; "Local residents can access these services"),
+the same failures as the v7 run before this change. Each writer received its scenario's
+single source, as before.
