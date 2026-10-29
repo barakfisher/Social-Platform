@@ -30,6 +30,9 @@ SUGGESTION_VERSION = "topic-suggestions-v1"
 # before any gets a second chunk, then cut to the context budget.
 SAMPLE_DOCUMENTS = 8
 SAMPLE_CHUNKS_PER_DOCUMENT = 3
+# Invisible direction overrides, isolates and tag characters can hide text inside an idea
+# that would travel into the draft prompt. Hebrew's LRM/RLM marks (U+200E/U+200F) are fine.
+HIDDEN = re.compile("[\u202a-\u202e\u2066-\u2069\U000e0000-\U000e007f]")
 # Two topics this similar (shared words over all words) count as the same idea.
 NEAR_DUPLICATE = 0.8
 SYSTEM = """
@@ -93,15 +96,15 @@ def representative_sample() -> list[dict]:
         ).all()
         per_document = []
         for document_id, title in documents:
-            chunks = session.scalars(
-                select(KnowledgeChunk)
+            chunks = session.execute(
+                select(KnowledgeChunk.id, KnowledgeChunk.content, KnowledgeChunk.source_location)
                 .where(
                     KnowledgeChunk.document_id == document_id,
                     KnowledgeChunk.user_id == LOCAL_USER_ID,
                     KnowledgeChunk.workspace_id == LOCAL_WORKSPACE_ID,
                 )
                 .order_by(KnowledgeChunk.chunk_order)
-            ).all()
+            ).all()  # No embeddings: only the sampled text is needed.
             # Evenly spaced positions: the start, the end and points between.
             count = min(SAMPLE_CHUNKS_PER_DOCUMENT, len(chunks))
             positions = sorted(
@@ -153,8 +156,10 @@ def in_language(text: str, language: str) -> bool:
 def suggest_topics(payload: SuggestInput):
     settings = get_settings()
     writer_model = payload.writer_model or settings.generation_model
-    if writer_model not in settings.generation_writer_models:
-        raise HTTPException(422, "writer_model_unavailable")
+    try:
+        profile = writer_profile(writer_model)
+    except GenerationError:
+        raise HTTPException(422, "writer_model_unavailable") from None
     try:
         if not generation_key():
             raise GenerationError("generation_not_configured")
@@ -162,6 +167,8 @@ def suggest_topics(payload: SuggestInput):
         if not sample:
             raise GenerationError("insufficient_context")
         sources = bounded_context(sample, settings.generation_context_budget)
+        if not sources:
+            raise GenerationError("insufficient_context")
         aliases = {f"S{i}": source for i, source in enumerate(sources, start=1)}
         with SessionLocal() as session:
             brand = session.scalar(
@@ -189,7 +196,6 @@ def suggest_topics(payload: SuggestInput):
         tokens = prompt_tokens(SYSTEM) + prompt_tokens(user) + 32
         if tokens > settings.generation_prompt_budget:
             raise GenerationError("generation_prompt_limit")
-        profile = writer_profile(writer_model)
         raw, metadata = chat_completion(
             SYSTEM,
             user,
@@ -214,6 +220,7 @@ def suggest_topics(payload: SuggestInput):
             not cited
             or len(cited) != len(set(suggestion.source_ids))
             or "\x00" in suggestion.topic + suggestion.rationale
+            or HIDDEN.search(suggestion.topic + suggestion.rationale)
             or not in_language(suggestion.topic, payload.language)
             or any(near_duplicate(suggestion.topic, k["topic"]) for k in kept)
         ):

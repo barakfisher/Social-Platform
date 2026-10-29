@@ -21,7 +21,7 @@ const copy = {
     hint: "Ideas from your Knowledge Base. Choosing one fills in the topic.",
     title: "Topic ideas",
     use: "Use this topic",
-    basedOn: "Based on",
+    basedOn: "Sources it cites",
     empty:
       "No topic could be tied to your sources this time. Try again, or add sources to your Knowledge Base.",
     insufficient:
@@ -36,7 +36,7 @@ const copy = {
     hint: "רעיונות ממאגר הידע שלך. בחירה ברעיון ממלאת את הנושא.",
     title: "רעיונות לנושאים",
     use: "לכתוב על זה",
-    basedOn: "על סמך",
+    basedOn: "מקורות שצוינו",
     empty:
       "הפעם לא נמצא נושא שאפשר לקשר למקורות שלך. אפשר לנסות שוב או להוסיף מקורות למאגר הידע.",
     insufficient:

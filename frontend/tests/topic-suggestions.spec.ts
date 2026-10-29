@@ -82,7 +82,9 @@ test("a suggested topic fills the topic field and the request matches the form",
   await page.getByRole("button", { name: "Suggest topics" }).click();
   const list = page.getByTestId("topic-suggestions");
   await expect(list.getByRole("listitem")).toHaveCount(2);
-  await expect(list).toContainText("Based on: Garden page, Volunteer guide");
+  await expect(list).toContainText(
+    "Sources it cites: Garden page, Volunteer guide",
+  );
   await list
     .getByRole("listitem")
     .nth(1)

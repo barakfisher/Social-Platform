@@ -910,6 +910,13 @@ Rejected alternatives:
 - Storing suggestions: nothing reads them later, and they would be stale once sources
   change.
 
+Security review (`bf-security-reviewer`): no blocking findings. Applied: a context too small
+for any source is 409 with no model call; ideas with invisible direction overrides or tag
+characters are dropped (Hebrew LRM/RLM are kept); sampling loads no embeddings; the UI labels
+sources "Sources it cites", because the server checks that a cited source was sampled, not
+that it supports the idea; an unprofiled writer is 422 as on the draft route; the route is in
+the write-guard test list.
+
 Limits: ideas come from at most 8 documents and as many chunks as fit the budget (6 on the
 owner's Knowledge Base), so a large Knowledge Base is sampled, not covered. The rationale
 is the model's own short text; it is shown as an idea, never as a fact about the brand.

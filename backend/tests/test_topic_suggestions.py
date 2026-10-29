@@ -263,3 +263,39 @@ def test_configuration_reports_topic_suggestions(suggest_api):
 )
 def test_near_duplicates(a, b, same):
     assert near_duplicate(a, b) is same
+
+
+def test_context_too_small_for_any_source_calls_no_model(suggest_api):
+    client, factory, complete = suggest_api
+    add_document(factory, "Garden", ["Cedar Garden grows sage."])
+    with patch("app.topic_suggestions.bounded_context", return_value=[]):
+        response = client.post("/generation/topic-suggestions", json={"language": "en"})
+    assert response.status_code == 409
+    assert response.json()["error"]["message"] == "insufficient_context"
+    complete.assert_not_called()
+
+
+@pytest.mark.parametrize("hidden", ["\u202e", "\u2066", "\U000e0041"])
+def test_ideas_with_hidden_direction_or_tag_characters_are_dropped(suggest_api, hidden):
+    client, factory, complete = suggest_api
+    add_document(factory, "Garden", ["Cedar Garden grows sage."])
+    complete.return_value = reply(idea(f"How Cedar Garden grows {hidden}sage"))
+    body = client.post("/generation/topic-suggestions", json={"language": "en"}).json()
+    assert body["suggestions"] == []
+
+
+def test_hebrew_direction_marks_are_kept(suggest_api):
+    client, factory, complete = suggest_api
+    add_document(factory, "Garden", ["גינת ארז מגדלת מרווה."])
+    complete.return_value = reply(idea("איך גינת ארז\u200f מגדלת מרווה"))
+    body = client.post("/generation/topic-suggestions", json={"language": "he"}).json()
+    assert len(body["suggestions"]) == 1
+
+
+def test_an_id_from_another_workspace_cannot_be_cited(suggest_api):
+    client, factory, complete = suggest_api
+    other = setup_source(factory, other=True, content="Other workspace text.")
+    add_document(factory, "Garden", ["Cedar Garden grows sage."])
+    complete.return_value = reply(idea("Cites a real ID from elsewhere", sources=(other,)))
+    body = client.post("/generation/topic-suggestions", json={"language": "en"}).json()
+    assert body["suggestions"] == []
