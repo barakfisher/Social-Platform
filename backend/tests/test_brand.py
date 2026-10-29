@@ -27,7 +27,7 @@ def brand_client():
 
             app.dependency_overrides[get_session] = override
             try:
-                yield TestClient(app), session
+                yield TestClient(app, base_url="http://127.0.0.1"), session
             finally:
                 app.dependency_overrides.pop(get_session, None)
         transaction.rollback()
@@ -71,7 +71,7 @@ def test_brand_validation(payload):
     # Rejects invalid input before opening a database transaction.
     app.dependency_overrides[get_session] = lambda: None
     try:
-        response = TestClient(app).put("/brand", json=payload)
+        response = TestClient(app, base_url="http://127.0.0.1").put("/brand", json=payload)
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "validation_error"
     finally:
@@ -102,9 +102,12 @@ def test_production_cannot_use_fixed_identity():
     settings.environment = "production"
     app.dependency_overrides[get_session] = lambda: None
     try:
-        assert TestClient(app).get("/brand").status_code == 503
+        assert TestClient(app, base_url="http://127.0.0.1").get("/brand").status_code == 503
         assert (
-            TestClient(app).put("/brand", json={"name": "Brand", "version": 0}).status_code == 503
+            TestClient(app, base_url="http://127.0.0.1")
+            .put("/brand", json={"name": "Brand", "version": 0})
+            .status_code
+            == 503
         )
     finally:
         settings.environment = previous

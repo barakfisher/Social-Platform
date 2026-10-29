@@ -7,6 +7,7 @@ Single-user, single-brand content studio. Phase 1 creates drafts for LinkedIn an
 - Next.js 15 App Router, TypeScript, Tailwind 4, Shadcn-compatible Button and design tokens.
 - English/Hebrew routes and translated dashboard shell: Brand DNA, Knowledge Base, Create Post, History. Hebrew is RTL at server render, with logical spacing and borders.
 - FastAPI liveness/readiness, configured CORS, consistent errors with request IDs.
+- Cross-site protection on the API and its proxies: writes from pages other than this app (`CORS_ORIGINS`) get 403, write bodies must be `application/json` (415), and requests for unknown hosts are refused (API `ALLOWED_HOSTS`, proxy `APP_HOSTS`). Opening the app or API under another hostname requires adding it to these settings.
 - PostgreSQL 17 / pgvector migrations, workspace and user ownership constraints, Brand DNA, documents, chunks, drafts, and ingestion jobs.
 - Celery/Redis worker with persistent database job status and idempotent probe task.
 - Locked dependencies, lint/type/build checks, browser navigation and PostgreSQL integration tests, GitHub Actions workflow.
@@ -27,7 +28,7 @@ npm ci
 npm run dev
 ```
 
-Open http://localhost:53073. API docs: http://localhost:58073/docs. Health: `/health/live` (process), `/health/ready` (database migrations and Redis). Readiness does not assert worker availability.
+Open http://localhost:53073. API docs: http://localhost:58073/docs (read-only: its "Try it out" writes get 403, because writes are accepted only from the app). Health: `/health/live` (process), `/health/ready` (database migrations and Redis). Readiness does not assert worker availability.
 
 PostgreSQL uses localhost:55473 and Redis localhost:56373 to avoid other local projects. All published ports bind to loopback. Docker credentials are development-only; volumes retain data across restarts. `docker compose down` preserves volumes.
 

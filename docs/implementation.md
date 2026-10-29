@@ -638,3 +638,60 @@ Rejected:
   are already the most expensive.
 - Keeping 2,000 and asking users to pick GPT-4.1 for long Hebrew drafts. The listed writer
   would fail on the owner's own sources.
+
+## Decision: FastAPI rejects cross-site writes and unknown hosts (SP-23) — 2026-10-29
+
+Problem: the proxy guard (entry above) protects only `/api/*` on 53073. FastAPI listens on
+127.0.0.1:58073 and had no origin check, so any page the owner opened could send it a
+simple request. Reproduced with a hermetic `TestClient` test on `main`: a cross-site
+bodiless `POST /knowledge/{id}/embed` (paid embeddings) reached the handler. The live
+check confirmed the same from a page on another local port.
+
+Correction to the earlier "Known limits": FastAPI 0.162.0 does **not** parse a body
+without Content-Type as JSON. `strict_content_type` is on by default (`fastapi/routing.py`),
+so a Blob-body `POST /generation` got 422 and never reached the handler. The real exposure
+was writes without a body: knowledge embed and retry, and `/dev/jobs/probe`. `PUT /brand`
+and the deletes need a CORS preflight, which `localhost:3000` passed while it was an
+allowed origin.
+
+Choice:
+- `app/write_guard.py` (`write_rejection`), run by an HTTP middleware inside
+  `request_context`, so rejections carry the request ID and never reach a handler.
+  For `POST`, `PUT`, `PATCH` and `DELETE`:
+  - An `Origin` outside `cors_origins` → 403 `cross_site_request`.
+  - A `Sec-Fetch-Site` other than `same-origin`/`none` without an allowed `Origin` → 403.
+    `same-site` is not trusted, because every localhost port is the same site.
+  - A body whose content-type essence is not exactly `application/json` → 415
+    `invalid_content_type`. This is stricter than FastAPI, which also accepts `+json`.
+  - Neither header (the Next proxy, curl, scripts) → allowed, the same rule as the proxy
+    guard.
+- Starlette's `TrustedHostMiddleware` with `allowed_hosts` (`ALLOWED_HOSTS`, default
+  `127.0.0.1` and `localhost`) refuses other `Host` values with 400 on every method. This
+  stops DNS rebinding, including reads.
+- `cors_origins` keeps only the two 53073 origins (owner decision 2026-10-28). Port 3000
+  belongs to other local projects.
+- The proxy guard checks `Host` against `APP_HOSTS` (default `127.0.0.1:53073`,
+  `localhost:53073`) for every method, closing the rebinding gap noted above.
+- Tests and the evaluation script use `TestClient(..., base_url="http://127.0.0.1")`,
+  because Starlette's default `testserver` host is not trusted.
+
+Rejected alternatives:
+- Relying on CORS: it hides responses but does not stop simple requests.
+- Content-type check only: bodiless paid POSTs carry no body to check.
+- Trusting `Sec-Fetch-Site: same-site`: a page on any localhost port qualifies.
+- CSRF tokens: there are no cookies or sessions, so origin checks give the same protection
+  without per-form state (as for the proxy).
+- Binding FastAPI to a Unix socket or the Docker network only: it would break the host-run
+  Next server and the evaluation tooling, and would not cover DNS rebinding of the proxy.
+- Adding `testserver` to the allowed hosts: a test-only value in a security allowlist.
+
+Limits: future multipart uploads (SP-9) must add an explicit exception for their route.
+Writes from FastAPI's own Swagger UI (`http://127.0.0.1:58073/docs`, "Try it out") now get
+403, because that page's origin is not allowed; use curl or the app. Adding the 58073
+origins was rejected because it would trust Swagger's CDN-loaded script to write.
+Wildcards in `ALLOWED_HOSTS` or `CORS_ORIGINS` are refused at startup, because a `*`
+silently turns the Host check off.
+Next.js pages outside `/api` are not covered by the Host check. That is acceptable today
+because no page fetches data on the server; all data reads go through the `/api` proxies,
+which do check `Host`. Recheck this if a page starts loading data server-side.
+

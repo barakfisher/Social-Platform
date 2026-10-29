@@ -2,9 +2,10 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import app
 
-client = TestClient(app)
+client = TestClient(app, base_url="http://127.0.0.1")
 
 
 def test_liveness_and_error_contract():
@@ -26,13 +27,14 @@ def test_readiness_hides_dependency_details():
 
 
 def test_cors_restricts_origins():
+    origin = get_settings().cors_origins[0]
     allowed = client.options(
         "/health/live",
-        headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET"},
+        headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
     )
     denied = client.options(
         "/health/live",
         headers={"Origin": "https://untrusted.example", "Access-Control-Request-Method": "GET"},
     )
-    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert allowed.headers["access-control-allow-origin"] == origin
     assert "access-control-allow-origin" not in denied.headers
