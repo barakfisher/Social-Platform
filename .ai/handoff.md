@@ -1,166 +1,128 @@
-# Social Platform continuation handoff — 2026-10-28 (after PR #13)
+# Social Platform continuation handoff — 2026-10-29 (after PR #19, SP-16 milestone)
 
 ## Startup
 
 Read AGENTS.md, this file, docs/implementation.md (decision entries at the end) and
 verification/generation-grounding.md (latest sections at the end). Inspect git status/log and
-confirm PR #13 is on `main` by content:
-`git grep -n "google/gemini-3.8-flash" origin/main -- backend/app/writer_models.py`.
+confirm the last delivery is on `main` by content:
+`git grep -n "def suggest_topics" origin/main -- backend/app/topic_suggestions.py`.
 Then give a short next-step summary and wait. Do not start engineering, paid calls, pushes or
 PRs on startup. Linear works through the Linear MCP (project Social Platform).
 
-The main checkout was clean on `main` at handoff. Old worktrees under `.claude/worktrees/`
-(`cranky-dewdney-ed0c02`, `fastapi-csrf-guard-39e6dc` with no commits, `sp-22-writer-model-dbdd87`)
-hold nothing unmerged that matters; leave them unless the owner asks.
-
 Never print, overwrite or stage ignored backend/.env (no GENERATION_* overrides; generation
-uses EMBEDDING_API_KEY on OpenRouter; code defaults apply). Preserve the user's Brand DNA, the
-Ready Hebrew source and saved posts. **Paid model calls need explicit authorization and a
-dollar cap each time.** Merging needs an admin bypass of the required review, approved by the
-user each time.
+uses EMBEDDING_API_KEY on OpenRouter). Preserve the owner's Brand DNA, the four Ready
+Knowledge Base documents and saved posts. **Paid model calls need a dollar cap each time.**
+The owner's grant on 2026-10-29 ("continue with all SP-16 tasks … merge, open PRs, make
+decisions and start new sessions; stop only for a real product issue") covered SP-16 work
+only and ends with this handoff.
 
-## Deliveries since the last handoff (PRs #9–#13)
+## Deliveries since the last handoff (PRs #15–#19)
 
-- **#9 advisory source review (`source-review-v5`).** Drafts are always shown. Problems are
-  coded findings in a "Points to check" panel. Only `copied_instructions` or
-  `revealed_instructions` blocks a draft. Claims are typed `factual` or `creative`; tone and CTA
-  presets; optional offer details; "Check again" reviews server-stored text only.
-- **#10 live-evaluation pass rules for v5.** Each review is classified as clean, flagged or
-  blocked (`review_outcome`). Supported scenarios must be clean. An invented missing fact
-  passes only when `unsupported_claim`/`contradicted_claim` flags it. An obeyed injection fails
-  even when flagged.
-- **#11 reasoning reviewers can finish (`source-review-v6`).** Review output limit 1,600 →
-  4,000, request cap $0.16 → $0.31, timeout 30 → 40 s. `finish_reason: length` raises
-  `generation_output_truncated`. The prompt quotes the server's `CONNECTIVES` list verbatim.
-  Hebrew evidence quotes may differ by one attached prefix letter.
-- **#12 writer choice (SP-22 slice 1).** `GENERATION_WRITER_MODELS` allowlist,
-  `app/writer_models.py` `WriterProfile` (token ratio, typical tokens, optional output limit),
-  `writer_model` on `POST /generation` (stored, fingerprinted, never in prompts, 422
-  `writer_model_unavailable`), `GET /generation/writer-models`, and the Create Post writer
-  select with a total-cost line. Budgets stay in o200k units; the writer's ratio scales the
-  cost reservation, the estimate and the context-length check.
-- **#13 Gemini 3.8 Flash listed as an optional writer; GPT-4.1 stays the default** (owner
-  decision), plus `evaluate_generation.py --live --writer-only`.
-
-| Writer (vs. GPT-4.1) | Added unsupported detail | Meta notes in post | Injection obeyed | Garden drafts passed | Writer $/draft | Latency |
-| --- | --- | --- | --- | --- | --- | --- |
-| Gemini 3.8 Flash | 1/40 | 0/40 | 0 | 4/7 | 0.0035 | 9.0 s mean, 21.7 s max |
-| GPT-4.1 | 5/20 | 8/20 | 0 | 0/2 | ~0.0025 | 1.5 s |
-
-Gemini meets the agreed rule for becoming the default; the owner kept the faster GPT-4.1.
-Rejected: Claude Sonnet 5.5 (16/20 meta notes, one Hebrew draft blocked) and GPT-5.6-luna (7/20
-added details). Evidence and alternatives: the SP-22 entries in docs/implementation.md and
-"Writer candidates: confirmation runs" in verification/generation-grounding.md.
+- **#15 (SP-22 Done):** Gemini 3.8 Flash output limit 4,000; live writer choice verified.
+- **#16 (SP-23 Done):** FastAPI rejects cross-site writes and unknown hosts.
+- **#17 (SP-24, SP-26 Done): `source-review-v7`.** Measured first: 45 reviews, failures were
+  the Hebrew copula "הוא" left outside claims and a final "." on an exact excerpt; one owner
+  draft was blocked for repeating the owner's own CTA. Fixes: הוא/היא/הם/הן are connectives;
+  coverage compares whole tokens in one pass (numbers keep their sign and separators; fact
+  signs must match); excerpts sit on source token boundaries (one attached Hebrew prefix
+  allowed before an exact excerpt); `copied_instructions` means instructions aimed at the AI,
+  and the owner's offer-details CTA never blocks; new advisory finding
+  `unlisted_contact_detail` for any link/email/handle/phone the owner did not give; failed
+  reviews store `failed_check`/`failed_sentence`. Three `bf-security-reviewer` rounds.
+  Typical Terra review cost remeasured on real drafts (~$0.041).
+- **#18 (SP-25 Done): retrieval spreads across documents.** At most 3 chunks per document
+  (SQL `row_number()` per document) while another document has chunks within 0.65; freed
+  slots fill back; each document's best chunk first. The mentoring-vs-coaching topic now
+  reaches the mentoring article.
+- **#19 (SP-6): "Suggest topics"** in Create Post, backed by `POST /generation/topic-suggestions`
+  (sampling, strict schema, server-side citation/language/duplicate checks). Live: 3 cited
+  ideas in HE ($0.0078) and EN ($0.0032).
 
 ## Lessons (do not re-learn)
 
-- **OpenRouter has three separate limits.** Account credits, the API key's own limit, and a
-  **workspace lifetime budget** ($10 here, raised by the owner on 2026-10-28; it never resets).
-  Topping up credits does not lift the workspace budget. Check all three for free with
-  `GET https://openrouter.ai/api/v1/key` and read `effective_budget`. The workspace 403
-  reaches users as `generation_authentication_failed` / `embedding_authentication_failed`,
-  which wrongly suggests a bad key.
-- **Terra sometimes rejects its own review.** It paraphrases claim text ("museum opens Tuesdays"
-  for "opens on Tuesdays", or drops "גם"), and the coverage check turns the review into
-  `grounding_review_invalid`. This happened 3 times in 70 reviews on 2026-10-28. In the full
-  evaluation it stops the run inside the 24 reviewer-only cases, before any writer is tested.
-  Use `--writer-only` to evaluate a writer.
-- **The evaluator exits 1 whenever any case fails**, and a garden-positive failure stops the run.
-  Read the JSON lines in its output, not the exit code. Classify drafts by hand; "no findings"
-  is not the same as "no additions".
-- **Evaluate a candidate writer without code changes:** a `sitecustomize.py` placed on
-  `PYTHONPATH` outside the repo can add a run-only `WriterProfile` once `app.writer_models`
-  loads, log each `/chat/completions` call (model, tokens, finish, cost, content), refuse new
-  calls at a spend cap, and stop after N calls. Set `GENERATION_MODEL` and
-  `GENERATION_WRITER_MODELS` together; the config rejects a default that is not listed.
-- **The reviewer is inconsistent on Hebrew garden names.** "בגינה הקהילתית סידר" was accepted once
-  and flagged twice, because only the English line of the garden source names the garden. One
-  garden sample proves little; run at least 3.
-- **Typical tokens for a reasoning writer** must come from a realistic prompt. Gemini's
-  scenario drafts are one sentence and still used ~700 completion tokens, mostly reasoning.
-  A medium LinkedIn draft used 1,007 (775 reasoning).
-- **Disposable test DB:** grant the runtime role like `isolated_database` does and point
-  `TEST_DATABASE_URL` at that role. With the admin role,
-  `test_runtime_cannot_create_tables` fails. Without `TEST_DATABASE_URL`, 120 tests skip and
-  `test_generation_lock_excludes_other_connections_and_releases_on_disconnect` fails.
-- **Looking at a branch's UI:** the API container on 58073 runs old code. Start
-  `uv run uvicorn app.main:app --port <other>` from backend/ and a Next dev server from a copy
-  of frontend/ (rsync without node_modules/.next, symlink node_modules) with `API_URL` pointing
-  at it. Two dev servers in one frontend/ folder would share `.next`. Delete any temporary
-  `.claude/launch.json`; it is not git-ignored.
-- **Catalog fetches can time out (10 s)** right after start-up. The writer is then shown as
-  "unavailable" (the designed state); a reload fixes it.
-- Earlier lessons still hold: Linear auto-closed SP-4 on merges of branches named `sp-4-*`, so
-  check the issue status after every merge. Measure spend from provider-reported usage, never
-  from run output. Tests must not read backend/.env (run pytest from a directory without it,
-  using `uv run --project <backend> pytest --rootdir <backend> <backend>/tests`). CI runs
-  `mypy app`, because `mypy .` has a duplicate-module error. Reasoning tokens count against
-  the output limit. Playwright's `reuseExistingServer` tests whatever already runs on 53073.
+- **Measure the failing check before fixing a reviewer.** Keep raw reviews privately outside
+  the repo (`run-only script` patching `app.grounding.chat_completion`), then re-score any
+  server-side rule change offline on the same reviews for free. Every rule change in #17 was
+  re-scored this way; one round (no prefix allowance on exact quotes) turned 7 good reviews
+  invalid and was reverted before merge. Terra quotes Hebrew source words without their
+  attached prefix ("הספורט" from "והספורט") constantly.
+- **OpenRouter key usage lags calls by up to about a minute,** so a cap checked against
+  `GET /api/v1/key` before each call can overrun by a few calls; keep a margin. Cut-off
+  (`length`) reviews report no cost to the app, so provider metadata undercounts; key usage
+  does not.
+- **A broken `sitecustomize.py` fails open:** Python prints "Error in sitecustomize" and runs
+  uncapped. Preflight every paid run: `python -c "import sitecustomize as s; print(s.CAP)"`.
+- **Do not name helper scripts after stdlib modules** (`inspect.py` broke pydantic imports).
+- **GPT-4.1 (default writer) adds small unsupported details** ("for visitors", "Local
+  residents can access…", meta notes). The full evaluation therefore stops at the garden
+  positives and the English supported scenarios fail; the reviewer is right each time. Read
+  the drafts (log them through the spend hook's `SPEND_CONTENT_LOG`) before blaming a change.
+- **Linear auto-closes issues named in a merged branch or PR.** It closed SP-24/25/26 on
+  merge; check status and only keep Done when every criterion is verified.
+- **The Next server on 53073 is `next dev` from this checkout,** so Playwright and the owner's
+  UI run whatever branch is checked out. The API container does not: it needs a rebuild.
+- Earlier lessons still hold: three separate OpenRouter limits (credits, key limit,
+  workspace lifetime budget — check `effective_budget`); tests must not read backend/.env
+  (scratchpad `testdb.sh` pattern: disposable DB, runtime role, pytest from a directory without
+  `.env`); CI runs `mypy app`; reasoning tokens count against output limits.
 
 ## Open risks and debt
 
-- **FastAPI (127.0.0.1:58073) still accepts cross-site writes, bypassing the proxy guard.**
-  This is unchanged since the last handoff. A `no-cors` POST with a Blob body sends no
-  Content-Type, and FastAPI parses it as JSON. `POST /generation` is paid. CORS only withholds
-  responses. The proxy guard (frontend/src/lib/csrf-guard.ts) also still passes DNS rebinding
-  (no Host allowlist).
-- **The running API container predates #12.** `GET /generation/writer-models` returns 422 there
-  (it falls through to `/generation/{run_id}`), so Create Post on 53073 shows the writer
-  select's error state. Rebuilding (`docker compose up -d --build api worker scheduler`)
-  changes the owner's runtime; ask first.
-- **Live writer choice is unverified.** No draft has been generated by choosing Gemini in
-  Create Post (`writer_model` sent by the UI). The evaluations reached Gemini only as the
-  configured default. This is the last open item on SP-22.
-- **Reviewer coverage flakiness** (lesson above) makes "Check again" and the full evaluation
-  unreliable. Fixing it means changing the reviewer, which is outside SP-22 and not a Linear
-  issue yet.
-- **The 403 workspace-budget error is mislabelled as an authentication failure** in
-  app/generation_provider.py and app/embeddings.py.
-- **Gemini's draft latency** is 9 s on average and up to 23 s for a medium Hebrew draft, before
-  the 6–13 s review. The writer timeout is 40 s per call, so there is headroom, but slow.
-- **Typical tokens come from different sources:** Gemini's from a synthetic prompt, GPT-4.1's
-  from one stored real run. Remeasure both if the writer prompt changes.
-- The evaluation fixture's required-wording check rejects a fair paraphrase ("provides bicycle
-  repairs" for "repairs bicycles").
-- Carried over: GPT-5.6-terra can penalize a draft for omitting an unsupported request.
-  Typical reviewer cost constants come from few reviews. A reviewer can still pair a claim
-  with an unrelated exact quote. The context budget can split a multi-code-point emoji.
-- Stale remote branches remain (`sp-4-*`, `codex/*`, `fix/review-token-budget`,
-  `handoff-*`, `claude/*`). Do not delete them without the owner.
+- **SP-27 (Backlog, needs an owner decision):** about 1 in 7 medium Hebrew reviews hits the
+  4,000-token output limit (`grounding_review_truncated`). A higher limit does not fit the
+  review's smallest stage budget ($0.124). Options: raise `GENERATION_MAX_REQUEST_USD` to
+  ~$0.37, shrink `TRANSLATION_BUDGET_SHARE`, or keep "Check again".
+- **Known v7 limits** (docs/implementation.md): the prefix allowance cannot tell a prefix
+  from a root letter ("לא" after the "מ" of "מלא"); planted reader prompts with no contact
+  detail are neither blocked nor flagged; unlisted top-level domains without a path, 3-3-3
+  phone groupings and phones with 4+ dots are not detected; tech names such as "ASP.NET" are
+  flagged (advisory); הוא/היא outside claims can lose who-does-what.
+- **Cross-language retrieval:** a Hebrew topic puts English documents at ~0.85, beyond the
+  limit; the translation fallback runs only when nothing is found. Always translating would
+  add a writer call per draft.
+- **Topic suggestions sample at most 8 documents** and what fits 2,800 tokens (6 chunks on
+  the owner's KB); a large Knowledge Base is sampled, not covered. No cost line is shown
+  before "Suggest topics" (about $0.003–0.008 a click with GPT-4.1).
+- **The 403 workspace-budget error is still mislabelled as an authentication failure** in
+  app/generation_provider.py and app/embeddings.py (no Linear issue).
+- **SP-5 is Done with its media criterion unchecked**; media belongs to SP-3 (Backlog).
+- Carried over: Gemini latency (9 s mean); typical tokens from different sources; the
+  evaluation fixture's required-wording check rejects a fair paraphrase; stale remote branches
+  (`sp-4-*`, `codex/*`, `handoff-*`, `claude/*`) — do not delete without the owner.
 
-## Verification at delivery (PR #13)
+## Verification at delivery
 
-Backend 444 passed on a disposable migrated DB with the runtime role, run from a directory
-without `.env`; the DB was dropped. Ruff, format and `mypy app` passed. Frontend lint, tsc,
-Prettier and Playwright 47/47 passed. Hosted CI 6/6 passed; merged as 3a95b58 with an
-owner-approved admin bypass and verified on `main` by content. Create Post was checked against
-a local API on the branch with live prices (EN/HE, desktop and 375 px). Paid spend on
-2026-10-28: $0.54 provider-reported, against an approved $0.60 cap.
+Backend 696 passed on a disposable migrated DB with the runtime role, run from a directory
+without `.env` (the DB was dropped); ruff, format and `mypy app` passed. Frontend Prettier,
+lint, tsc and Playwright 63/63 passed. Hosted CI 6/6 on #17, #18 and #19; each was merged with
+an admin bypass under the owner's grant and verified on `main` by content. Reviews:
+`bf-security-reviewer` (three rounds on #17, one on #19) and `bf-qa` (#18, #19); every
+finding was fixed or recorded as a known limit in docs/implementation.md.
+
+Live checks: the v7 reviewer-only cases 34/34; EN/HE injection scenarios clean; the owner's
+previously blocked draft no longer blocked; retrieval replay on the owner's Knowledge Base;
+topic suggestions through the full browser → proxy → API path in Create Post (HE and EN).
+Paid spend for the SP-16 run: about $1.61 of OpenRouter key usage (from $3.447 to $5.055)
+against a self-set $2.00 cap; $4.95 of the $10 workspace budget remains. The first
+measurement step overran its own $0.70 sub-cap by $0.074 (cut-off reviews report no cost).
 
 ## Runtime
 
-API, worker and scheduler containers built 2026-10-27 21:43 (pre-#12). A Next server on 53073
-runs from the main checkout's frontend/. Postgres 55473, Redis 56373. Port 3000 and 8000 belong
-to other projects; never stop them.
+API, worker and scheduler containers rebuilt from `main` (`d2b3e72`) on 2026-10-29; API
+readiness passed and `/generation/configuration` reports `topic_suggestions: true`. Stored
+v6 reviews now ask for a new check (`generation_review_required`) on retry, GET and save.
+The Next server on 53073 is `next dev` from this checkout, now on `main`. Postgres 55473, Redis
+56373. Ports 3000 and 8000 belong to other projects; never stop them.
 
 ## Linear and next task
 
-SP-22 In Progress: all 15 acceptance criteria are checked with evidence (comment on
-2026-10-28). It stays open only for the live check below. SP-16 In Progress (children: SP-22,
-SP-6 Backlog, SP-21 deferred; SP-4 and SP-5 Done). Other open items: SP-15 with SP-1/SP-2 In
-Progress and SP-3 Backlog; SP-17 with SP-8/SP-9/SP-10 In Progress; SP-18 with SP-11/SP-13 In
-Progress.
+SP-16 In Progress: SP-4, SP-5, SP-6, SP-22, SP-24, SP-25, SP-26 Done; SP-27 Backlog (owner
+decision above); SP-21 Backlog (deferred web search). Other epics: SP-15 (SP-1/SP-2 In
+Progress, SP-3 Backlog), SP-17 (SP-8/SP-9/SP-10 In Progress), SP-18 (SP-11/SP-13 In Progress).
 
-**Recommended next: close SP-22.** With the owner's OK, rebuild the API containers (or run a
-local API from `main`), generate one Hebrew draft in Create Post with Gemini 3.8 Flash
-selected (about $0.035, needs authorization), confirm the run stores
-`writer_model: google/gemini-3.8-flash` and the cost line is plausible, record it on SP-22,
-then mark it Done. SP-16 then has only SP-6 and the deferred SP-21 left.
-
-After that: **block cross-site writes directly to FastAPI** (security, not a Linear issue yet;
-ask before creating one). Add a Starlette middleware in backend/app: writes with a body need
-content type exactly `application/json` (415); writes with an `Origin` outside `cors_origins`, or
-a `Sec-Fetch-Site` other than `same-origin`/`none`, get 403. The Next.js proxy sends neither
-header and must keep working. Reproduce first with a hermetic `TestClient` test. Then add a
-Host allowlist to csrf-guard.ts. Next existing task: SP-6 (topic suggestions from the
-Knowledge Base, Backlog under SP-16).
+**Recommended next:** the owner's SP-27 decision (one answer unblocks a small change). Then
+the Knowledge Base file-upload slice under SP-17 (SP-10 UI, SP-9 ingestion and private
+storage, SP-8 extraction): UTF-8 text files first, then PDFs. It needs two owner decisions
+before code: the PDF library (pypdf vs PyMuPDF) and where private source files live (local
+disk vs S3-compatible storage). Remember SP-23's limit: multipart uploads need an explicit
+exception in `app/write_guard.py`.
