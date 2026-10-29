@@ -20,6 +20,7 @@ GENERATION = json.dumps({"request_key": str(uuid4()), "topic": "Volunteer evenin
 WRITES = [
     ("POST", "/generation", GENERATION),
     ("POST", f"/generation/{uuid4()}/review", b"{}"),
+    ("POST", "/generation/topic-suggestions", b"{}"),
     ("POST", f"/posts/{uuid4()}/review", b"{}"),
     ("POST", EMBED, None),
     ("POST", f"/knowledge/{DOCUMENT}/retry", None),

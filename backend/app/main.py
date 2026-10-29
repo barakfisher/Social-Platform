@@ -17,6 +17,7 @@ from app.generation import router as generation_router
 from app.knowledge import router as knowledge_router
 from app.posts import router as posts_router
 from app.recheck import router as recheck_router
+from app.topic_suggestions import router as topic_suggestions_router
 from app.write_guard import write_rejection
 
 app = FastAPI(title="Social Platform", version="0.1.0")
@@ -25,6 +26,7 @@ app.include_router(knowledge_router)
 app.include_router(generation_router)
 app.include_router(posts_router)
 app.include_router(recheck_router)
+app.include_router(topic_suggestions_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,

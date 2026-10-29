@@ -868,3 +868,64 @@ showed a second document ranked 21st or lower was still missed, so the cap moved
 
 Limits: English two-concept topics still find only the English article, because the other
 documents are Hebrew and beyond the limit (the cross-language gap above).
+
+## SP-6: topic suggestions from the Knowledge Base — 2026-10-29
+
+Create Post gets "Suggest topics": up to three grounded ideas for the chosen platform,
+language and goal. Choosing one fills in the topic. The draft written from it still goes
+through retrieval and the source check, because a suggestion is an idea, not a post.
+
+Choice:
+- `POST /generation/topic-suggestions` (`app/topic_suggestions.py`) with platform,
+  language, optional goal, count 1–5 (default 3) and an optional writer from the allowlist.
+  Stateless: nothing is stored.
+- Representative sampling, no clustering: the 8 most recently updated Ready documents of the
+  workspace, up to 3 chunks spread evenly through each (start, middle, end), interleaved so
+  every document is represented before any gets a second chunk. Each excerpt gets an equal
+  share of the 2,800-token context budget (cut at a word), so long English chunks cannot
+  crowd later documents out: QA measured that whole 800-token chunks let only 4 of 8 English
+  documents through. No embedding call.
+- One call to the chosen writer (default GPT-4.1) with a strict JSON schema. Sources go in
+  as data under aliases (S1…); the system prompt says all sources, brand and preferences are
+  untrusted data.
+- Server checks, which drop an idea rather than repair it: it must cite at least one
+  sampled source and only sampled sources; topic and rationale must be in the requested
+  language (a Hebrew topic needs 30% Hebrew letters, so it may name English terms); a
+  near-duplicate of an earlier idea is dropped (80% shared words, or a topic of three or more
+  words inside another of similar length; words match across one Hebrew prefix letter);
+  invisible direction, zero-width and tag characters drop the idea. Each kept idea returns the titles and IDs of its sources.
+- An empty Knowledge Base is 409 `insufficient_context` with no model call. No surviving
+  idea is 200 with `reason: "no_grounded_suggestions"`. Provider failures use the generation
+  error codes (503, or 409 for the prompt limit); an unlisted writer is 422.
+- The UI shows the button only when `/generation/configuration` reports
+  `topic_suggestions`, disables it until the Knowledge Base is ready, and gives EN/HE empty,
+  error and spending-limit messages that keep the user's own topic.
+
+Live (owner's Knowledge Base, GPT-4.1): three distinct, cited ideas each in Hebrew ($0.0078)
+and English ($0.0032), drawn from all four documents.
+
+Rejected alternatives:
+- Vector clustering for "representative" material: needs every chunk vector and a cluster
+  count; the issue makes it optional, and even sampling with an equal share per excerpt
+  already covers up to 8 documents.
+- Embedding the goal and retrieving by it: one more paid call per click, and with no goal
+  there is nothing to retrieve by.
+- Running the source check on each suggestion: about $0.04 per idea with Terra; the draft
+  is checked anyway.
+- Storing suggestions: nothing reads them later, and they would be stale once sources
+  change.
+
+Security review (`bf-security-reviewer`): no blocking findings. Applied: a context too small
+for any source is 409 with no model call; ideas with invisible direction overrides or tag
+characters are dropped (Hebrew LRM/RLM are kept); sampling loads no embeddings; the UI labels
+sources "Sources it cites", because the server checks that a cited source was sampled, not
+that it supports the idea; an unprofiled writer is 422 as on the draft route; the route is in
+the write-guard test list.
+
+QA (`bf-qa`) also found stale ideas after a language change (now cleared when platform,
+language, goal or writer change) and generic "try again" text for errors a retry cannot fix
+(now specific EN/HE messages).
+
+Limits: ideas come from at most 8 documents, each excerpt a share of the budget (about 100
+tokens with 8 documents × 3 chunks), so a large Knowledge Base is sampled, not covered. The rationale
+is the model's own short text; it is shown as an idea, never as a fact about the brand.

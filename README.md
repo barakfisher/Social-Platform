@@ -12,7 +12,7 @@ Single-user, single-brand content studio. Phase 1 creates drafts for LinkedIn an
 - Celery/Redis worker with persistent database job status and idempotent probe task.
 - Locked dependencies, lint/type/build checks, browser navigation and PostgreSQL integration tests, GitHub Actions workflow.
 
-Brand DNA is functional: load/save your profile and edit six fields in English or Hebrew with validation and save feedback. Knowledge Base supports pasted-text ingestion, processing, preview, retry, and deletion. Create Post generates editable English/Hebrew drafts with source references and saves them to searchable History. Each generated draft now passes a separate sentence-by-sentence source review before display. Check drafts against their sources; AI review is not a factual guarantee. Topic suggestions and media are not yet implemented.
+Brand DNA is functional: load/save your profile and edit six fields in English or Hebrew with validation and save feedback. Knowledge Base supports pasted-text ingestion, processing, preview, retry, and deletion. Create Post generates editable English/Hebrew drafts with source references and saves them to searchable History. Each generated draft gets a separate sentence-by-sentence source check, shown as "Points to check" next to the draft. Check drafts against their sources; AI review is not a factual guarantee. "Suggest topics" proposes grounded ideas from the Knowledge Base. Media is not yet implemented.
 
 ## Start locally
 
