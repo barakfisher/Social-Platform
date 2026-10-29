@@ -163,6 +163,58 @@ def test_technical_failures_leave_the_draft_unchecked_with_a_reason(error, retry
     assert result["retryable"] is retryable and result["findings"] == []
 
 
+def two_sentences(first, second, indexes=(0, 1)):
+    return json.dumps(
+        {
+            "issues": [],
+            "blocking": [],
+            "sentences": [
+                {"index": indexes[0], "claims": [first]},
+                {"index": indexes[1], "claims": [second]},
+            ],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "raw,check,sentence",
+    [
+        ('{"issues": [], "blocking": []}', "schema", None),
+        # The reviewer paraphrased the second sentence's claim text.
+        (two_sentences(quoted(SOURCE), claim("Come visit us", kind="creative")), "coverage", 1),
+        (
+            two_sentences(quoted(SOURCE), claim("Come and visit", kind="creative"), (0, 2)),
+            "coverage",
+            1,
+        ),
+        (
+            two_sentences(
+                quoted(SOURCE, quote="Rosemary grows in the garden."),
+                claim("Come and visit", kind="creative"),
+            ),
+            "evidence",
+            0,
+        ),
+    ],
+    ids=["schema", "coverage-claims", "coverage-indexes", "evidence"],
+)
+def test_unverifiable_review_records_the_failed_check_and_sentence(raw, check, sentence):
+    provider = {"model": "openai/gpt-5.6-terra", "usage": {"cost_usd": 0.02}, "attempts": 1}
+    with patch("app.grounding.chat_completion", return_value=(raw, provider)):
+        result = check_draft(
+            SOURCE + " Come and visit.", [{"chunk_id": "c1", "content": SOURCE}], {}, {}
+        )
+    assert result["status"] == "unchecked" and result["reason"] == "grounding_review_invalid"
+    # Only the check and the sentence index are added: no model-written text is stored.
+    assert result["failure"] == {**provider, "failed_check": check, "failed_sentence": sentence}
+
+
+def test_verifiable_two_sentence_review_is_checked():
+    raw = two_sentences(quoted(SOURCE), claim("Come and visit", kind="creative"))
+    result, _ = review(SOURCE + " Come and visit.", raw)
+    assert result["status"] == "checked" and result["findings"] == []
+
+
 @pytest.mark.parametrize("issues", [[], ["wrong_language"]])
 def test_wrong_language_draft_is_still_checked_for_steering(issues):
     content = "רוזמרין גדל."
