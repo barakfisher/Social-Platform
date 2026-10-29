@@ -817,3 +817,54 @@ limit (`grounding_review_truncated`). A higher limit does not fit the review's s
 budget ($0.124: the $0.31 request cap, minus the 20% translation share, halved; Terra's worst
 case at 4,000 tokens is $0.1205). It needs an owner decision on the request cap or the
 translation share.
+
+## SP-25: retrieval spreads across documents — 2026-10-29
+
+Problem: the live Hebrew draft "ההבדל בין מנטורינג לאימון אישי" discussed coaching only.
+Measured read-only (verification/generation-grounding.md, "SP-25"): the writer received 5
+chunks, all from the coaching article; `result.sources` lists only the 2 it cited. The
+mentoring article's best chunk was within the 0.65 distance limit (0.577) but ranked 7th,
+behind more coaching chunks. A second cause: English chunks are about 750 o200k tokens, so
+the 2,800-token context budget holds about 3.7, and a 5th-ranked chunk from another document
+is the one cut.
+
+Choice:
+- `search_context(..., per_document=GENERATION_CHUNKS_PER_DOCUMENT)` (default 3) ranks each
+  chunk within its own document in SQL (`row_number()` per document) and takes the nearest
+  chunks ranked at most 3 in their document, within the distance limit. There is no
+  candidate-pool ceiling: a second document is found behind any number of nearer chunks of
+  one long document. When that selection runs short (no other document within the limit), it
+  is filled up from the plain nearest chunks, so a one-document Knowledge Base still gets 5,
+  the same ones (`spread_across_documents`).
+- Context order puts each document's best chunk first, then the rest, each by distance, so a
+  tight budget trims a document's extra chunks before it drops another document.
+- Count, distance limit, budget and the empty state ("no sources", never unrelated chunks)
+  are unchanged. The Knowledge Base search endpoint keeps plain nearest-first results.
+
+Replay on the owner's Knowledge Base: both Hebrew two-concept topics now reach the second
+document (mentoring at 0.577 and 0.571). The Hebrew single-concept topic keeps exactly the
+same chunks, reordered. The English "personal coaching" topic now also receives the Hebrew
+coaching chunk the budget used to drop.
+
+Rejected alternatives:
+- Raising the count or the distance limit: more weak chunks and prompt cost, and one large
+  document still fills the extra slots.
+- Lowering the cap to 2: more documents, but a single-concept topic loses its third-best
+  chunk to weaker documents more often.
+- Clustering or maximal-marginal-relevance re-ranking: needs every candidate's vector and a
+  tuning weight; the per-document cap fixes the measured miss with one setting.
+- Translating every topic (cross-language retrieval): a Hebrew topic puts the English
+  Mentorship article at about 0.85, beyond the limit, and the translation fallback runs only
+  when nothing is found. Translating always adds a writer call and latency to every draft;
+  left as a possible follow-up, not part of this fix.
+
+Trade-off, by design: for a single-concept topic, a weaker document inside the distance limit
+now takes the main document's slots beyond the cap (and its best chunk comes second). In
+the replay this kept the same chunks for "מהו מנטורינג"; with English chunks and the
+2,800-token budget, the main document can lose about one chunk of context. A test pins it.
+
+The first version drew 4× the count of candidates and capped them in Python; QA (`bf-qa`)
+showed a second document ranked 21st or lower was still missed, so the cap moved into SQL.
+
+Limits: English two-concept topics still find only the English article, because the other
+documents are Hebrew and beyond the limit (the cross-language gap above).

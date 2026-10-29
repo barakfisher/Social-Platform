@@ -849,3 +849,45 @@ check flags any detail the owner did not give. Re-scored offline: all 54 capture
 measurement and v7 reviews, and 32 of the final 34 reviewer-only answers, verify with the same
 outcomes; the other 2 were answers to the owner-CTA fixtures before their offer text gained a
 handle, and the run with the current text re-scores clean. No paid calls for this step.
+
+## SP-25: why retrieval missed the mentoring article — 2026-10-29
+
+Read-only. Six query embeddings (well under $0.001); every Ready chunk of the local workspace
+ranked by cosine distance inside a READ ONLY transaction; `search_context` and
+`bounded_context` replayed with the current settings (5 chunks, 0.65, 2,800 tokens).
+
+| Topic | Before: documents reaching the writer | After (`per_document` 3) | Best rank (distance) of the missing document |
+| --- | --- | --- | --- |
+| HE ההבדל בין מנטורינג לאימון אישי | coaching ×5 | coaching ×3, mentoring, leadership | mentoring 7 (0.577) |
+| HE הקשר בין מנהיגות למנטורינג | leadership ×5 | leadership ×3, mentoring ×2 | mentoring 12 (0.571) |
+| HE מהו מנטורינג (one concept) | mentoring ×2, leadership ×3 | same chunks, each document's best first | — |
+| EN What is personal coaching (one concept) | Mentorship ×4 (5th, Hebrew coaching at 0.606, cut by the budget) | Mentorship ×3, Hebrew coaching | coaching 5 (0.606) |
+| EN The difference between mentoring and coaching | Mentorship ×4 | unchanged | coaching HE 15 (0.718, beyond the limit) |
+| EN How leadership relates to mentoring | Mentorship ×4 | unchanged | leadership HE 15 (0.822, beyond the limit) |
+
+Per chunk, for the Hebrew mentoring-vs-coaching topic before the change (rank, distance,
+document, o200k tokens, reached the writer):
+
+| Rank | Distance | Document | Tokens | Before | After |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 0.415 | coaching | 286 | yes | yes |
+| 2 | 0.446 | coaching | 251 | yes | yes |
+| 3 | 0.499 | coaching | 276 | yes | yes |
+| 4 | 0.513 | coaching | 196 | yes | no (cap) |
+| 5 | 0.514 | coaching | 309 | yes | no (cap) |
+| 6 | 0.562 | coaching | 342 | no (count) | no (cap) |
+| 7 | 0.577 | mentoring | 287 | no (count) | yes |
+| 11 | 0.596 | leadership | — | no (count) | yes |
+
+Method: a run-only script outside the repo embedded each topic once, ranked every chunk
+with `cosine_distance` and replayed `search_context` and `bounded_context`; the "after" column
+is the merged implementation (SQL per-document rank), replayed the same way.
+
+The stored run b861a7ec listed 2 sources because `result.sources` keeps only cited chunks;
+the writer had received 5.
+
+Supported scenarios, live after the change (writer GPT-4.1, reviewer Terra v7, $0.0069
+key usage): both Hebrew supported scenarios clean; both English ones flagged for writer
+additions ("for visitors" plus a meta note; "Local residents can access these services"),
+the same failures as the v7 run before this change. Each writer received its scenario's
+single source, as before.

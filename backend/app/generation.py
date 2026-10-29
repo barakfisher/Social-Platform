@@ -318,6 +318,7 @@ def generate_locked(payload: GenerateInput):
                 workspace_id=LOCAL_WORKSPACE_ID,
                 limit=settings.generation_retrieval_count,
                 max_distance=settings.generation_max_distance,
+                per_document=settings.generation_chunks_per_document,
             )
         stage_budget = settings.generation_max_request_usd / 2
         if not sources:
@@ -337,6 +338,7 @@ def generate_locked(payload: GenerateInput):
                         workspace_id=LOCAL_WORKSPACE_ID,
                         limit=settings.generation_retrieval_count,
                         max_distance=settings.generation_max_distance,
+                        per_document=settings.generation_chunks_per_document,
                     )
         sources = bounded_context(sources, settings.generation_context_budget)
         if not sources:
