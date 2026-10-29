@@ -724,9 +724,10 @@ Choice (`source-review-v7`):
   They are also subject pronouns, but a pronoun alone states no fact, and the verb and object
   around it stay inside claims. Negation after a copula still fails ("היעד הוא לא רווח"; test).
 - Coverage compares tokens, not substrings (`claim_span`). Claim words, numbers (one token
-  with their sign and inner separators: "-20", "1-5", "050-1234567") and fact signs (currency,
-  math, %, #, @, &, /, °, ❌ ✅ ⭐, flags) must equal whole draft tokens in order. Zero-width and
-  other format characters count as part of a word, so they cannot split one. A claim word may lack the
+  with their sign, inner separators and unit letters: "-20", "1-5", "050-1234567", "2a") and
+  fact signs (currency, math, %, #, @, &, /, °, ❌ ✅ ⭐ 🆓 and similar, flags) must equal whole
+  draft tokens in order. Invisible characters (zero-width, bidi, variation selectors) between
+  letters stay inside the word, so they cannot split one; elsewhere they are skippable. A claim word may lack the
   draft word's one-letter Hebrew prefix. Only connectives and plain punctuation may be passed
   over, before a claim or inside it ("opens Tuesdays" for "opens on Tuesdays", a skipped
   "גם"). That equals splitting the claim at those words, which coverage already allowed.
@@ -738,17 +739,21 @@ Choice (`source-review-v7`):
 - `matched_quote`: a quote may end with one punctuation mark the source lacks. The excerpt
   must then end where a source word ends, before whitespace or the end of the source, so
   "starts at 1." never matches "starts at 10" and "free." never replaces "free?". Every
-  excerpt, exact or not, must start and end on a source word boundary ("start at 1" no
-  longer matches "start at 10"; "מנטור" no longer matches inside "מנטורים"), except for one
-  attached Hebrew prefix letter before it. Every quote needs a letter or digit; v6 accepted
-  "." as an exact quote.
+  excerpt, exact or not, must start and end on a source token boundary, numbers included
+  ("start at 1" no longer matches "start at 10", "500" no longer "1,500", "20%" no longer
+  "-20%", "מנטור" no longer "מנטורים"). An exact excerpt may start after one attached Hebrew
+  prefix letter in the source, which Terra does constantly ("הספורט" from "והספורט"). Every
+  quote needs a letter or digit; v6 accepted "." as an exact quote. A quote found more than
+  `MAX_QUOTE_OCCURRENCES` times is not verified, and quotes are matched only after coverage
+  passes, so tiny steered quotes against a long planted source stay cheap.
 - Prompt (SP-26): `copied_instructions` means instructions aimed at the AI (ignore rules,
   reveal instructions, change the output, add content). A reader-directed call to action the
   owner wrote in offer details is the owner's intent; repeating it never blocks.
-- New deterministic finding `unlisted_contact_detail` (SP-26). Any link (with a scheme, www.
-  or a common top-level domain), email, @handle (also "ל@x") or phone number (9+ digits;
-  dates, times, grouped numbers and dotted versions excluded) in the draft that is not in the
-  offer details, the chosen CTA or the brand profile becomes a point to check. Links compare
+- New deterministic finding `unlisted_contact_detail` (SP-26). Any link (with a scheme, www.,
+  a path, or a common top-level domain), email, @handle (also "ל@x") or phone number (9+
+  digits, also after "Tel:"; dates, times, year lists, versions and grouped numbers excluded)
+  in the draft that is not in the offer details, the chosen CTA or the brand profile (except
+  its prohibited claims) becomes a point to check. Links compare
   by host and path, phones by their last nine digits. It does not depend on the reviewer or on
   which sources the writer cited: a planted source can be used without being cited, and a
   writer can invent a contact detail. Advisory like every other finding; to keep a detail
@@ -769,8 +774,16 @@ length. Its re-check of the fixes found more, also fixed: a dropped minus or re-
 number, an exact quote ending inside a source number, a contact check that only saw cited
 sources and missed bare domains, prefixed handles and reformatted details, a quadratic email
 pattern on planted text, and dates with times counted as phones. Known limits: planted reader
-prompts with no contact detail ("comment your email below") are neither blocked nor flagged,
-and a dropped "כ" ("about") makes the checked claim stricter, not looser. Accepted with it: הוא/היא outside claims can
+prompts with no contact detail ("comment your email below") are neither blocked nor flagged;
+a dropped "כ" ("about") makes the checked claim stricter, not looser. A third pass found
+quote boundaries ignoring number separators, a bare domain ending a sentence going
+undetected, more evasion formats and false alarms, number-with-letter tokens and missing
+invisible characters; all fixed. Further known limits: the prefix allowance cannot tell a
+prefix from a root letter ("לא" after the "מ" of "מלא"), unlisted top-level domains without
+a path ("cedar.xyz" is listed, "cedar.berlin" is not), 3-3-3 phone groupings and phones with
+4+ dots are not detected, and tech names on listed domains ("ASP.NET") or third-party
+@mentions are flagged (advisory). Re-scored after each round: all captured reviews keep
+their outcomes. Accepted with it: הוא/היא outside claims can
 lose who-does-what in a sentence such as "היא מנהלת, הוא מתנדב"; the referents are usually
 claimed elsewhere, and the verbs stay inside claims.
 

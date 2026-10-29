@@ -567,6 +567,13 @@ def contact_review(
         ("Join on t.me/cedar today.", "t.me/cedar"),
         ("שלחו הודעה ל@cedar_signup עוד היום.", "@cedar_signup"),
         ("Call +972 50 123 4567 to join.", "+972 50 123 4567"),
+        ("Visit cedar.example.", "cedar.example"),
+        ("פרטים באתר cedar.co.il.", "cedar.co.il"),
+        ("All links: linktr.ee/cedar today.", "linktr.ee/cedar"),
+        ("Sign up at forms.gle/abc today.", "forms.gle/abc"),
+        ("פרטים ב-cedar.co.il היום.", "cedar.co.il"),
+        ("Tel:050-1234567 for details.", "050-1234567"),
+        ("Call 050.123.4567 today.", "050.123.4567"),
     ],
     ids=[
         "handle",
@@ -579,6 +586,13 @@ def contact_review(
         "telegram",
         "he-prefixed-handle",
         "intl-phone",
+        "domain-ending-sentence",
+        "he-domain-ending-sentence",
+        "path-unlisted-tld",
+        "google-forms",
+        "he-hyphen-prefixed-domain",
+        "phone-after-colon",
+        "dotted-phone",
     ],
 )
 def test_contact_detail_the_owner_did_not_give_is_a_finding(draft: str, detail: str) -> None:
@@ -606,6 +620,21 @@ def test_owner_contact_details_are_not_findings(draft, offer, cta, brand) -> Non
     assert [f["code"] for f in result["findings"]] == []
 
 
+def test_a_detail_the_brand_prohibits_is_still_a_finding() -> None:
+    brand = {"name": "Cedar", "prohibited_claims": "Never publish 050-1234567"}
+    result = contact_review("Call 050-1234567 to join.", brand=brand)
+    assert [f["code"] for f in result["findings"]] == ["unlisted_contact_detail"]
+
+
+def test_many_tiny_quotes_against_a_long_source_stay_bounded() -> None:
+    # A steered review citing tiny quotes stops looking after MAX_QUOTE_OCCURRENCES.
+    from app.grounding import MAX_QUOTE_OCCURRENCES
+
+    source = "aa" * 20000
+    assert matched_quote("a", source) is None
+    assert source.count("a") > MAX_QUOTE_OCCURRENCES
+
+
 @pytest.mark.parametrize(
     "draft",
     [
@@ -616,6 +645,8 @@ def test_owner_contact_details_are_not_findings(draft, offer, cta, brand) -> Non
         "Funding reached 125 000 000 shekels.",
         "Version 10.0.19045.2364 is out.",
         "Read the report.pdf and Node.js notes.",
+        "We ran in 2019 2020 2021 and more.",
+        "Open 2026-12-01 - 2026-12-15 only.",
     ],
 )
 def test_dates_numbers_and_file_names_are_not_contact_details(draft: str) -> None:
@@ -636,8 +667,20 @@ def test_contact_detection_stays_fast_on_long_planted_runs() -> None:
         ("Sessions last 1-5 hours.", ["Sessions last 1.5 hours"]),
         ("Parking ❌.", ["Parking"]),
         ("The treatment is in\u200beffective.", ["The treatment is", "effective"]),
+        ("The treatment is in\ufe0feffective.", ["The treatment is", "effective"]),
+        ("Unit 2a opens.", ["Unit 2 opens"]),
+        ("Free entry 🆓.", ["Free entry"]),
     ],
-    ids=["minus", "negative-temperature", "range-vs-decimal", "fact-emoji", "zero-width"],
+    ids=[
+        "minus",
+        "negative-temperature",
+        "range-vs-decimal",
+        "fact-emoji",
+        "zero-width",
+        "variation-selector",
+        "number-with-letter",
+        "free-emoji",
+    ],
 )
 def test_number_signs_separators_and_fact_emoji_must_match(sentence: str, texts) -> None:
     assert not claims_cover(sentence, claims(*texts))
@@ -649,8 +692,18 @@ def test_number_signs_separators_and_fact_emoji_must_match(sentence: str, texts)
         ("הם נפגשים ב-1948 בעיר.", ["הם נפגשים ב-1948 בעיר"]),
         ("Call 050-1234567 today.", ["Call 050-1234567", "today"]),
         ("Join us 🌿 today.", ["Join us", "today"]),
+        ("Join us ❤️ today.", ["Join us", "today"]),
+        ("שלום \u200f עולם.", ["שלום", "עולם"]),
+        ("Unit 2a opens.", ["Unit 2a opens"]),
     ],
-    ids=["he-hyphen-year", "phone-in-claim", "plain-emoji-outside"],
+    ids=[
+        "he-hyphen-year",
+        "phone-in-claim",
+        "plain-emoji-outside",
+        "emoji-with-selector",
+        "stray-bidi-mark",
+        "number-with-letter",
+    ],
 )
 def test_numbers_and_plain_emoji_still_cover(sentence: str, texts) -> None:
     assert claims_cover(sentence, claims(*texts))
@@ -726,6 +779,11 @@ def test_long_claims_are_matched_in_one_pass() -> None:
         ("Meetings start at 1", "Meetings start at 10 in the hall."),
         ("מנטור", "מנטורים מלווים"),
         ("rosemary", "We grow xrosemary."),
+        ("500 members", "We have 1,500 members."),
+        ("Admission costs 1", "Admission costs 1,500 shekels."),
+        ("5 million", "Raised 1.5 million."),
+        ("20%", "Sales changed by -20%."),
+        ("Entry costs 5.", "Entry costs 5.50 today."),
     ],
     ids=[
         "cut-number",
@@ -739,6 +797,11 @@ def test_long_claims_are_matched_in_one_pass() -> None:
         "exact-cut-number",
         "exact-he-stem",
         "exact-inside-word",
+        "inside-thousands",
+        "start-of-thousands",
+        "inside-decimal",
+        "dropped-minus",
+        "mark-inside-decimal",
     ],
 )
 def test_quote_tolerances_keep_word_boundaries(quote: str, source: str):
@@ -747,3 +810,9 @@ def test_quote_tolerances_keep_word_boundaries(quote: str, source: str):
         assert matched_quote(quote, source) == quote
         return
     assert matched_quote(quote, source) is None
+
+
+def test_exact_quote_may_start_after_one_attached_hebrew_prefix() -> None:
+    # Live Terra quotes "הספורט" from the source's "והספורט" and "נחזור" from "ונחזור".
+    assert matched_quote("הספורט", "בעסקים, בפוליטיקה והספורט.") == "הספורט"
+    assert matched_quote("ספורט", "בעסקים, בפוליטיקה והספורט.") is None

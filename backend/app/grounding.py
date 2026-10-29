@@ -5,6 +5,7 @@ Only signs that source text steered the writer (copied instructions, revealed sy
 instructions) block a draft, because then the review of that draft cannot be trusted either.
 """
 
+import functools
 import json
 import re
 import unicodedata
@@ -138,21 +139,25 @@ RETRYABLE_FAILURES = frozenset(
 HEBREW_PREFIXES = frozenset("והבלמשכ")
 # A final mark a reviewer may add to an excerpt cut from the middle of a source sentence.
 TRAILING_MARKS = frozenset(".,;:!?")
-# Word characters: letters and digits, Hebrew vowel points (combining marks, not the Hebrew
-# punctuation in the same block) and invisible format characters, so a zero-width space
-# cannot split "in​effective" into a connective and a claim word.
-LETTER = (
-    r"(?:[^\W_]|[֑-ׇֽֿׁׂׅׄ"
-    r"­​-‏‪-‮⁠-⁤﻿])"
+# Word characters: letters and digits, and Hebrew vowel points (combining marks, not the
+# Hebrew punctuation in the same block).
+LETTER = r"(?:[^\W_]|[\u0591-\u05bd\u05bf\u05c1\u05c2\u05c4\u05c5\u05c7])"
+# Invisible characters (zero-width, bidi, variation selectors, tags). Between letters they
+# stay inside the word, so "in\u200beffective" cannot split into a connective and a claim
+# word; elsewhere they are plain, skippable signs.
+IGNORABLE = (
+    r"[\u00ad\u034f\u061c\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f"
+    r"\ufe00-\ufe0f\ufeff\U000e0000-\U000e0fff]"
 )
-# A number with its sign and inner separators is one token ("-20", "1-5", "1.5", "050-1234567"),
-# so a claim cannot drop a minus or re-punctuate a number. Not after a letter: "ב-1948".
-NUMBER = r"(?<![^\W_])-?\d+(?:[.,:/-]\d+)*"
+# A number with its sign, inner separators and unit letters is one token ("-20", "1-5",
+# "1.5", "050-1234567", "2a", "10km"), so a claim cannot drop a minus, re-punctuate a number
+# or leave its unit outside. Not after a letter: "ב-1948", "COVID-19".
+NUMBER = rf"(?<![^\W_])-?\d+(?:[.,:/-]\d+)*{LETTER}*"
 # A word, keeping inner apostrophes and gershayim ("don't", "ג'ון", "צה״ל") in it.
-WORD = rf"{LETTER}+(?:['’׳״\"]{LETTER}+)*"
+WORD = rf"{LETTER}+(?:(?:['’׳״\"]|{IGNORABLE}+){LETTER}+)*"
 # Signs that change a fact ("€5", "≥ 10", "50%", "Parking ❌"): they must sit inside a claim
 # and match the draft exactly. Other punctuation and symbols (commas, dashes, emoji) may not.
-FACT_SIGNS = frozenset("%‰#@&/°❌✅✔✖✗✓🚫⛔⭐★☆")
+FACT_SIGNS = frozenset("%‰#@&/°❌❎✅☑✔✖✗✘✓🚫⛔🚭🔞♿🆓🔟⭐★☆")
 
 
 def has_content(text: str) -> bool:
@@ -166,29 +171,42 @@ def without_prefix(text: str) -> str | None:
     return None
 
 
-def word_char(text: str, index: int) -> bool:
-    return 0 <= index < len(text) and re.fullmatch(LETTER, text[index]) is not None
+# A steered review could cite many tiny quotes against a long planted source; past this many
+# occurrences a quote is not looked at further and does not verify.
+MAX_QUOTE_OCCURRENCES = 200
 
 
-def at_word_bounds(text: str, source: str, start: int, prefix_ok: bool) -> bool:
-    """The excerpt source[start:start+len(text)] neither starts nor ends inside a source word.
-
-    With prefix_ok, one attached Hebrew prefix letter may come before it ("מרווה" in "ומרווה").
-    """
-    end = start + len(text)
-    if word_char(text, len(text) - 1) and word_char(source, end):
-        return False
-    if not word_char(text, 0) or not word_char(source, start - 1):
-        return True
-    return prefix_ok and source[start - 1] in HEBREW_PREFIXES and not word_char(source, start - 2)
+@functools.lru_cache(maxsize=64)
+def token_bounds(source: str) -> tuple[frozenset[int], frozenset[int]]:
+    """Positions strictly inside a source token, and where an excerpt may start after one
+    attached Hebrew prefix letter (the reviewer quoting "הספורט" from "והספורט")."""
+    tokens = split_tokens(source)
+    inside = frozenset(p for _, start, end in tokens for p in range(start + 1, end))
+    after_prefix = frozenset(
+        start + 1 for token, start, _ in tokens if without_prefix(token) is not None
+    )
+    return inside, after_prefix
 
 
 def found_as_excerpt(text: str, source: str, *, prefix_ok: bool, before_space: bool) -> bool:
+    """The text occurs in the source starting and ending on token boundaries.
+
+    So "500" never matches inside "1,500", "20%" inside "-20%" or "rosemary" inside
+    "xrosemary". With prefix_ok, one attached Hebrew prefix letter may come before the
+    excerpt. It cannot tell a prefix from a root letter, so "לא" still matches after the "מ"
+    of "מלא" (a known limit). With before_space, the excerpt must also end before whitespace
+    or the end of the source.
+    """
+    inside, after_prefix = token_bounds(source)
     start = source.find(text)
-    while start >= 0:
+    for _ in range(MAX_QUOTE_OCCURRENCES):
+        if start < 0:
+            return False
         end = start + len(text)
-        if at_word_bounds(text, source, start, prefix_ok) and (
-            not before_space or end == len(source) or source[end].isspace()
+        if (
+            (start not in inside or (prefix_ok and start in after_prefix))
+            and end not in inside
+            and (not before_space or end == len(source) or source[end].isspace())
         ):
             return True
         start = source.find(text, start + 1)
@@ -198,13 +216,13 @@ def found_as_excerpt(text: str, source: str, *, prefix_ok: bool, before_space: b
 def matched_quote(quote: str, source: str) -> str | None:
     """The source text a quote verifies against, or None.
 
-    Exact substrings with a letter or digit in them that start and end on source word
-    boundaries ("start at 1" never matches "start at 10"). One attached Hebrew prefix letter
-    may precede the excerpt in the source. Two tolerances drop text and so cannot add a
-    fact: one final punctuation mark the source lacks (the excerpt must then end before
+    Exact substrings with a letter or digit in them that start and end on source token
+    boundaries, or start after one attached Hebrew prefix letter in the source ("start at 1"
+    never matches "start at 10", "500" never "1,500"). Two tolerances drop text and so cannot
+    add a fact: one final punctuation mark the source lacks (the excerpt must then end before
     whitespace or the end of the source, so "free." never replaces "free?"), and one leading
-    Hebrew prefix letter on the quote (the rest must start a source word). The stored excerpt
-    is the verbatim source text.
+    Hebrew prefix letter on the quote ("שנהג" for the source's "נהג"; the rest must then start
+    a source word). The stored excerpt is the verbatim source text.
     """
     trimmed = quote[:-1] if quote[-1] in TRAILING_MARKS else None
     for candidate, before_space in ((quote, False), (trimmed, True)):
@@ -220,20 +238,28 @@ def matched_quote(quote: str, source: str) -> str | None:
     return None
 
 
-# Links (with a scheme, www. or a common top-level domain), emails, @handles (also after an
-# attached Hebrew prefix, "ל@x") and phone numbers. Possessive quantifiers keep matching
-# linear on long runs of planted text.
+# Links (with a scheme, www., a path, or a common top-level domain), emails, @handles (also
+# after an attached Hebrew prefix, "ל@x") and phone numbers (also after "Tel:"). Possessive
+# label patterns and start-limiting lookbehinds keep matching linear on long planted runs.
+TOP_LEVEL_DOMAINS = (
+    "com|org|net|io|co|il|me|ly|ai|app|dev|info|biz|edu|gov|shop|link|example|uk|au|de|fr|eu|"
+    "us|ca|in|xyz|site|online|store|tv|be|gl|ee|gle|to|so"
+)
 CONTACT_DETAIL = re.compile(
     r"(?P<link>(?:https?://|www\.)[^\s<>\"]++"
-    r"|(?<![\w.@-])(?:[a-z0-9-]++\.)++(?:com|org|net|io|co|il|me|ly|ai|app|dev|info|biz"
-    r"|edu|gov|shop|link|example)(?![\w-])(?:/[^\s<>\"]*+)?)"
+    r"|(?<![\w.@])(?:[a-z0-9-]++\.)+[a-z]{2,}/[^\s<>\"]*+"
+    rf"|(?<![\w.@])(?:[a-z0-9-]++\.)+(?:{TOP_LEVEL_DOMAINS})(?![\w-]))"
     r"|(?P<email>(?<![\w.+-])[\w.+-]++@[\w-]++(?:\.[\w-]++)++)"
     r"|(?P<handle>(?<![A-Za-z0-9_@.])@[A-Za-z0-9_.]{2,})"
-    r"|(?P<phone>(?<![\d.:])\+?\d[\d\s().-]{6,}\d(?![\d:]))",
+    r"|(?P<phone>(?<![\d])\+?\d[\d\s().-]{6,}\d(?![\d:]))",
     re.IGNORECASE,
 )
-# Dates and grouped numbers that look like long digit runs ("1.12.2026", "125 000 000").
-NOT_A_PHONE = re.compile(r".*\d{1,2}[./]\d{1,2}[./]\d{2,4}.*|\d{1,3}(?:[ .,]\d{3}){2,}|.*\..*\..*")
+# Dates, times, year lists, versions and grouped numbers that look like long digit runs
+# ("1.12.2026", "2026-12-01", "2019 2020 2021", "10.0.19045.2364", "125 000 000").
+NOT_A_PHONE = re.compile(
+    r".*\d{1,2}[./]\d{1,2}[./]\d{2,4}.*|.*\d{4}-\d{1,2}-\d{1,2}.*"
+    r"|(?:(?:19|20)\d{2}[\s,–-]+)+(?:19|20)\d{2}|(?:\d+\.){3,}\d+|\d{1,3}(?:[ .,]\d{3}){2,}"
+)
 
 
 def contact_details(text: str) -> dict[str, str]:
@@ -349,14 +375,11 @@ def claims_cover(sentence: str, claims: list[Claim]) -> bool:
     return claim_spans(sentence, claims) is not None
 
 
-def unverified_check(
-    review: Review, sentences: list[str], matched: dict[int, str | None]
-) -> dict | None:
-    """The first check a parsed review fails and the draft sentence it fails on, or None.
+def coverage_failure(review: Review, sentences: list[str]) -> dict | None:
+    """The first sentence a parsed review does not cover, or None.
 
     Only a check name and a sentence index are returned, never model-written text, so stored
-    failures can be counted per check. Coverage comes before evidence: quotes for claims that
-    do not match the draft say nothing about it.
+    failures can be counted per check.
     """
     indexes = [s.index for s in review.sentences]
     expected = list(range(len(sentences)))
@@ -373,6 +396,11 @@ def unverified_check(
     for sentence in review.sentences:
         if not claims_cover(sentences[sentence.index], sentence.claims):
             return {"failed_check": "coverage", "failed_sentence": sentence.index}
+    return None
+
+
+def evidence_failure(review: Review, matched: dict[int, str | None]) -> dict | None:
+    """The first sentence with a supported claim whose quotes do not all verify, or None."""
     for sentence in review.sentences:
         for claim in sentence.claims:
             if (
@@ -477,14 +505,18 @@ def review_draft(
         for claim in sentence.claims
         if claim.kind == "factual" and claim.supported
     ]
+    # A review we cannot verify is a technical failure, not a finding about the draft.
+    # Coverage comes first: quotes for claims that do not match the draft say nothing.
+    failed = coverage_failure(review, sentences)
+    if failed:
+        raise GenerationError("grounding_review_invalid", {**metadata, **failed})
     # Verified source text for each evidence entry of a supported claim, keyed by object id.
     matched = {
         id(e): matched_quote(e.quote, by_id[e.chunk_id]) if e.chunk_id in by_id else None
         for claim in supported
         for e in claim.evidence
     }
-    # A review we cannot verify is a technical failure, not a finding about the draft.
-    failed = unverified_check(review, sentences, matched)
+    failed = evidence_failure(review, matched)
     if failed:
         raise GenerationError("grounding_review_invalid", {**metadata, **failed})
     # The draft text each claim covers. A claim may skip connectives (claim_span), so its own
@@ -510,9 +542,14 @@ def review_draft(
         for claim in sentence.claims
         if claim.kind == "factual" and (claim.contradicted or not claim.supported)
     ]
-    # The owner's own text: offer details, the chosen call to action and the brand profile.
+    # The owner's own text: offer details, the chosen call to action and the brand profile,
+    # except prohibited claims (a detail the owner forbids is not one they gave).
     owner_text = " ".join(
-        [offer_details, str(preferences.get("cta") or ""), *(str(v) for v in brand.values())]
+        [
+            offer_details,
+            str(preferences.get("cta") or ""),
+            *(str(v) for k, v in brand.items() if k != "prohibited_claims"),
+        ]
     )
     findings += unlisted_contact_findings(sentences, owner_text)
     issues = [*(["wrong_language"] if wrong_script else []), *review.issues]
