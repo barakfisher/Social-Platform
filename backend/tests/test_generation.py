@@ -846,7 +846,9 @@ def test_wrong_language_is_reviewed_and_flagged(content, language):
     assert [f["code"] for f in result["findings"]] == ["wrong_language"]
 
 
-@pytest.mark.parametrize("legacy_review", [None, "source-review-v2", "source-review-v3"])
+@pytest.mark.parametrize(
+    "legacy_review", [None, "source-review-v2", "source-review-v3", "source-review-v6"]
+)
 def test_legacy_results_cannot_bypass_review_on_retry_or_save(service_api, legacy_review):
     from sqlalchemy import select
 

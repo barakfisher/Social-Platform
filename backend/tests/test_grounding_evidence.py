@@ -10,7 +10,9 @@ from app.grounding import (
     REVIEW_SYSTEM,
     REVIEW_VERSION,
     Claim,
+    claim_spans,
     claims_cover,
+    matched_quote,
     review_draft,
 )
 
@@ -68,7 +70,7 @@ def test_nonadjacent_facts_require_separate_exact_excerpts(
             result = review_draft(
                 draft, [{"chunk_id": "source", "content": source}], {}, {"language": language}
             )
-            assert result["version"] == REVIEW_VERSION == "source-review-v6"
+            assert result["version"] == REVIEW_VERSION == "source-review-v7"
             # Stored provenance maps the reviewer's alias back to the real chunk ID.
             evidence = result["sentences"][0]["claims"][0]["evidence"]
             assert evidence == [{"chunk_id": "source", "quote": quote} for quote in quotes]
@@ -394,3 +396,296 @@ def test_prefix_tolerance_is_one_attached_hebrew_prefix_only(quote: str) -> None
     claim = "נהג לאכול בשר"
     with pytest.raises(GenerationError, match="^grounding_review_invalid$"):
         review("he", claim + ".", [sourced(claim, quote)])
+
+
+@pytest.mark.parametrize(
+    "sentence,texts,spans",
+    [
+        (
+            "The museum opens on Tuesdays.",
+            ["The museum", "opens Tuesdays"],
+            ["The museum", "opens on Tuesdays"],
+        ),
+        ("המתנדבים גם מגדלים מרווה.", ["המתנדבים מגדלים מרווה"], ["המתנדבים גם מגדלים מרווה"]),
+        # A dropped one-letter prefix (ב, "in") inside the claim.
+        (
+            "המתנדבים נפגשים בגינה ביום חמישי.",
+            ["המתנדבים נפגשים גינה ביום חמישי"],
+            ["המתנדבים נפגשים בגינה ביום חמישי"],
+        ),
+        (
+            "Volunteers meet on Thursdays, at noon.",
+            ["Volunteers meet on Thursdays at noon"],
+            ["Volunteers meet on Thursdays, at noon"],
+        ),
+        # SP-24: live Terra reviews left the Hebrew copula between two exact claims.
+        (
+            "היעד המרכזי של התהליך הוא שהמתאמן ירכוש כלים.",
+            ["היעד המרכזי של התהליך", "שהמתאמן ירכוש כלים"],
+            ["היעד המרכזי של התהליך", "שהמתאמן ירכוש כלים"],
+        ),
+    ],
+    ids=["en-dropped-on", "he-dropped-gam", "he-dropped-prefix", "en-dropped-comma", "he-copula"],
+)
+def test_claims_may_skip_connectives_and_are_stored_as_draft_text(
+    sentence: str, texts: list[str], spans: list[str]
+):
+    found = claim_spans(sentence, claims(*texts))
+    assert found is not None
+    assert [sentence[start:end] for start, end in found] == spans
+
+
+@pytest.mark.parametrize(
+    "sentence,texts",
+    [
+        ("Volunteers meet at 6 PM.", ["Volunteers meet at 7 PM"]),
+        ("Cedar Garden grows sage.", ["Oak Garden grows sage"]),
+        ("The museum does not open on Mondays.", ["The museum does open on Mondays"]),
+        ("The museum opens on Mondays.", ["The museum does not open on Mondays"]),
+        ("It opens on Tuesdays.", ["It", "museum opens Tuesdays"]),
+        ("We grow rosemary and sage.", ["We grow rosemary or sage"]),
+        ("We grow rosemary and sage.", ["We grow sage and rosemary"]),
+        ("הגינה נפתחה בשנת 1990.", ["הגינה נפתחה בשנת 1991"]),
+        ("גינת ארז מגדלת מרווה.", ["גינת אלון מגדלת מרווה"]),
+        ("המוזיאון לא פתוח בימי שני.", ["המוזיאון פתוח בימי שני"]),
+        ("היעד הוא לא רווח.", ["היעד", "רווח"]),
+    ],
+    ids=[
+        "en-number",
+        "en-name",
+        "en-dropped-negation",
+        "en-added-negation",
+        "en-added-word",
+        "en-changed-connective",
+        "en-moved-words",
+        "he-number",
+        "he-name",
+        "he-dropped-negation",
+        "he-negation-after-copula",
+    ],
+)
+def test_skipping_connectives_never_hides_a_changed_or_missing_word(sentence: str, texts):
+    assert not claims_cover(sentence, claims(*texts))
+
+
+def test_finding_quotes_the_draft_not_the_claim_text_that_skipped_a_word() -> None:
+    draft = "The museum opens on Tuesdays."
+    unsupported = {
+        "text": "The museum opens Tuesdays",
+        "kind": "factual",
+        "supported": False,
+        "contradicted": False,
+        "evidence": [],
+    }
+    result = review("en", draft, [unsupported])
+    assert result["findings"] == [
+        {"code": "unsupported_claim", "sentence": draft, "claim": "The museum opens on Tuesdays"}
+    ]
+    assert result["sentences"][0]["claims"][0]["text"] == "The museum opens on Tuesdays"
+
+
+@pytest.mark.parametrize(
+    "quote,source,stored",
+    [
+        # SP-24: Terra ended an excerpt cut from a longer source sentence with ".".
+        (
+            "Cascade mentoring is a group model.",
+            "Cascade mentoring is a group model in science training.",
+            "Cascade mentoring is a group model",
+        ),
+        (
+            "מודל המפל הוא מודל קבוצתי.",
+            "מודל המפל הוא מודל קבוצתי בהכשרה מדעית.",
+            "מודל המפל הוא מודל קבוצתי",
+        ),
+        ("שנהג לאכול בשר.", "נהג לאכול בשר בין פרוסות לחם", "נהג לאכול בשר"),
+        ("We grow rosemary.", "We grow rosemary.", "We grow rosemary."),
+    ],
+    ids=["en-final-period", "he-final-period", "he-prefix-and-period", "exact"],
+)
+def test_quote_may_end_with_one_mark_the_source_lacks(quote: str, source: str, stored: str):
+    assert matched_quote(quote, source) == stored
+
+
+@pytest.mark.parametrize(
+    "quote,source",
+    [
+        ("Meetings start at 7.", "Meetings start at 6 in the hall."),
+        ("Oak Garden grows sage.", "Cedar Garden grows sage daily."),
+        ("We grow rosemary..", "We grow rosemary in pots."),
+        ("We grow. rosemary", "We grow rosemary"),
+        ("!", "Admission is free"),
+        ("הגינה נפתחה בשנת 1991.", "הגינה נפתחה בשנת 1990 בעיר."),
+    ],
+    ids=["number", "name", "two-marks", "inner-mark", "mark-only", "he-number"],
+)
+def test_quote_tolerance_never_accepts_changed_text(quote: str, source: str):
+    assert matched_quote(quote, source) is None
+
+
+def test_owner_call_to_action_is_not_an_instruction_to_the_ai() -> None:
+    # SP-26: Terra blocked a draft that repeated the owner's own CTA from offer details.
+    prompt = " ".join(REVIEW_SYSTEM.split())
+    assert "instructions aimed at the AI" in prompt
+    assert "that the owner wrote in the offer details" in prompt
+    assert "repeating it is never copied_instructions" in prompt
+
+
+def contact_review(draft: str, source: str, offer: str = "", cta: str = "") -> dict:
+    verdict = {
+        "issues": [],
+        "blocking": [],
+        "sentences": [
+            {
+                "index": 0,
+                "claims": [
+                    {
+                        **sourced(draft.rstrip("."), draft.rstrip(".")),
+                        "kind": "creative",
+                        "supported": False,
+                        "evidence": [],
+                    }
+                ],
+            }
+        ],
+    }
+    with patch("app.grounding.chat_completion", return_value=(json.dumps(verdict), {})):
+        return review_draft(
+            draft,
+            [{"chunk_id": "source", "content": source}],
+            {},
+            {"language": "en", "cta": cta},
+            offer_details=offer,
+        )
+
+
+SOURCE_WITH_CONTACTS = (
+    "To join, message @cedar_signup, call 050-1234567, write to join@cedar.example "
+    "or visit https://cedar.example/join. Founded 2026-10-29."
+)
+
+
+@pytest.mark.parametrize(
+    "draft,detail",
+    [
+        ("Message @cedar_signup to join.", "@cedar_signup"),
+        ("Call 050-1234567 to join.", "050-1234567"),
+        ("Write to join@cedar.example today.", "join@cedar.example"),
+        ("Visit https://cedar.example/join.", "https://cedar.example/join"),
+        ("Call 050 123 4567 to join.", "050 123 4567"),
+    ],
+    ids=["handle", "phone", "email", "link", "phone-other-format"],
+)
+def test_contact_detail_taken_from_a_source_is_a_finding(draft: str, detail: str) -> None:
+    # SP-26: a planted source can send readers to its own contact details. Deterministic,
+    # so it does not depend on the reviewer noticing.
+    result = contact_review(draft, SOURCE_WITH_CONTACTS)
+    assert result["status"] == "checked"
+    assert result["findings"] == [
+        {"code": "source_contact_detail", "sentence": draft, "claim": detail}
+    ]
+
+
+@pytest.mark.parametrize(
+    "draft,offer,cta",
+    [
+        # The owner's own details may be repeated.
+        ("Message @cedar_signup to join.", "Message @cedar_signup with GARDEN.", ""),
+        ("Call 050-1234567 to join.", "", "Invite readers to call 050 1234567."),
+        # Not in any source: an unsupported claim for the reviewer, not this finding.
+        ("Message @other_handle to join.", "", ""),
+        # Dates and years are not phone numbers.
+        ("Founded 2026-10-29.", "", ""),
+    ],
+    ids=["owner-offer", "owner-cta", "not-in-sources", "date"],
+)
+def test_owner_details_and_numbers_are_not_source_contact_findings(draft, offer, cta) -> None:
+    result = contact_review(draft, SOURCE_WITH_CONTACTS, offer, cta)
+    assert [f["code"] for f in result["findings"]] == []
+
+
+@pytest.mark.parametrize(
+    "sentence,texts",
+    [
+        ("The treatment is ineffective.", ["The treatment is effective"]),
+        ("Most patients are asymptomatic.", ["Most patients are symptomatic"]),
+        ("The update will bypass security review.", ["The update will pass security review"]),
+        ("Tickets cost €5.", ["Tickets cost $5"]),
+        ("Class size ≤ 10 students.", ["Class size ≥ 10 students"]),
+        ("המנטורים ממליצים עליהם.", ["המנטורים ממליצים עלי"]),
+        # Already possible in v6 by splitting the word across two claims.
+        ("The treatment is ineffective.", ["The treatment is", "effective"]),
+        # A sign that changes a fact may not stay outside every claim.
+        ("Tickets cost €5.", ["Tickets cost", "5"]),
+        ("Half the plots, 50%, are taken.", ["Half the plots", "50", "are taken"]),
+        ("The garden opens at 9:00 ≥ daily.", ["The garden opens at 9", "00", "daily"]),
+    ],
+    ids=[
+        "part-of-word-in",
+        "part-of-word-a",
+        "part-of-word-by",
+        "changed-currency",
+        "changed-comparison",
+        "he-part-of-word",
+        "v6-split-word",
+        "currency-outside",
+        "percent-outside",
+        "comparison-outside",
+    ],
+)
+def test_claim_cannot_split_a_draft_word_or_change_a_symbol(sentence: str, texts: list[str]):
+    assert not claims_cover(sentence, claims(*texts))
+
+
+@pytest.mark.parametrize(
+    "sentence,texts",
+    [
+        ("Tickets cost €5.", ["Tickets cost €5"]),
+        ("Join us — we meet weekly! 🌿", ["Join us", "we meet weekly"]),
+        ("ג'ון מונטגיו נהג לאכול בשר.", ["ג'ון מונטגיו נהג לאכול בשר"]),
+        ("צה״ל הוקם ב-1948.", ["צה״ל הוקם ב-1948"]),
+        ("מַלְכָּה גרה בארמון.", ["מַלְכָּה גרה בארמון"]),
+    ],
+    ids=["sign-inside-claim", "dash-and-emoji-outside", "geresh", "gershayim", "vowel-points"],
+)
+def test_signs_inside_claims_and_plain_punctuation_outside_them_pass(sentence, texts):
+    assert claims_cover(sentence, claims(*texts))
+
+
+def test_long_claims_are_matched_in_one_pass() -> None:
+    # A review steered into one-word steps over a long sentence must not stall the API.
+    sentence = ", ".join(["a"] * 800) + "."
+    assert claims_cover(sentence, claims(" ".join(["a"] * 800)))
+    assert not claims_cover(sentence + " Today.", claims(" ".join(["a"] * 800)))
+
+
+@pytest.mark.parametrize(
+    "quote,source",
+    [
+        ("Meetings start at 1.", "Meetings start at 10 in the hall."),
+        ("The museum is open.", "The museum is opening in 2027."),
+        ("Is parking free.", "Is parking free? No."),
+        ("נהג לאכול.", "נהג לאכולת הבוקר"),
+        # The prefix tolerance must leave a whole source word.
+        ("מנהג", "זה מנהג עתיק"),
+        ("שנהג", "זה מנהג עתיק"),
+        (".", "We grow rosemary."),
+        (" ", "We grow rosemary."),
+    ],
+    ids=[
+        "cut-number",
+        "cut-word",
+        "replaced-mark",
+        "he-cut-word",
+        "exact-word",
+        "prefix-inside-word",
+        "mark-only-exact",
+        "space-only",
+    ],
+)
+def test_quote_tolerances_keep_word_boundaries(quote: str, source: str):
+    if quote == "מנהג":
+        # An exact quote is still exact.
+        assert matched_quote(quote, source) == quote
+        return
+    assert matched_quote(quote, source) is None

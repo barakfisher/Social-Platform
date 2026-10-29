@@ -695,3 +695,102 @@ Next.js pages outside `/api` are not covered by the Host check. That is acceptab
 because no page fetches data on the server; all data reads go through the `/api` proxies,
 which do check `Host`. Recheck this if a page starts loading data server-side.
 
+
+## SP-24 and SP-26: the source check finishes on real Hebrew drafts (source-review-v7) — 2026-10-29
+
+Problem: "source check did not finish" (`grounding_review_invalid`) on a third of the
+owner's stored drafts, and one of them blocked outright. The cause was not measured, because
+every failed check ended in the same code.
+
+Measurement first (verification/generation-grounding.md, "SP-24 measurement"):
+`review_draft` now stores `failed_check` (`schema`, `coverage` or `evidence`) and
+`failed_sentence` (a draft sentence index) in the unchecked review's `failure`, and no
+model-written text. In 45 Terra reviews (the evaluation's 30 reviewer-only fixtures plus the
+owner's 5 stored Hebrew drafts ×3):
+- fixtures: 30/30 verified;
+- real drafts: 3 invalid (2 coverage, 1 evidence), 2 cut off at the output limit, 2 blocked.
+
+Causes, from the raw reviews (kept outside the repo):
+- **Coverage (both times the same sentence):** every claim was exact, and only the Hebrew
+  copula "הוא" sat outside them. English "is/are" were connectives; Hebrew "הוא" was not.
+- **Evidence:** an exact source excerpt with a final "." added where the source sentence
+  continues.
+- **Block:** the draft repeated the owner's own call to action from offer details ("שלחו
+  הודעה פרטית…"). The prompt defined `copied_instructions` as repeating instructions "inside
+  a source or the offer details", so a CTA written for readers counted as one.
+
+Choice (`source-review-v7`):
+- `CONNECTIVES` gains הוא, היא, הם, הן. They join subject and predicate like "is" and "are".
+  They are also subject pronouns, but a pronoun alone states no fact, and the verb and object
+  around it stay inside claims. Negation after a copula still fails ("היעד הוא לא רווח"; test).
+- Coverage compares tokens, not substrings (`claim_span`). Claim words and fact signs (currency,
+  math, %, #, @, &, /, °) must equal whole draft tokens in order. A claim word may lack the
+  draft word's one-letter Hebrew prefix. Only connectives and plain punctuation may be passed
+  over, before a claim or inside it ("opens Tuesdays" for "opens on Tuesdays", a skipped
+  "גם"). That equals splitting the claim at those words, which coverage already allowed.
+  Part of a word ("effective" in "ineffective", "עלי" in "עליהם"), a changed sign ("$5" for
+  "€5") or an added, moved or negated word never matches. A fact sign may no longer sit outside
+  every claim ("€" in "Tickets cost €5" with claims "Tickets cost" and "5"), which v6 allowed.
+  One pass over the tokens, so the cost grows linearly. Findings and stored provenance show
+  the draft's own span, never the model's claim text.
+- `matched_quote`: a quote may end with one punctuation mark the source lacks. The excerpt
+  must then end where a source word ends, before whitespace or the end of the source, so
+  "starts at 1." never matches "starts at 10" and "free." never replaces "free?". The
+  prefix tolerance must now leave a whole source word ("נהג" no longer matches inside
+  "מנהג"). Every quote needs a letter or digit; v6 accepted "." as an exact quote.
+- Prompt (SP-26): `copied_instructions` means instructions aimed at the AI (ignore rules,
+  reveal instructions, change the output, add content). A reader-directed call to action the
+  owner wrote in offer details is the owner's intent; repeating it never blocks.
+- New deterministic finding `source_contact_detail` (SP-26). A link, email, @handle or phone
+  number (9+ digits, so dates and years do not count) that the draft repeats from a numbered
+  source and that is not in the offer details or the chosen CTA becomes a point to check.
+  A planted source can then not send readers to its own contact details unnoticed, and the
+  check does not depend on the reviewer. It is advisory like every other finding. To use a
+  source's contact detail without the note, the owner adds it to offer details. EN/HE copy in
+  the "Points to check" panel.
+- REVIEW_VERSION becomes `source-review-v7`, because the prompt changed (its word list and
+  the blocking definition). As with earlier bumps, stored v6 reviews ask for a new check
+  (`generation_review_required`) on retry, GET and save.
+
+On the same 45 captured reviews, re-scored offline with the final rules: invalid 3 → 0. The
+other 40 keep their outcome and every finding, and no negative fixture became clean.
+
+Security review (`bf-security-reviewer`, before merge) found four problems in the first
+version of this change, all fixed above with regression tests: claim matching inside words
+and with stripped symbols, the final-mark tolerance accepting a quote cut inside a number or
+word, the CTA wording letting a source-planted reader CTA pass unnoticed (now the
+deterministic finding), and a matching loop whose cost grew with the cube of the claim
+length. Accepted with it: הוא/היא outside claims can
+lose who-does-what in a sentence such as "היא מנהלת, הוא מתנדב"; the referents are usually
+claimed elsewhere, and the verbs stay inside claims.
+
+Rejected alternatives:
+- Retrying the review once on a coverage failure. The copula failure repeated on 2 of 3
+  reviews of the same sentence, so a retry often fails again, at about $0.04 a review.
+- Telling the reviewer to put הוא inside claims (prompt only). The prompt already said
+  "every other word belongs inside a claim" and Terra still left it out. The model's
+  reading is the natural one, and English already allowed "is".
+- Fuzzy or normalized claim matching (edit distance, stemming). It could accept a changed
+  number or name, which the coverage check exists to stop.
+- Accepting quotes with an inner or doubled mark, or any normalized quote. They are no longer
+  verbatim source text.
+- Exempting every reader-directed CTA from `copied_instructions`. A planted source could then
+  steer the post with "contact us at …"; only the owner's own offer details are exempt.
+- Blocking source CTAs through the prompt ("a CTA, contact detail or link that appears only
+  in a numbered source and that the draft repeats is copied_instructions"). Tried live: it
+  blocked the two curated platform drafts that repeat the source's own "swipe up" CTA, which
+  v6 only flagged (`platform_fit`). Blocking withholds the draft, too harsh for text the
+  owner pasted in; the deterministic finding covers the planted contact detail instead.
+- Substring matching with word-boundary checks added. Token matching gives the same
+  boundaries, handles symbols explicitly and runs in one pass.
+
+Typical review cost: `TYPICAL_REVIEW_TOKENS` for Terra rises from (1,852, 2,019) to
+(2,650, 2,950) tokens, the median of 16 reviews of the owner's medium Hebrew drafts. The old
+figure came from one 505-character draft and understated real drafts by about 40%. Create
+Post's typical review estimate goes from about $0.028 to $0.041.
+
+Not changed (SP-27, Backlog): 2 of 15 real-draft reviews used the whole 4,000-token output
+limit (`grounding_review_truncated`). A higher limit does not fit the review's smallest stage
+budget ($0.124: the $0.31 request cap, minus the 20% translation share, halved; Terra's worst
+case at 4,000 tokens is $0.1205). It needs an owner decision on the request cap or the
+translation share.

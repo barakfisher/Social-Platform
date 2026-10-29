@@ -782,3 +782,63 @@ stored `inputs.writer_model = google/gemini-3.8-flash`.
 - Spend, provider-reported from the run metadata: $0.0566 for both runs, **above the
   approved $0.05 cap by $0.0066**. Run 2 was started with $0.040 of the cap left, against a
   typical total of $0.034 and a shown maximum of $0.17; the review alone cost $0.032.
+
+## SP-24 measurement: why the source check did not finish — 2026-10-29
+
+Paid, owner-authorized under a self-set $2.00 cap for the SP-16 run. Reviewer GPT-5.6 Terra,
+`source-review-v6`, writer not involved. A run-only script outside the repo reviewed a fixed
+sample, recorded the new `failed_check`/`failed_sentence` metadata and kept each raw review
+privately, so a server-side fix can be re-scored on exactly the same reviews. Owner data was
+read inside a READ ONLY transaction; nothing was written.
+
+| Sample | Reviews | Verified | Invalid (check) | Cut off | Blocked |
+| --- | --- | --- | --- | --- | --- |
+| Reviewer-only fixtures (6 garden negatives + 24 curated) | 30 | 30 | 0 | 0 | 1 (source_injection, expected) |
+| Owner's 5 stored Hebrew drafts ×3 | 15 | 8 | 3 (coverage 2, evidence 1) | 2 | 2 (same draft) |
+
+Every fixture matched its expected outcome. Per check over all 45: schema 0, coverage 2,
+evidence 1. Real drafts: 3 of 15 invalid, 5 of 15 did not finish.
+
+- Coverage: both failures were the same sentence of run b861a7ec. Each claim was exact; only
+  the copula "הוא" was left uncovered.
+- Evidence: run 34cd99b5 quoted exact source text plus a final "." (the source sentence
+  continues "… בהכשרה למקצועות מדעיים").
+- Blocked: run b450c314 (2 of 3 reviews, `copied_instructions`). The draft repeats the owner's
+  CTA from offer details (SP-26).
+- Cut off: 2 reviews used all 4,000 output tokens. Successful reviews of these medium drafts
+  used about 1,600–3,900 completion tokens, estimated from provider-reported cost (SP-27).
+- Real-draft reviews cost $0.023–0.050 each (mean $0.039 over the 11 that returned a cost),
+  above the ~$0.028 typical review cost Create Post shows (`TYPICAL_REVIEW_TOKENS`).
+
+Spend: OpenRouter key usage +$0.774, **$0.074 over the run's $0.70 cap**. The cap counted
+provider-reported cost from returned reviews, and cut-off reviews return none. Later runs
+check key usage before every paid call.
+
+**Re-scored offline with `source-review-v7` rules** (same 43 raw reviews; the 2 cut-off reviews
+have none): invalid 3 → 0. The other 40 keep their outcome and every finding code, and no
+negative fixture became clean.
+
+## source-review-v7 live validation — 2026-10-29
+
+Same run and cap as the measurement above. Writer GPT-4.1 (default), reviewer Terra.
+
+| Check | Result |
+| --- | --- |
+| Reviewer-only cases, final prompt (6 garden negatives, 24 curated, 4 new SP-26 CTA cases) | **34/34 passed**: source injection blocked; planted source CTAs (EN/HE) flagged `source_contact_detail`; the owner's CTA (EN/HE) clean |
+| Reviewer-only cases, first v7 prompt (before the security fixes) | 30/30 passed |
+| 20 multi-domain scenarios (`--scenarios-only`) | 18/20. All 4 injection scenarios clean (0 obeyed). The 2 failures were supported EN drafts where GPT-4.1 added "to the community"/"for visitors" and "Residents can rely on these services…"; the reviewer was right (rerun with drafts logged) |
+| Injection scenarios rerun, final prompt | 4/4 clean |
+| Owner's draft b450c314 (SP-26), 5 reviews | 4 flagged, 0 blocked, 1 cut off at the output limit (SP-27) |
+| Owner's draft b861a7ec (copula sentence), 1 review | verified (flagged), no coverage failure |
+| Curated platform cases, final prompt | flagged `platform_fit`, as in v6, not blocked |
+
+- Technical failures across about 105 v7 live reviews: 1 `grounding_review_invalid`
+  (Terra left "our" outside every claim in "to our garden"; the v6 rules reject that too)
+  and 1 cut off. The garden positives still stop the full evaluation, because GPT-4.1 added
+  "support the garden together" (correctly flagged); that is the known writer embellishment.
+- A version of the prompt that blocked source CTAs blocked both curated platform cases; it was
+  dropped (docs/implementation.md).
+- Spend for the whole SP-24/SP-26 work: OpenRouter key usage +$1.56 (from $3.447 to about
+  $5.01), within the self-set $2.00 cap for the SP-16 run, though the first measurement step
+  overran its own $0.70 sub-cap by $0.074. Key usage lags calls by up to about a minute, so a
+  cap checked before each call needs a margin of a few calls.

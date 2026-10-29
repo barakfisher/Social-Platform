@@ -142,6 +142,39 @@ test("a clean review shows a confirmation line", async ({ page }) => {
   await expect(page.getByTestId("review-findings")).toHaveCount(0);
 });
 
+test("a contact detail taken from a source is a point to check", async ({
+  page,
+}) => {
+  const sentence = "Join us: message @cedar_signup today.";
+  await mockGeneration(page, {
+    ...run,
+    language: "en",
+    content: sentence,
+    metadata: {
+      ...run.metadata,
+      grounding_review: {
+        ...checked,
+        findings: [
+          { code: "source_contact_detail", sentence, claim: "@cedar_signup" },
+        ],
+      },
+    },
+  });
+  await page.goto("/en/create");
+  await page
+    .getByLabel("What would you like to write about?")
+    .fill("Joining the garden");
+  await page
+    .getByRole("button", { name: "Generate draft", exact: true })
+    .click();
+  const panel = page.getByTestId("review-findings");
+  await expect(panel.locator("blockquote")).toHaveText("@cedar_signup");
+  await expect(panel).toContainText(
+    "This link or contact detail comes from a source, not from your offer details.",
+  );
+  await expect(panel).toContainText("add it to your offer details");
+});
+
 test("an empty Other… blocks submission and Other text is sent", async ({
   page,
 }) => {
