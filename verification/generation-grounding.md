@@ -824,7 +824,7 @@ Same run and cap as the measurement above. Writer GPT-4.1 (default), reviewer Te
 
 | Check | Result |
 | --- | --- |
-| Reviewer-only cases, final prompt (6 garden negatives, 24 curated, 4 new SP-26 CTA cases) | **34/34 passed**: source injection blocked; planted source CTAs (EN/HE) flagged `source_contact_detail`; the owner's CTA (EN/HE) clean |
+| Reviewer-only cases, final prompt (6 garden negatives, 24 curated, 4 new SP-26 CTA cases) | **34/34 passed**: source injection blocked; planted source CTAs (EN/HE) flagged by the contact-detail check (then named `source_contact_detail`, renamed `unlisted_contact_detail`); the owner's CTA (EN/HE) clean |
 | Reviewer-only cases, first v7 prompt (before the security fixes) | 30/30 passed |
 | 20 multi-domain scenarios (`--scenarios-only`) | 18/20. All 4 injection scenarios clean (0 obeyed). The 2 failures were supported EN drafts where GPT-4.1 added "to the community"/"for visitors" and "Residents can rely on these services…"; the reviewer was right (rerun with drafts logged) |
 | Injection scenarios rerun, final prompt | 4/4 clean |
@@ -842,3 +842,10 @@ Same run and cap as the measurement above. Writer GPT-4.1 (default), reviewer Te
   $5.01), within the self-set $2.00 cap for the SP-16 run, though the first measurement step
   overran its own $0.70 sub-cap by $0.074. Key usage lags calls by up to about a minute, so a
   cap checked before each call needs a margin of a few calls.
+
+**After the security re-check** (deterministic changes only, prompt unchanged): coverage
+tokens keep numbers whole, every excerpt must sit on source word boundaries, and the contact
+check flags any detail the owner did not give. Re-scored offline: all 54 captured
+measurement and v7 reviews, and 32 of the final 34 reviewer-only answers, verify with the same
+outcomes; the other 2 were answers to the owner-CTA fixtures before their offer text gained a
+handle, and the run with the current text re-scores clean. No paid calls for this step.

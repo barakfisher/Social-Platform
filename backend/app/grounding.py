@@ -138,13 +138,25 @@ RETRYABLE_FAILURES = frozenset(
 HEBREW_PREFIXES = frozenset("והבלמשכ")
 # A final mark a reviewer may add to an excerpt cut from the middle of a source sentence.
 TRAILING_MARKS = frozenset(".,;:!?")
-# Letters and digits, including Hebrew vowel points, which are combining marks in Unicode.
-LETTER = r"(?:[^\W_]|[֑-ׇ])"
+# Word characters: letters and digits, Hebrew vowel points (combining marks, not the Hebrew
+# punctuation in the same block) and invisible format characters, so a zero-width space
+# cannot split "in​effective" into a connective and a claim word.
+LETTER = (
+    r"(?:[^\W_]|[֑-ׇֽֿׁׂׅׄ"
+    r"­​-‏‪-‮⁠-⁤﻿])"
+)
+# A number with its sign and inner separators is one token ("-20", "1-5", "1.5", "050-1234567"),
+# so a claim cannot drop a minus or re-punctuate a number. Not after a letter: "ב-1948".
+NUMBER = r"(?<![^\W_])-?\d+(?:[.,:/-]\d+)*"
 # A word, keeping inner apostrophes and gershayim ("don't", "ג'ון", "צה״ל") in it.
 WORD = rf"{LETTER}+(?:['’׳״\"]{LETTER}+)*"
-# Signs that change a fact ("€5", "≥ 10", "50%"): they must sit inside a claim and match
-# the draft exactly. Other punctuation and symbols (commas, dashes, quotes, emoji) may not.
-FACT_SIGNS = frozenset("%‰#@&/°")
+# Signs that change a fact ("€5", "≥ 10", "50%", "Parking ❌"): they must sit inside a claim
+# and match the draft exactly. Other punctuation and symbols (commas, dashes, emoji) may not.
+FACT_SIGNS = frozenset("%‰#@&/°❌✅✔✖✗✓🚫⛔⭐★☆")
+
+
+def has_content(text: str) -> bool:
+    return re.search(r"[^\W_]", text) is not None
 
 
 def without_prefix(text: str) -> str | None:
@@ -154,81 +166,131 @@ def without_prefix(text: str) -> str | None:
     return None
 
 
+def word_char(text: str, index: int) -> bool:
+    return 0 <= index < len(text) and re.fullmatch(LETTER, text[index]) is not None
+
+
+def at_word_bounds(text: str, source: str, start: int, prefix_ok: bool) -> bool:
+    """The excerpt source[start:start+len(text)] neither starts nor ends inside a source word.
+
+    With prefix_ok, one attached Hebrew prefix letter may come before it ("מרווה" in "ומרווה").
+    """
+    end = start + len(text)
+    if word_char(text, len(text) - 1) and word_char(source, end):
+        return False
+    if not word_char(text, 0) or not word_char(source, start - 1):
+        return True
+    return prefix_ok and source[start - 1] in HEBREW_PREFIXES and not word_char(source, start - 2)
+
+
+def found_as_excerpt(text: str, source: str, *, prefix_ok: bool, before_space: bool) -> bool:
+    start = source.find(text)
+    while start >= 0:
+        end = start + len(text)
+        if at_word_bounds(text, source, start, prefix_ok) and (
+            not before_space or end == len(source) or source[end].isspace()
+        ):
+            return True
+        start = source.find(text, start + 1)
+    return False
+
+
 def matched_quote(quote: str, source: str) -> str | None:
     """The source text a quote verifies against, or None.
 
-    Exact substrings with a letter or digit in them, and two tolerances that drop text and
-    so cannot add a fact. One final punctuation mark the source lacks: the excerpt must then
-    end where a source word ends, before whitespace or the end of the source, so "starts at 1."
-    never matches "starts at 10". One leading Hebrew prefix letter: the rest must start a
-    source word with a Hebrew letter. The stored excerpt is the verbatim source text.
+    Exact substrings with a letter or digit in them that start and end on source word
+    boundaries ("start at 1" never matches "start at 10"). One attached Hebrew prefix letter
+    may precede the excerpt in the source. Two tolerances drop text and so cannot add a
+    fact: one final punctuation mark the source lacks (the excerpt must then end before
+    whitespace or the end of the source, so "free." never replaces "free?"), and one leading
+    Hebrew prefix letter on the quote (the rest must start a source word). The stored excerpt
+    is the verbatim source text.
     """
     trimmed = quote[:-1] if quote[-1] in TRAILING_MARKS else None
-    for candidate, end in ((quote, ""), (trimmed, r"(?=\s|$)")):
-        if candidate is None or not re.search(LETTER, candidate):
+    for candidate, before_space in ((quote, False), (trimmed, True)):
+        if candidate is None or not has_content(candidate):
             continue
-        if re.search(re.escape(candidate) + end, source):
+        if found_as_excerpt(candidate, source, prefix_ok=True, before_space=before_space):
             return candidate
         rest = without_prefix(candidate)
-        if rest is not None and re.search(rf"(?<!{LETTER}){re.escape(rest)}{end}", source):
+        if rest is not None and found_as_excerpt(
+            rest, source, prefix_ok=False, before_space=before_space
+        ):
             return rest
     return None
 
 
-# Links, emails, @handles and phone numbers (9+ digits, so dates and years do not count).
+# Links (with a scheme, www. or a common top-level domain), emails, @handles (also after an
+# attached Hebrew prefix, "ל@x") and phone numbers. Possessive quantifiers keep matching
+# linear on long runs of planted text.
 CONTACT_DETAIL = re.compile(
-    r"https?://[^\s<>\"]+|www\.[^\s<>\"]+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+"
-    r"|(?<![\w@])@[A-Za-z0-9_.]{2,}|\+?\d[\d\s().-]{6,}\d"
+    r"(?P<link>(?:https?://|www\.)[^\s<>\"]++"
+    r"|(?<![\w.@-])(?:[a-z0-9-]++\.)++(?:com|org|net|io|co|il|me|ly|ai|app|dev|info|biz"
+    r"|edu|gov|shop|link|example)(?![\w-])(?:/[^\s<>\"]*+)?)"
+    r"|(?P<email>(?<![\w.+-])[\w.+-]++@[\w-]++(?:\.[\w-]++)++)"
+    r"|(?P<handle>(?<![A-Za-z0-9_@.])@[A-Za-z0-9_.]{2,})"
+    r"|(?P<phone>(?<![\d.:])\+?\d[\d\s().-]{6,}\d(?![\d:]))",
+    re.IGNORECASE,
 )
+# Dates and grouped numbers that look like long digit runs ("1.12.2026", "125 000 000").
+NOT_A_PHONE = re.compile(r".*\d{1,2}[./]\d{1,2}[./]\d{2,4}.*|\d{1,3}(?:[ .,]\d{3}){2,}|.*\..*\..*")
 
 
 def contact_details(text: str) -> dict[str, str]:
-    """Contact details in text, keyed for comparison (phone digits, or casefolded text)."""
+    """Contact details in text, keyed for comparison, with the text as written.
+
+    Links compare by host and path (no scheme, www. or final slash), phones by their last
+    nine digits (so +972 and 0 prefixes agree), emails and handles case-insensitively.
+    """
     found: dict[str, str] = {}
     for match in CONTACT_DETAIL.finditer(text):
         detail = match.group().rstrip(".,;:!?)")
-        if detail[:1].isdigit() or detail[:1] == "+":
+        kind = match.lastgroup
+        if kind == "phone":
             digits = re.sub(r"\D", "", detail)
-            if len(digits) < 9:
+            if len(digits) < 9 or NOT_A_PHONE.fullmatch(detail.strip()):
                 continue
-            found.setdefault(digits, detail)
+            key = "phone:" + digits[-9:]
+        elif kind == "link":
+            key = "link:" + re.sub(r"^(?:https?://)?(?:www\.)?", "", detail.casefold()).rstrip("/")
         else:
-            found.setdefault(detail.casefold(), detail)
+            key = f"{kind}:{detail.casefold()}"
+        found.setdefault(key, detail)
     return found
 
 
-def source_contact_findings(
-    sentences: list[str], sources: list[dict], owner_text: str
-) -> list[dict]:
-    """Findings for links and contact details the draft takes from a source (SP-26).
+def unlisted_contact_findings(sentences: list[str], owner_text: str) -> list[dict]:
+    """Findings for links and contact details that the owner did not give (SP-26).
 
-    A planted source can steer readers to its own contact details; the owner's offer details
-    and chosen call to action are the only text whose details the post may repeat unflagged.
-    Deterministic, so it does not depend on the reviewer noticing.
+    A planted source can send readers to its own contact details, and a writer can invent
+    one. Only the offer details and the chosen call to action are the owner's own, so any
+    other link, email, handle or phone in the draft is a point to check. Deterministic, so it
+    does not depend on the reviewer or on which sources the writer cited.
     """
     owner = contact_details(owner_text)
-    in_sources = {key for source in sources for key in contact_details(source["content"])}
-    findings = []
-    for sentence in sentences:
-        for key, detail in contact_details(sentence).items():
-            if key in in_sources and key not in owner:
-                findings.append(
-                    {"code": "source_contact_detail", "sentence": sentence, "claim": detail}
-                )
-    return findings
+    return [
+        {"code": "unlisted_contact_detail", "sentence": sentence, "claim": detail}
+        for sentence in sentences
+        for key, detail in contact_details(sentence).items()
+        if key not in owner
+    ]
 
 
-def tokens(text: str) -> list[tuple[str, int, int]]:
-    """Words and single non-space signs, with their character offsets."""
-    return [(m.group(), m.start(), m.end()) for m in re.finditer(rf"{WORD}|\S", text)]
+def split_tokens(text: str) -> list[tuple[str, int, int]]:
+    """Numbers, words and single non-space signs, with their character offsets."""
+    return [(m.group(), m.start(), m.end()) for m in re.finditer(rf"{NUMBER}|{WORD}|\S", text)]
 
 
 def is_word(token: str) -> bool:
-    return re.fullmatch(WORD, token) is not None
+    return re.fullmatch(rf"{NUMBER}|{WORD}", token) is not None
 
 
 def is_fact_sign(token: str) -> bool:
-    return token in FACT_SIGNS or unicodedata.category(token) in ("Sc", "Sm")
+    return (
+        token in FACT_SIGNS
+        or unicodedata.category(token) in ("Sc", "Sm")
+        or "\U0001f1e6" <= token <= "\U0001f1ff"  # flag letters
+    )
 
 
 def skippable(token: str) -> bool:
@@ -243,15 +305,16 @@ def claim_span(
 ) -> tuple[int, int, int] | None:
     """Where a claim sits in the sentence's tokens from position on: (start, end, next), or None.
 
-    Claim words and fact signs must equal whole draft tokens, in order. A claim word may lack
-    the draft word's one-letter Hebrew prefix ("מרווה" for "ומרווה"). Only skippable tokens
-    (connectives, plain punctuation) may be passed over, before the claim or inside it, as
-    in "opens Tuesdays" for "opens on Tuesdays". That equals splitting the claim at those
-    words, which coverage already allows, so it cannot hide a fact. Part of a word ("effective"
-    in "ineffective"), a changed sign ("$5" for "€5") or an added, moved or negated word never
-    matches. One pass over the tokens, so the cost grows linearly with the sentence.
+    Claim words, numbers and fact signs must equal whole draft tokens, in order. A claim word
+    may lack the draft word's one-letter Hebrew prefix ("מרווה" for "ומרווה"). Only skippable
+    tokens (connectives, plain punctuation) may be passed over, before the claim or inside it,
+    as in "opens Tuesdays" for "opens on Tuesdays". That equals splitting the claim at those
+    words, which coverage already allows, so it cannot hide a fact. Part of a word
+    ("effective" in "ineffective"), a changed sign or number ("$5" for "€5", "20" for "-20")
+    or an added, moved or negated word never matches. One pass over the tokens, so the cost
+    grows linearly with the sentence.
     """
-    needed = [token for token, _, _ in tokens(text) if is_word(token) or is_fact_sign(token)]
+    needed = [t for t, _, _ in split_tokens(text) if is_word(t) or is_fact_sign(t)]
     start = end = None
     for want in needed:
         while position < len(sentence):
@@ -270,7 +333,7 @@ def claim_span(
 
 def claim_spans(sentence: str, claims: list[Claim]) -> list[tuple[int, int]] | None:
     """Ordered, non-overlapping character spans of the claims, leaving only skippable text."""
-    parts, spans, position = tokens(sentence), [], 0
+    parts, spans, position = split_tokens(sentence), [], 0
     for claim in claims:
         found = claim_span(parts, claim.text, position)
         if found is None:
@@ -447,9 +510,11 @@ def review_draft(
         for claim in sentence.claims
         if claim.kind == "factual" and (claim.contradicted or not claim.supported)
     ]
-    numbered = [source for alias, source in aliases.items() if alias != OFFER_ALIAS]
-    owner_text = offer_details + " " + str(preferences.get("cta") or "")
-    findings += source_contact_findings(sentences, numbered, owner_text)
+    # The owner's own text: offer details, the chosen call to action and the brand profile.
+    owner_text = " ".join(
+        [offer_details, str(preferences.get("cta") or ""), *(str(v) for v in brand.values())]
+    )
+    findings += unlisted_contact_findings(sentences, owner_text)
     issues = [*(["wrong_language"] if wrong_script else []), *review.issues]
     findings += [
         {"code": issue, "sentence": None, "claim": None} for issue in dict.fromkeys(issues)

@@ -66,9 +66,9 @@ const copy: Record<Locale, Copy> = {
         "The draft does not suit the platform.",
         "Adjust its length or style.",
       ],
-      source_contact_detail: [
-        "This link or contact detail comes from a source, not from your offer details.",
-        "Make sure it is yours before publishing. To use it, add it to your offer details.",
+      unlisted_contact_detail: [
+        "This link or contact detail is not in your offer details or brand profile.",
+        "Make sure it is yours and correct before publishing. To keep it, add it to your offer details.",
       ],
     },
     unknownFinding: [
@@ -137,9 +137,9 @@ const copy: Record<Locale, Copy> = {
         "הטיוטה לא מתאימה לפלטפורמה.",
         "כדאי להתאים אורך או סגנון.",
       ],
-      source_contact_detail: [
-        "הקישור או פרטי הקשר האלה מגיעים ממקור, לא מפרטי ההצעה שלך.",
-        "כדאי לוודא שהם שלך לפני פרסום. כדי להשתמש בהם, יש להוסיף אותם לפרטי ההצעה.",
+      unlisted_contact_detail: [
+        "הקישור או פרטי הקשר האלה לא מופיעים בפרטי ההצעה או בפרופיל המותג.",
+        "כדאי לוודא שהם שלך ונכונים לפני פרסום. כדי להשאיר אותם, יש להוסיף אותם לפרטי ההצעה.",
       ],
     },
     unknownFinding: ["הבודק סימן את זה.", "כדאי לבדוק לפני פרסום."],

@@ -1,4 +1,5 @@
 import json
+import re
 from unittest.mock import patch
 
 import pytest
@@ -12,6 +13,7 @@ from app.grounding import (
     Claim,
     claim_spans,
     claims_cover,
+    contact_details,
     matched_quote,
     review_draft,
 )
@@ -531,38 +533,25 @@ def test_owner_call_to_action_is_not_an_instruction_to_the_ai() -> None:
     assert "repeating it is never copied_instructions" in prompt
 
 
-def contact_review(draft: str, source: str, offer: str = "", cta: str = "") -> dict:
-    verdict = {
-        "issues": [],
-        "blocking": [],
-        "sentences": [
-            {
-                "index": 0,
-                "claims": [
-                    {
-                        **sourced(draft.rstrip("."), draft.rstrip(".")),
-                        "kind": "creative",
-                        "supported": False,
-                        "evidence": [],
-                    }
-                ],
-            }
-        ],
+def contact_review(
+    draft: str, source: str = "", offer: str = "", cta: str = "", brand: dict | None = None
+) -> dict:
+    claim = {
+        "text": draft.rstrip("."),
+        "kind": "creative",
+        "supported": False,
+        "contradicted": False,
+        "evidence": [],
     }
+    verdict = {"issues": [], "blocking": [], "sentences": [{"index": 0, "claims": [claim]}]}
     with patch("app.grounding.chat_completion", return_value=(json.dumps(verdict), {})):
         return review_draft(
             draft,
-            [{"chunk_id": "source", "content": source}],
-            {},
-            {"language": "en", "cta": cta},
+            [{"chunk_id": "source", "content": source or "Cedar Garden grows sage."}],
+            brand or {},
+            {"language": "he" if re.search("[א-ת]", draft) else "en", "cta": cta},
             offer_details=offer,
         )
-
-
-SOURCE_WITH_CONTACTS = (
-    "To join, message @cedar_signup, call 050-1234567, write to join@cedar.example "
-    "or visit https://cedar.example/join. Founded 2026-10-29."
-)
 
 
 @pytest.mark.parametrize(
@@ -571,37 +560,100 @@ SOURCE_WITH_CONTACTS = (
         ("Message @cedar_signup to join.", "@cedar_signup"),
         ("Call 050-1234567 to join.", "050-1234567"),
         ("Write to join@cedar.example today.", "join@cedar.example"),
+        ("Write to 1join@cedar.example today.", "1join@cedar.example"),
         ("Visit https://cedar.example/join.", "https://cedar.example/join"),
-        ("Call 050 123 4567 to join.", "050 123 4567"),
+        ("Visit cedar-join.example today.", "cedar-join.example"),
+        ("Short link: bit.ly/cedar now.", "bit.ly/cedar"),
+        ("Join on t.me/cedar today.", "t.me/cedar"),
+        ("שלחו הודעה ל@cedar_signup עוד היום.", "@cedar_signup"),
+        ("Call +972 50 123 4567 to join.", "+972 50 123 4567"),
     ],
-    ids=["handle", "phone", "email", "link", "phone-other-format"],
+    ids=[
+        "handle",
+        "phone",
+        "email",
+        "email-digit-first",
+        "link",
+        "bare-domain",
+        "short-link",
+        "telegram",
+        "he-prefixed-handle",
+        "intl-phone",
+    ],
 )
-def test_contact_detail_taken_from_a_source_is_a_finding(draft: str, detail: str) -> None:
-    # SP-26: a planted source can send readers to its own contact details. Deterministic,
-    # so it does not depend on the reviewer noticing.
-    result = contact_review(draft, SOURCE_WITH_CONTACTS)
+def test_contact_detail_the_owner_did_not_give_is_a_finding(draft: str, detail: str) -> None:
+    # SP-26: a planted source (cited or not) or the writer can add a contact detail; only the
+    # owner's offer details, CTA and brand profile are exempt. Deterministic.
+    result = contact_review(draft)
     assert result["status"] == "checked"
     assert result["findings"] == [
-        {"code": "source_contact_detail", "sentence": draft, "claim": detail}
+        {"code": "unlisted_contact_detail", "sentence": draft, "claim": detail}
     ]
 
 
 @pytest.mark.parametrize(
-    "draft,offer,cta",
+    "draft,offer,cta,brand",
     [
-        # The owner's own details may be repeated.
-        ("Message @cedar_signup to join.", "Message @cedar_signup with GARDEN.", ""),
-        ("Call 050-1234567 to join.", "", "Invite readers to call 050 1234567."),
-        # Not in any source: an unsupported claim for the reviewer, not this finding.
-        ("Message @other_handle to join.", "", ""),
-        # Dates and years are not phone numbers.
-        ("Founded 2026-10-29.", "", ""),
+        ("Message @cedar_signup to join.", "Message @cedar_signup with GARDEN.", "", None),
+        ("Call 050-1234567 to join.", "", "Invite readers to call +972 50 123 4567.", None),
+        ("Visit https://www.cedar.example/join/ today.", "See cedar.example/join", "", None),
+        ("Visit cedar.example today.", "", "", {"name": "Cedar", "guidelines": "cedar.example"}),
     ],
-    ids=["owner-offer", "owner-cta", "not-in-sources", "date"],
+    ids=["owner-offer", "owner-cta-other-format", "link-normalized", "brand-profile"],
 )
-def test_owner_details_and_numbers_are_not_source_contact_findings(draft, offer, cta) -> None:
-    result = contact_review(draft, SOURCE_WITH_CONTACTS, offer, cta)
+def test_owner_contact_details_are_not_findings(draft, offer, cta, brand) -> None:
+    result = contact_review(draft, offer=offer, cta=cta, brand=brand)
     assert [f["code"] for f in result["findings"]] == []
+
+
+@pytest.mark.parametrize(
+    "draft",
+    [
+        "Founded 2026-10-29.",
+        "Doors open 29.10.2026 18:00.",
+        "Open 2026-10-29 10:30 sharp.",
+        "Runs 1.12.2026 - 15.12.2026 daily.",
+        "Funding reached 125 000 000 shekels.",
+        "Version 10.0.19045.2364 is out.",
+        "Read the report.pdf and Node.js notes.",
+    ],
+)
+def test_dates_numbers_and_file_names_are_not_contact_details(draft: str) -> None:
+    assert contact_details(draft) == {}
+
+
+def test_contact_detection_stays_fast_on_long_planted_runs() -> None:
+    # Possessive patterns: a long run with no "@" or no domain must not backtrack per position.
+    for text in ["a" * 40000, "a" * 40000 + "@", "a@" + "b" * 40000, "1 " * 20000]:
+        contact_details(text)
+
+
+@pytest.mark.parametrize(
+    "sentence,texts",
+    [
+        ("Sales changed by -20%.", ["Sales changed by 20%"]),
+        ("It drops to -5°C.", ["It drops to 5°C"]),
+        ("Sessions last 1-5 hours.", ["Sessions last 1.5 hours"]),
+        ("Parking ❌.", ["Parking"]),
+        ("The treatment is in\u200beffective.", ["The treatment is", "effective"]),
+    ],
+    ids=["minus", "negative-temperature", "range-vs-decimal", "fact-emoji", "zero-width"],
+)
+def test_number_signs_separators_and_fact_emoji_must_match(sentence: str, texts) -> None:
+    assert not claims_cover(sentence, claims(*texts))
+
+
+@pytest.mark.parametrize(
+    "sentence,texts",
+    [
+        ("הם נפגשים ב-1948 בעיר.", ["הם נפגשים ב-1948 בעיר"]),
+        ("Call 050-1234567 today.", ["Call 050-1234567", "today"]),
+        ("Join us 🌿 today.", ["Join us", "today"]),
+    ],
+    ids=["he-hyphen-year", "phone-in-claim", "plain-emoji-outside"],
+)
+def test_numbers_and_plain_emoji_still_cover(sentence: str, texts) -> None:
+    assert claims_cover(sentence, claims(*texts))
 
 
 @pytest.mark.parametrize(
@@ -671,6 +723,9 @@ def test_long_claims_are_matched_in_one_pass() -> None:
         ("שנהג", "זה מנהג עתיק"),
         (".", "We grow rosemary."),
         (" ", "We grow rosemary."),
+        ("Meetings start at 1", "Meetings start at 10 in the hall."),
+        ("מנטור", "מנטורים מלווים"),
+        ("rosemary", "We grow xrosemary."),
     ],
     ids=[
         "cut-number",
@@ -681,6 +736,9 @@ def test_long_claims_are_matched_in_one_pass() -> None:
         "prefix-inside-word",
         "mark-only-exact",
         "space-only",
+        "exact-cut-number",
+        "exact-he-stem",
+        "exact-inside-word",
     ],
 )
 def test_quote_tolerances_keep_word_boundaries(quote: str, source: str):

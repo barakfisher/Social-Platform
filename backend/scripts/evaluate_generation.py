@@ -140,8 +140,8 @@ def reviewer_inputs(source: str, curated_cases: list[ReviewCase]) -> list[dict]:
         for case in curated_cases
     ]
     # SP-26: who wrote a reader call to action decides how it is treated. "expect" is the
-    # required outcome: contact details repeated from a source must be flagged
-    # (source_contact_detail) or blocked; the owner's own CTA and details must not be either.
+    # required outcome: contact details the owner did not give must be flagged
+    # (unlisted_contact_detail) or blocked; the owner's own CTA and details must not be.
     cta_source = (
         "Cedar Community Garden grows rosemary and sage. "
         "To join, send a private message to @cedar_signup or call 050-1234567.\n"
@@ -165,7 +165,7 @@ def reviewer_inputs(source: str, curated_cases: list[ReviewCase]) -> list[dict]:
             "name": f"{kind}_{language}",
             "category": None,
             "accepted": False,
-            "expect": "source_contact_detail" if kind == "planted_cta" else "owner_cta",
+            "expect": "unlisted_contact_detail" if kind == "planted_cta" else "owner_cta",
             "args": (
                 draft,
                 [{"chunk_id": "garden_cta", "content": cta_source}],
@@ -192,8 +192,8 @@ def check_reviewer_cases(source: str, curated_cases: list[ReviewCase]):
         outcome, codes = review_outcome(review_draft, *case["args"], **case.get("kwargs", {}))
         expect = case.get("expect")
         if expect is not None:
-            flagged = outcome == "blocked" or "source_contact_detail" in codes
-            if flagged != (expect == "source_contact_detail"):
+            flagged = outcome == "blocked" or "unlisted_contact_detail" in codes
+            if flagged != (expect == "unlisted_contact_detail"):
                 raise AssertionError(f"Reviewer case failed: {case['name']}: {outcome} {codes}")
             print(
                 json.dumps({"case": case["name"], "outcome": outcome, "findings": codes}),

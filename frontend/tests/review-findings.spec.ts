@@ -142,7 +142,7 @@ test("a clean review shows a confirmation line", async ({ page }) => {
   await expect(page.getByTestId("review-findings")).toHaveCount(0);
 });
 
-test("a contact detail taken from a source is a point to check", async ({
+test("a contact detail the owner did not give is a point to check", async ({
   page,
 }) => {
   const sentence = "Join us: message @cedar_signup today.";
@@ -155,7 +155,7 @@ test("a contact detail taken from a source is a point to check", async ({
       grounding_review: {
         ...checked,
         findings: [
-          { code: "source_contact_detail", sentence, claim: "@cedar_signup" },
+          { code: "unlisted_contact_detail", sentence, claim: "@cedar_signup" },
         ],
       },
     },
@@ -170,7 +170,7 @@ test("a contact detail taken from a source is a point to check", async ({
   const panel = page.getByTestId("review-findings");
   await expect(panel.locator("blockquote")).toHaveText("@cedar_signup");
   await expect(panel).toContainText(
-    "This link or contact detail comes from a source, not from your offer details.",
+    "This link or contact detail is not in your offer details or brand profile.",
   );
   await expect(panel).toContainText("add it to your offer details");
 });

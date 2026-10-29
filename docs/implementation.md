@@ -723,8 +723,10 @@ Choice (`source-review-v7`):
 - `CONNECTIVES` gains הוא, היא, הם, הן. They join subject and predicate like "is" and "are".
   They are also subject pronouns, but a pronoun alone states no fact, and the verb and object
   around it stay inside claims. Negation after a copula still fails ("היעד הוא לא רווח"; test).
-- Coverage compares tokens, not substrings (`claim_span`). Claim words and fact signs (currency,
-  math, %, #, @, &, /, °) must equal whole draft tokens in order. A claim word may lack the
+- Coverage compares tokens, not substrings (`claim_span`). Claim words, numbers (one token
+  with their sign and inner separators: "-20", "1-5", "050-1234567") and fact signs (currency,
+  math, %, #, @, &, /, °, ❌ ✅ ⭐, flags) must equal whole draft tokens in order. Zero-width and
+  other format characters count as part of a word, so they cannot split one. A claim word may lack the
   draft word's one-letter Hebrew prefix. Only connectives and plain punctuation may be passed
   over, before a claim or inside it ("opens Tuesdays" for "opens on Tuesdays", a skipped
   "גם"). That equals splitting the claim at those words, which coverage already allowed.
@@ -735,19 +737,22 @@ Choice (`source-review-v7`):
   the draft's own span, never the model's claim text.
 - `matched_quote`: a quote may end with one punctuation mark the source lacks. The excerpt
   must then end where a source word ends, before whitespace or the end of the source, so
-  "starts at 1." never matches "starts at 10" and "free." never replaces "free?". The
-  prefix tolerance must now leave a whole source word ("נהג" no longer matches inside
-  "מנהג"). Every quote needs a letter or digit; v6 accepted "." as an exact quote.
+  "starts at 1." never matches "starts at 10" and "free." never replaces "free?". Every
+  excerpt, exact or not, must start and end on a source word boundary ("start at 1" no
+  longer matches "start at 10"; "מנטור" no longer matches inside "מנטורים"), except for one
+  attached Hebrew prefix letter before it. Every quote needs a letter or digit; v6 accepted
+  "." as an exact quote.
 - Prompt (SP-26): `copied_instructions` means instructions aimed at the AI (ignore rules,
   reveal instructions, change the output, add content). A reader-directed call to action the
   owner wrote in offer details is the owner's intent; repeating it never blocks.
-- New deterministic finding `source_contact_detail` (SP-26). A link, email, @handle or phone
-  number (9+ digits, so dates and years do not count) that the draft repeats from a numbered
-  source and that is not in the offer details or the chosen CTA becomes a point to check.
-  A planted source can then not send readers to its own contact details unnoticed, and the
-  check does not depend on the reviewer. It is advisory like every other finding. To use a
-  source's contact detail without the note, the owner adds it to offer details. EN/HE copy in
-  the "Points to check" panel.
+- New deterministic finding `unlisted_contact_detail` (SP-26). Any link (with a scheme, www.
+  or a common top-level domain), email, @handle (also "ל@x") or phone number (9+ digits;
+  dates, times, grouped numbers and dotted versions excluded) in the draft that is not in the
+  offer details, the chosen CTA or the brand profile becomes a point to check. Links compare
+  by host and path, phones by their last nine digits. It does not depend on the reviewer or on
+  which sources the writer cited: a planted source can be used without being cited, and a
+  writer can invent a contact detail. Advisory like every other finding; to keep a detail
+  without the note, the owner adds it to offer details. EN/HE copy in "Points to check".
 - REVIEW_VERSION becomes `source-review-v7`, because the prompt changed (its word list and
   the blocking definition). As with earlier bumps, stored v6 reviews ask for a new check
   (`generation_review_required`) on retry, GET and save.
@@ -760,7 +765,12 @@ version of this change, all fixed above with regression tests: claim matching in
 and with stripped symbols, the final-mark tolerance accepting a quote cut inside a number or
 word, the CTA wording letting a source-planted reader CTA pass unnoticed (now the
 deterministic finding), and a matching loop whose cost grew with the cube of the claim
-length. Accepted with it: הוא/היא outside claims can
+length. Its re-check of the fixes found more, also fixed: a dropped minus or re-punctuated
+number, an exact quote ending inside a source number, a contact check that only saw cited
+sources and missed bare domains, prefixed handles and reformatted details, a quadratic email
+pattern on planted text, and dates with times counted as phones. Known limits: planted reader
+prompts with no contact detail ("comment your email below") are neither blocked nor flagged,
+and a dropped "כ" ("about") makes the checked claim stricter, not looser. Accepted with it: הוא/היא outside claims can
 lose who-does-what in a sentence such as "היא מנהלת, הוא מתנדב"; the referents are usually
 claimed elsewhere, and the verbs stay inside claims.
 
