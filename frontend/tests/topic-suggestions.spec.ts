@@ -168,3 +168,100 @@ test("suggestions fit a phone screen in Hebrew", async ({ page }) => {
     ),
   ).toBeTruthy();
 });
+
+test("the button shows progress while ideas load and the chosen writer is sent", async ({
+  page,
+}) => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const sent: Record<string, unknown>[] = [];
+  await page.route("**/api/generation**", async (route) => {
+    const url = route.request().url();
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        json: url.includes("models")
+          ? {
+              default: "openai/gpt-4.1",
+              models: [
+                ...models.models,
+                {
+                  id: "google/gemini-3.8-flash",
+                  available: true,
+                  typical_usd: 0.006,
+                  max_usd: 0.03,
+                },
+              ],
+            }
+          : {
+              configured: true,
+              brand_ready: true,
+              ready_documents: 1,
+              topic_suggestions: true,
+            },
+      });
+      return;
+    }
+    sent.push(route.request().postDataJSON());
+    await held;
+    await route.fulfill({ json: suggestions });
+  });
+  await page.goto("/en/create");
+  await page.getByText("Writing preferences", { exact: true }).click();
+  await page
+    .getByLabel("Writing model")
+    .selectOption("google/gemini-3.8-flash");
+  await page.getByRole("button", { name: "Suggest topics" }).click();
+  const busy = page.getByRole("button", {
+    name: "Finding topics in your sources…",
+  });
+  await expect(busy).toBeDisabled();
+  release();
+  await expect(
+    page.getByTestId("topic-suggestions").getByRole("listitem"),
+  ).toHaveCount(2);
+  expect(sent[0]).toMatchObject({ writer_model: "google/gemini-3.8-flash" });
+});
+
+test("ideas are cleared when the post language changes", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/en/create");
+  await page.getByRole("button", { name: "Suggest topics" }).click();
+  await expect(page.getByTestId("topic-suggestions")).toBeVisible();
+  await page.getByLabel("Post language").selectOption("he");
+  await expect(page.getByTestId("topic-suggestions")).toHaveCount(0);
+});
+
+test("no grounded topic shows the English empty state", async ({ page }) => {
+  await mockApi(page, {
+    onSuggest: () => ({
+      status: 200,
+      json: {
+        suggestions: [],
+        reason: "no_grounded_suggestions",
+        metadata: {},
+      },
+    }),
+  });
+  await page.goto("/en/create");
+  await page.getByRole("button", { name: "Suggest topics" }).click();
+  await expect(page.getByRole("status").last()).toContainText(
+    "No topic could be tied to your sources this time.",
+  );
+});
+
+for (const [code, text] of [
+  ["generation_prompt_limit", "זהות המותג ארוכה מדי להצעת נושאים"],
+  ["writer_model_unavailable", "מודל הכתיבה שנבחר כבר לא זמין"],
+]) {
+  test(`${code} has its own Hebrew message`, async ({ page }) => {
+    await mockApi(page, {
+      onSuggest: () => ({
+        status: code === "generation_prompt_limit" ? 409 : 422,
+        json: { error: { message: code } },
+      }),
+    });
+    await page.goto("/he/create");
+    await page.getByRole("button", { name: "הצעת נושאים" }).click();
+    await expect(page.getByRole("alert").first()).toContainText(text);
+  });
+}

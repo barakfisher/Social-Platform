@@ -1,6 +1,7 @@
 """Topic suggestions from the Knowledge Base (SP-6)."""
 
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -8,9 +9,12 @@ import pytest
 from app.config import get_settings
 from app.embeddings import profile_key
 from app.generation_provider import GenerationError
+from app.grounding import prompt_tokens
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID, seed_local_scope
 from app.models import KnowledgeChunk, KnowledgeDocument
 from app.topic_suggestions import (
+    EXCERPT_OVERHEAD_TOKENS,
+    MAX_SUGGESTIONS,
     SAMPLE_CHUNKS_PER_DOCUMENT,
     SAMPLE_DOCUMENTS,
     SYSTEM,
@@ -47,7 +51,7 @@ def idea(topic, sources=("S1",), rationale="Grounded in the garden page."):
     return {"topic": topic, "rationale": rationale, "source_ids": list(sources)}
 
 
-def add_document(factory, title, contents, status="Ready"):
+def add_document(factory, title, contents, status="Ready", updated_at=None):
     with factory.begin() as session:
         seed_local_scope(session)
         document = KnowledgeDocument(
@@ -59,6 +63,8 @@ def add_document(factory, title, contents, status="Ready"):
             status=status,
             embedding_profile=profile_key(),
         )
+        if updated_at is not None:
+            document.updated_at = updated_at
         session.add(document)
         session.flush()
         for order, content in enumerate(contents):
@@ -121,6 +127,8 @@ def test_suggestions_cite_real_sources_and_are_shaped(suggest_api):
     [source] = suggestion["sources"]
     assert source["document_id"] == garden and source["title"] == "Garden"
     assert set(source) == {"chunk_id", "document_id", "title"}
+    # The real chunk ID, never the alias the model saw.
+    assert source["chunk_id"] == chunk_ids(factory, garden)[0]
     preferences = json.loads(complete.call_args.args[1])["preferences"]
     assert preferences == {
         "platform": "facebook",
@@ -143,6 +151,32 @@ def test_ungrounded_wrong_language_and_duplicate_ideas_are_dropped(suggest_api):
     )
     body = client.post("/generation/topic-suggestions", json={"language": "en", "count": 5}).json()
     assert [s["topic"] for s in body["suggestions"]] == ["Why volunteers meet on Thursdays"]
+
+
+def test_reply_is_cut_to_the_requested_count_and_may_cite_several_sources(suggest_api):
+    client, factory, complete = suggest_api
+    garden = add_document(factory, "Garden", ["Cedar Garden grows sage."])
+    guide = add_document(factory, "Guide", ["Volunteers meet on Thursdays."])
+    complete.return_value = reply(
+        idea("How the garden and its volunteers work together", sources=("S1", "S2")),
+        idea("Why sage grows well at Cedar Garden"),
+        idea("What happens at the Thursday meetings", sources=("S2",)),
+    )
+    body = client.post("/generation/topic-suggestions", json={"language": "en", "count": 2}).json()
+    assert len(body["suggestions"]) == 2
+    first = body["suggestions"][0]["sources"]
+    assert {s["document_id"] for s in first} == {garden, guide}
+
+
+def test_hebrew_topics_may_name_english_terms_but_rationales_must_match(suggest_api):
+    client, factory, complete = suggest_api
+    add_document(factory, "Mentoring", ["מנטורינג ואימון אישי."])
+    complete.return_value = reply(
+        idea("מה ההבדל בין Mentoring ל-Coaching", rationale="המקור משווה בין השניים."),
+        idea("מה תפקידו של מנטור", rationale="The source defines a mentor."),
+    )
+    body = client.post("/generation/topic-suggestions", json={"language": "he"}).json()
+    assert [s["topic"] for s in body["suggestions"]] == ["מה ההבדל בין Mentoring ל-Coaching"]
 
 
 def test_no_grounded_idea_returns_an_empty_list_with_a_reason(suggest_api):
@@ -177,17 +211,38 @@ def test_sampling_spreads_across_and_within_documents(suggest_api):
     long_sent = [c for c in sent if c.startswith("Long")]
     assert len(long_sent) == SAMPLE_CHUNKS_PER_DOCUMENT
     assert long_sent[0] == "Long chunk 0." and long_sent[-1] == "Long chunk 9."
-    assert long and short
+    assert long != short
 
 
 def test_at_most_the_most_recent_documents_are_sampled(suggest_api):
     client, factory, complete = suggest_api
+    start = datetime(2026, 1, 1, tzinfo=UTC)
     for i in range(SAMPLE_DOCUMENTS + 2):
-        add_document(factory, f"Doc {i}", [f"Document {i} text."])
+        add_document(
+            factory, f"Doc {i}", [f"Document {i} text."], updated_at=start + timedelta(days=i)
+        )
     complete.return_value = reply()
     client.post("/generation/topic-suggestions", json={"language": "en"})
     titles = {s["title"] for s in sent_sources(complete)}
-    assert len(titles) == SAMPLE_DOCUMENTS
+    # The newest documents, not the two oldest.
+    assert titles == {f"Doc {i}" for i in range(2, SAMPLE_DOCUMENTS + 2)}
+
+
+def test_long_english_chunks_still_leave_room_for_every_sampled_document(
+    suggest_api,
+    settings,  # noqa: F811
+):
+    # QA: 800-token English chunks let only 4 of 8 documents through the context budget.
+    client, factory, complete = suggest_api
+    long_text = "The volunteers tend rosemary, sage and mint in raised beds. " * 120
+    for i in range(SAMPLE_DOCUMENTS):
+        add_document(factory, f"Doc {i}", [long_text] * SAMPLE_CHUNKS_PER_DOCUMENT)
+    complete.return_value = reply()
+    client.post("/generation/topic-suggestions", json={"language": "en"})
+    sent = sent_sources(complete)
+    assert {s["title"] for s in sent} == {f"Doc {i}" for i in range(SAMPLE_DOCUMENTS)}
+    share = settings.generation_context_budget // len(sent) - EXCERPT_OVERHEAD_TOKENS
+    assert all(prompt_tokens(s["content"]) <= share for s in sent)
 
 
 @pytest.mark.parametrize(
@@ -219,7 +274,13 @@ def test_malformed_model_output_is_an_invalid_response(suggest_api):
 
 @pytest.mark.parametrize(
     "body",
-    [{"count": 0}, {"count": 6}, {"platform": "x"}, {"language": "fr"}, {"goal": "a" * 301}],
+    [
+        {"count": 0},
+        {"count": MAX_SUGGESTIONS + 1},
+        {"platform": "x"},
+        {"language": "fr"},
+        {"goal": "a" * 301},
+    ],
 )
 def test_requests_are_validated(suggest_api, body):
     client, _, complete = suggest_api
@@ -259,6 +320,8 @@ def test_configuration_reports_topic_suggestions(suggest_api):
         ("Mentoring", "Mentoring for new managers", False),
         ("How the garden grows sage", "Who the volunteers are", False),
         ("ההבדל בין מנטורינג לאימון", "ההבדל בין מנטורינג לאימון אישי", True),
+        ("מנטורינג למנהלים חדשים", "המנטורינג למנהלים החדשים", True),
+        ("Why volunteers matter", "Why volunteers matter less than donors think", False),
     ],
 )
 def test_near_duplicates(a, b, same):
@@ -275,7 +338,9 @@ def test_context_too_small_for_any_source_calls_no_model(suggest_api):
     complete.assert_not_called()
 
 
-@pytest.mark.parametrize("hidden", ["\u202e", "\u2066", "\U000e0041"])
+@pytest.mark.parametrize(
+    "hidden", ["\u202e", "\u2066", "\U000e0041", "\u200b", "\u2060", "\ufeff", "\u061c"]
+)
 def test_ideas_with_hidden_direction_or_tag_characters_are_dropped(suggest_api, hidden):
     client, factory, complete = suggest_api
     add_document(factory, "Garden", ["Cedar Garden grows sage."])
@@ -287,7 +352,9 @@ def test_ideas_with_hidden_direction_or_tag_characters_are_dropped(suggest_api, 
 def test_hebrew_direction_marks_are_kept(suggest_api):
     client, factory, complete = suggest_api
     add_document(factory, "Garden", ["גינת ארז מגדלת מרווה."])
-    complete.return_value = reply(idea("איך גינת ארז\u200f מגדלת מרווה"))
+    complete.return_value = reply(
+        idea("איך גינת ארז\u200f מגדלת מרווה", rationale="המקור מתאר את הגינה.")
+    )
     body = client.post("/generation/topic-suggestions", json={"language": "he"}).json()
     assert len(body["suggestions"]) == 1
 
@@ -299,3 +366,26 @@ def test_an_id_from_another_workspace_cannot_be_cited(suggest_api):
     complete.return_value = reply(idea("Cites a real ID from elsewhere", sources=(other,)))
     body = client.post("/generation/topic-suggestions", json={"language": "en"}).json()
     assert body["suggestions"] == []
+
+
+def test_production_cannot_use_the_fixed_identity(suggest_api, settings):  # noqa: F811
+    client, factory, complete = suggest_api
+    add_document(factory, "Garden", ["Cedar Garden grows sage."])
+    settings.environment = "production"
+    response = client.post("/generation/topic-suggestions", json={"language": "en"})
+    assert response.status_code == 503
+    complete.assert_not_called()
+
+
+def chunk_ids(factory, document_id: str) -> list[str]:
+    from sqlalchemy import select
+
+    with factory() as session:
+        return [
+            str(i)
+            for i in session.scalars(
+                select(KnowledgeChunk.id)
+                .where(KnowledgeChunk.document_id == document_id)
+                .order_by(KnowledgeChunk.chunk_order)
+            )
+        ]

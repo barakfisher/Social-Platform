@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Lightbulb, LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiRequest } from "@/lib/posts";
@@ -10,6 +10,8 @@ type Suggestion = {
   rationale: string;
   sources: { chunk_id: string; document_id: string; title: string }[];
 };
+// How many ideas one click asks for; the server allows up to five.
+const SUGGESTION_COUNT = 3;
 type SuggestionsResponse = {
   suggestions: Suggestion[];
   reason: string | null;
@@ -28,6 +30,10 @@ const copy = {
       "Your Knowledge Base has no ready sources yet. Add a source and enable AI search first.",
     spendingLimit:
       "Suggesting topics would exceed the per-request AI cost limit set on the server.",
+    promptLimit:
+      "Your brand profile is too long to suggest topics. Shorten its guidance and try again.",
+    writerUnavailable:
+      "The selected writing model is no longer available. Choose another and try again.",
     error: "Topic ideas couldn’t be loaded. Try again.",
   },
   he: {
@@ -42,6 +48,10 @@ const copy = {
     insufficient:
       "אין עדיין מקורות מוכנים במאגר הידע. יש להוסיף מקור ולהפעיל עבורו חיפוש AI.",
     spendingLimit: "הצעת נושאים תחרוג ממגבלת העלות של AI לבקשה שהוגדרה בשרת.",
+    promptLimit:
+      "זהות המותג ארוכה מדי להצעת נושאים. אפשר לקצר את ההנחיות ולנסות שוב.",
+    writerUnavailable:
+      "מודל הכתיבה שנבחר כבר לא זמין. יש לבחור מודל אחר ולנסות שוב.",
     error: "לא הצלחנו לטעון רעיונות לנושאים. אפשר לנסות שוב.",
   },
 };
@@ -67,6 +77,12 @@ export function TopicSuggestions({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<SuggestionsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Ideas belong to the platform, language, goal and writer they were asked for.
+  const { platform, language, goal, writer_model } = request;
+  useEffect(() => {
+    setResult(null);
+    setError(null);
+  }, [platform, language, goal, writer_model]);
   async function suggest() {
     setBusy(true);
     setError(null);
@@ -80,7 +96,7 @@ export function TopicSuggestions({
             platform: request.platform,
             language: request.language,
             goal: request.goal,
-            count: 3,
+            count: SUGGESTION_COUNT,
             writer_model: request.writer_model || null,
           }),
         },
@@ -98,7 +114,14 @@ export function TopicSuggestions({
       ? t.insufficient
       : error === "generation_spending_limit"
         ? t.spendingLimit
-        : t.error;
+        : error === "generation_prompt_limit"
+          ? t.promptLimit
+          : [
+                "writer_model_unavailable",
+                "generation_model_unavailable",
+              ].includes(error ?? "")
+            ? t.writerUnavailable
+            : t.error;
   return (
     <div className="mt-3 space-y-3">
       <div className="flex flex-wrap items-center gap-3">
