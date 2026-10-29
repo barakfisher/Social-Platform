@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     generation_prompt_budget: int = Field(default=6000, ge=1000, le=16000)
     generation_context_budget: int = Field(default=2800, ge=100, le=6000)
     generation_retrieval_count: int = Field(default=5, ge=1, le=10)
+    # At most this many retrieved chunks from one document while other documents still have
+    # chunks within the distance limit, so one document cannot crowd out the rest (SP-25).
+    generation_chunks_per_document: int = Field(default=3, ge=1, le=10)
     generation_max_distance: float = Field(default=0.65, ge=0, le=2)
     generation_max_request_usd: float = Field(default=0.31, gt=0, le=1)
     # Origins whose pages may call and write to the API. Only this app's Next server: port
