@@ -13,3 +13,6 @@ __pycache__/
 playwright-report/
 test-results/
 backups/
+
+# Private uploaded source files (backend/app/storage.py)
+backend/var/

@@ -357,6 +357,44 @@ test("source check model shows estimated costs and the choice is sent", async ({
   await expect.poll(() => sent?.review_model).toBe("openai/gpt-4.1");
 });
 
+test("post length options show the character limit and about how many words", async ({
+  page,
+}) => {
+  await page.route("**/api/generation**", async (route) => {
+    await route.fulfill({
+      json: { configured: true, brand_ready: true, ready_documents: 1 },
+    });
+  });
+  for (const [locale, preferences, label, options] of [
+    [
+      "en",
+      "Writing preferences",
+      "Post length",
+      [
+        "Short — up to 600 characters (~100 words)",
+        "Medium — up to 1,200 characters (~200 words)",
+        "Long — up to 2,400 characters (~400 words)",
+      ],
+    ],
+    [
+      "he",
+      "העדפות כתיבה",
+      "אורך הפוסט",
+      [
+        "קצר — עד 600 תווים (כ־100 מילים)",
+        "בינוני — עד 1,200 תווים (כ־200 מילים)",
+        "ארוך — עד 2,400 תווים (כ־400 מילים)",
+      ],
+    ],
+  ] as const) {
+    await page.goto(`/${locale}/create`);
+    await page.getByText(preferences, { exact: true }).click();
+    const select = page.getByLabel(label, { exact: true });
+    await expect(select.locator("option")).toHaveText([...options]);
+    await expect(select).toHaveValue("medium");
+  }
+});
+
 test("unavailable model options fall back to the default source check", async ({
   page,
 }) => {

@@ -54,7 +54,9 @@ def error(request: Request, status: int, code: str, message: str) -> JSONRespons
 @app.middleware("http")
 async def reject_cross_site_writes(request: Request, call_next):
     # Runs inside request_context, so rejections carry the request ID; never reaches a handler.
-    rejection = write_rejection(request.method, request.headers, get_settings().cors_origins)
+    rejection = write_rejection(
+        request.method, request.headers, get_settings().cors_origins, request.url.path
+    )
     if rejection is None:
         return await call_next(request)
     status, code = rejection

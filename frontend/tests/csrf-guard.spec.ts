@@ -157,6 +157,27 @@ test.describe("csrf guard in the browser", () => {
     expect(statuses).toEqual([400, 415]);
   });
 
+  test("file uploads must be raw octet-stream bytes", async ({ page }) => {
+    // Form data can be sent cross-site without a preflight, so it never reaches the API.
+    await page.goto("/en");
+    const statuses = await page.evaluate(async () => {
+      const send = (body: BodyInit, type?: string) =>
+        fetch("/api/knowledge/files?filename=a.pdf", {
+          method: "POST",
+          headers: type ? { "Content-Type": type } : {},
+          body,
+        });
+      const form = new FormData();
+      form.append("file", new Blob(["%PDF-1.4"]), "a.pdf");
+      return [
+        (await send(form)).status,
+        (await send("%PDF-1.4", "text/plain")).status,
+        (await send("{}", "application/json")).status,
+      ];
+    });
+    expect(statuses).toEqual([415, 415, 415]);
+  });
+
   test("cross-site no-cors POST is rejected", async ({ page, baseURL }) => {
     // localhost and 127.0.0.1 are different sites, so the app served under the
     // other hostname stands in for a malicious local page. A page Playwright
