@@ -41,6 +41,8 @@ services:
       DATABASE_URL: postgresql+psycopg://social_app:social_app_local@postgres:5432/social
       REDIS_URL: redis://redis:6379/0
     ports: ["127.0.0.1:58073:8000"]
+    # Private uploaded source files, shared with the worker (SP-9). Never served directly.
+    volumes: ["source_files:/app/var/sources"]
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -53,6 +55,7 @@ services:
       DATABASE_URL: postgresql+psycopg://social_app:social_app_local@postgres:5432/social
       REDIS_URL: redis://redis:6379/0
     command: ["celery", "-A", "app.worker.celery_app", "worker", "--loglevel=INFO"]
+    volumes: ["source_files:/app/var/sources"]
     stop_grace_period: 300s
     depends_on:
       migrate: {condition: service_completed_successfully}
@@ -72,3 +75,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  source_files:

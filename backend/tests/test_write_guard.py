@@ -25,6 +25,7 @@ WRITES = [
     ("POST", EMBED, None),
     ("POST", f"/knowledge/{DOCUMENT}/retry", None),
     ("POST", "/knowledge/text", b"{}"),
+    ("POST", "/knowledge/files?filename=notes.pdf", b"%PDF-1.4"),
     ("POST", "/dev/jobs/probe", None),
     ("PUT", "/brand", b"{}"),
     ("DELETE", f"/knowledge/{DOCUMENT}", None),
@@ -116,6 +117,34 @@ def test_write_body_must_be_json(no_handlers, content_type):
     response = client.post("/generation", content=GENERATION, headers=headers)
     assert response.status_code == 415
     assert response.json()["error"]["code"] == "invalid_content_type"
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "text/plain",
+        "application/x-www-form-urlencoded",
+        "multipart/form-data; boundary=x",
+        "application/json",
+        "application/pdf",
+        None,
+    ],
+)
+def test_uploads_must_be_raw_octet_stream(no_handlers, content_type):
+    # Every type a page can send without a preflight is refused; so is JSON on this route.
+    headers = {"Content-Type": content_type} if content_type else {}
+    response = client.post(
+        "/knowledge/files?filename=notes.pdf", content=b"%PDF-1.4", headers=headers
+    )
+    assert response.status_code == 415
+    assert response.json()["error"]["code"] == "invalid_content_type"
+
+
+def test_octet_stream_is_accepted_only_on_the_upload_route(no_handlers):
+    response = client.post(
+        "/generation", content=GENERATION, headers={"Content-Type": "application/octet-stream"}
+    )
+    assert response.status_code == 415
 
 
 def test_allowed_page_json_write_reaches_the_handler(generation_handler):

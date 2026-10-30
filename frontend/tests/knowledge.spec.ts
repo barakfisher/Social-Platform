@@ -2,6 +2,9 @@ import { test, expect } from "@playwright/test";
 const sourceDocument = {
   id: "11111111-1111-4111-8111-111111111111",
   title: "מקור לדוגמה",
+  source_type: "text",
+  filename: null as string | null,
+  created_at: "2026-10-30T09:15:00Z",
   status: "Pending",
   stage: "pending",
   chunk_count: 0,
@@ -230,4 +233,169 @@ test("AI search preparation reaches Ready and shows a retryable provider failure
   await expect(
     page.getByRole("button", { name: "Enable AI search", exact: true }),
   ).toHaveCount(0);
+});
+
+const pdfBytes = Buffer.from("%PDF-1.4\n% test file\n");
+
+test("a PDF upload shows progress, its type and file name, then a processing failure", async ({
+  page,
+}) => {
+  let item: typeof sourceDocument | null = null;
+  let sent: { type: string | null; query: string; body: string } | null = null;
+  await page.route("**/api/knowledge**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/configuration")) {
+      await route.fulfill({
+        json: {
+          configured: true,
+          upload_max_bytes: 5 * 1024 * 1024,
+          pdf_max_pages: 120,
+        },
+      });
+      return;
+    }
+    if (request.method() === "POST" && url.pathname.endsWith("/files")) {
+      sent = {
+        type: request.headers()["content-type"] ?? null,
+        query: url.search,
+        body: request.postDataBuffer()?.toString() ?? "",
+      };
+      item = {
+        ...sourceDocument,
+        title: "Opening hours",
+        source_type: "pdf",
+        filename: "garden-guide.pdf",
+      };
+      await route.fulfill({ status: 202, json: { ...item, duplicate: false } });
+      return;
+    }
+    await route.fulfill({
+      json: { items: item ? [item] : [], total: item ? 1 : 0 },
+    });
+  });
+  await page.goto("/en/knowledge");
+  await expect(page.locator("#upload-limit")).toHaveText(
+    "PDF, TXT or Markdown (UTF-8), up to 5 MB and 120 pages. Scanned PDFs need text recognition (OCR) first. Web links come later.",
+  );
+  await page.getByLabel("PDF or text file", { exact: true }).setInputFiles({
+    name: "garden-guide.pdf",
+    mimeType: "application/pdf",
+    buffer: pdfBytes,
+  });
+  await page
+    .getByLabel("File title (optional)", { exact: true })
+    .fill("Opening hours");
+  await page.getByRole("button", { name: "Upload file", exact: true }).click();
+  await expect(
+    page.getByText("File uploaded. Preparation is queued.", { exact: true }),
+  ).toBeVisible();
+  expect(sent).toEqual({
+    type: "application/octet-stream",
+    query: "?filename=garden-guide.pdf&title=Opening+hours",
+    body: pdfBytes.toString(),
+  });
+  const entry = page.getByRole("listitem").filter({ hasText: "Opening hours" });
+  await expect(entry).toContainText("PDF · garden-guide.pdf · Added");
+  await expect(entry.locator("time")).toHaveAttribute(
+    "datetime",
+    sourceDocument.created_at,
+  );
+  await expect(page.getByLabel("File title (optional)")).toHaveValue("");
+  item = {
+    ...item!,
+    status: "Failed",
+    stage: "failed",
+    error_code: "pdf_requires_ocr",
+  };
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(entry).toContainText(
+    "This PDF has no text layer (it looks scanned). Run text recognition (OCR) and upload it again.",
+  );
+  await expect(
+    entry.getByRole("button", { name: "Process again", exact: true }),
+  ).toBeVisible();
+});
+
+test("unsupported and oversized files are refused before upload", async ({
+  page,
+}) => {
+  let uploads = 0;
+  await page.route("**/api/knowledge**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/configuration")) {
+      await route.fulfill({
+        json: { configured: true, upload_max_bytes: 1024, pdf_max_pages: 300 },
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/files")) uploads += 1;
+    await route.fulfill({ json: { items: [], total: 0 } });
+  });
+  await page.goto("/en/knowledge");
+  const input = page.getByLabel("PDF or text file", { exact: true });
+  const upload = page.getByRole("button", { name: "Upload file", exact: true });
+  await upload.click();
+  await expect(page.locator("section [role=alert]")).toHaveText(
+    "Choose a file to upload.",
+  );
+  await input.setInputFiles({
+    name: "notes.docx",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("PK"),
+  });
+  await upload.click();
+  await expect(page.locator("section [role=alert]")).toHaveText(
+    "Only PDF, TXT and Markdown files are supported.",
+  );
+  await input.setInputFiles({
+    name: "big.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.alloc(2048, 1),
+  });
+  await upload.click();
+  await expect(page.locator("section [role=alert]")).toHaveText(
+    "The file is larger than the upload limit.",
+  );
+  await expect(input).toHaveAttribute("aria-invalid", "true");
+  expect(uploads).toBe(0);
+});
+
+test("a rejected Hebrew text file keeps the choice and explains the fix", async ({
+  page,
+}) => {
+  let attempts = 0;
+  await page.route("**/api/knowledge**", async (route) => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      attempts += 1;
+      await route.fulfill({
+        status: 422,
+        json: { error: { code: "http_error", message: "file_not_utf8" } },
+      });
+      return;
+    }
+    await route.fulfill({ json: { items: [], total: 0 } });
+  });
+  await page.goto("/he/knowledge");
+  const input = page.getByLabel("קובץ PDF או טקסט", { exact: true });
+  await input.setInputFiles({
+    name: "הערות.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from([0xff, 0xfe, 0x00]),
+  });
+  await page.getByRole("button", { name: "העלאת הקובץ", exact: true }).click();
+  await expect(page.locator("section [role=alert]")).toHaveText(
+    "קובץ הטקסט לא בקידוד UTF-8. יש לשמור אותו כ־UTF-8 ולהעלות שוב.",
+  );
+  expect(attempts).toBe(1);
+  expect(
+    await input.evaluate((node: HTMLInputElement) => node.files?.[0]?.name),
+  ).toBe("הערות.txt");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBeTruthy();
 });

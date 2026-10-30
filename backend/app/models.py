@@ -71,6 +71,8 @@ class KnowledgeDocument(Owned, Base):
     source_type: Mapped[str] = mapped_column(String(20))
     source_reference: Mapped[str | None] = mapped_column(Text)
     source_text: Mapped[str | None] = mapped_column(Text)
+    # Opaque key of the private uploaded file (app/storage.py); None for pasted text.
+    storage_key: Mapped[str | None] = mapped_column(String(64))
     processing_stage: Mapped[str] = mapped_column(
         String(30), default="pending", server_default="pending"
     )
@@ -88,7 +90,19 @@ class KnowledgeDocument(Owned, Base):
             unique=True,
             postgresql_where=text("source_type = 'text' AND checksum IS NOT NULL"),
         ),
-        CheckConstraint("source_type IN ('text', 'pdf', 'url')"),
+        # Uploaded files deduplicate on their exact bytes, per type, within a workspace.
+        Index(
+            "uq_file_workspace_checksum",
+            "workspace_id",
+            "source_type",
+            "checksum",
+            unique=True,
+            postgresql_where=text("source_type IN ('pdf', 'txt') AND checksum IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "source_type IN ('text', 'txt', 'pdf', 'url')",
+            name="knowledge_documents_source_type_check",
+        ),
         CheckConstraint("status IN ('Pending', 'Processing', 'Ready', 'Failed')"),
     )
 

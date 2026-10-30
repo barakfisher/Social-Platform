@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     generation_chunks_per_document: int = Field(default=3, ge=1, le=10)
     generation_max_distance: float = Field(default=0.65, ge=0, le=2)
     generation_max_request_usd: float = Field(default=0.37, gt=0, le=1)
+    # Private uploaded source files (SP-9). Opaque keys only; never served directly.
+    source_storage_dir: str = "var/sources"
+    upload_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
+    pdf_max_pages: int = Field(default=300, ge=1, le=2000)
+    # Extracted text longer than this fails as source_too_long; pasted text allows 100,000.
+    source_max_characters: int = Field(default=200_000, ge=1000, le=1_000_000)
     # Origins whose pages may call and write to the API. Only this app's Next server: port
     # 3000 belongs to other local projects (SP-23).
     cors_origins: list[str] = ["http://localhost:53073", "http://127.0.0.1:53073"]

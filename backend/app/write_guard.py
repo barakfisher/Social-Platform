@@ -14,8 +14,18 @@ UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 TRUSTED_FETCH_SITES = frozenset({"same-origin", "none"})
 
 
+# Raw-byte uploads (SP-9). application/octet-stream is not a CORS-safelisted type, so a
+# cross-site browser request still needs a preflight, which CORS refuses. Multipart form
+# data is never accepted: any page can send it without a preflight.
+OCTET_STREAM_PATHS = frozenset({("POST", "/knowledge/files")})
+
+
 def is_json_content_type(value: str | None) -> bool:
     return value is not None and value.split(";")[0].strip().lower() == "application/json"
+
+
+def media_type(value: str | None) -> str | None:
+    return None if value is None else value.split(";")[0].strip().lower()
 
 
 def has_body(headers: Headers) -> bool:
@@ -23,7 +33,7 @@ def has_body(headers: Headers) -> bool:
 
 
 def write_rejection(
-    method: str, headers: Headers, allowed_origins: list[str]
+    method: str, headers: Headers, allowed_origins: list[str], path: str = ""
 ) -> tuple[int, str] | None:
     """(status, error code) for a write the API must refuse, or None to let it through.
 
@@ -39,6 +49,10 @@ def write_rejection(
         return 403, "cross_site_request"
     if fetch_site is not None and fetch_site not in TRUSTED_FETCH_SITES and not allowed_origin:
         return 403, "cross_site_request"
-    if has_body(headers) and not is_json_content_type(headers.get("content-type")):
+    content_type = media_type(headers.get("content-type"))
+    if (method, path) in OCTET_STREAM_PATHS:
+        if content_type != "application/octet-stream":
+            return 415, "invalid_content_type"
+    elif has_body(headers) and content_type != "application/json":
         return 415, "invalid_content_type"
     return None

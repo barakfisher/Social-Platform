@@ -960,3 +960,68 @@ Create Post also shows each length's limit: short up to 600 characters (~100 wor
 up to 1,200 (~200), long up to 2,400 (~400), in EN and HE. These are the maximums the server
 already enforces; the word counts assume about 6 characters a word.
 
+## SP-17: PDF and text file uploads (SP-8, SP-9, SP-10 slice) — 2026-10-30
+
+Owner decisions: pypdf (BSD) for PDF text, not PyMuPDF (AGPL); private source files on local
+disk now, behind a small storage module so S3-compatible storage can replace it later.
+
+Upload contract:
+- `POST /knowledge/files?filename=…&title=…` with the raw bytes as
+  `application/octet-stream`. That type is not CORS-safelisted, so a cross-site browser
+  request needs a preflight that CORS refuses. Multipart form data is never accepted: any
+  page can send it without a preflight. `app/write_guard.py` allows octet-stream on this
+  route only; the Next proxy forwards only octet-stream, bounded at 50 MB before the
+  backend's own limit. No multipart parser dependency was added.
+- Type comes from the extension (`.pdf`, `.txt`, `.md`) and must match the content: a PDF
+  must start with `%PDF-`; a text file must not, must be strict UTF-8 (a BOM is dropped) and
+  contain no NUL. Limits: UPLOAD_MAX_BYTES 10 MB, PDF_MAX_PAGES 300,
+  SOURCE_MAX_CHARACTERS 200,000 of extracted text (pasted text stays at 100,000).
+  `/knowledge/configuration` reports the limits, and the UI checks the same ones before
+  uploading. Errors carry actionable codes (`file_too_large`, `file_type_unsupported`,
+  `file_signature_mismatch`, `file_not_utf8`, `file_not_text`, `source_empty`,
+  `source_too_long`, `file_name_invalid`, `storage_failed`).
+- Only the last path segment of the filename is kept, without control characters; it is
+  shown back and never used as a path. The title defaults to the file name without its
+  extension.
+- Duplicates: the same bytes of the same type in one workspace return the first document
+  (`uq_file_workspace_checksum`, sha256 of the raw bytes). A pasted text and a file with the
+  same words are separate sources.
+
+Storage (`app/storage.py`): random 32-hex keys (`storage_key`, migration `7b2e4c9d1a35`), files
+written owner-only (0600) through a temporary file and an atomic rename, in
+SOURCE_STORAGE_DIR (`var/sources`; docker-compose mounts the `source_files` volume there for
+the API and the worker; ignored by git and Docker builds). The file is stored before the
+database row. If the row is not committed, the file is removed. Deleting a source removes
+its file after the row is gone. If that removal fails, an unreferenced private file can
+remain, but no row is left pointing at a missing file.
+
+Processing: text files are decoded at upload, so a bad file fails in the request. PDFs are
+read by the worker, outside the document row lock, and the locked step checks that the
+document still exists before writing. Each page's text is normalized and pages are joined by
+a blank line; every chunk records `page_start`/`page_end` in `source_location` next to its
+character offsets. Failures are stored on the document, not retried automatically:
+`pdf_requires_ocr` (no text layer; OCR is not attempted), `pdf_encrypted` (an owner-password-only
+file opens with an empty password), `pdf_corrupt`, `pdf_too_many_pages`, `source_too_long`,
+`source_empty`, `source_file_missing`. "Process again" re-reads the stored file.
+
+UI: an "Upload a file" form under the pasted-text form shows the configured limits, uploads
+with XMLHttpRequest so upload progress (a progress bar) is separate from background
+processing (the status badge and polling), and shows EN/HE messages for every code above.
+Each source shows its type (pasted text, text file, PDF), file name and creation time.
+
+Verification: backend 735 passed (39 new: extraction, storage, upload API, write guard)
+on a disposable migrated database as the runtime role; ruff, format, `mypy app`, `alembic
+check` and a downgrade/upgrade round trip passed. Frontend Prettier, lint, tsc, production
+build and Playwright 68/68 passed (4 new). End to end on the production build with the real
+API and PostgreSQL, but no Redis: a two-page PDF uploaded through the Next proxy was stored as
+a 0600 file, dispatch failed cleanly as `dispatch_failed` (no broker), the worker task run
+directly produced one chunk with pages 1–2, and deleting through the proxy removed the
+file. Form data was refused with 415 by both the proxy and the API. EN and HE pages had no
+horizontal scroll at 1280 and 390 px.
+
+Not done in this slice: URL submissions (SSRF-safe fetching, HTML extraction), S3-compatible
+storage, a scheduled sweep for unreferenced files, OCR, and a live Docker run with the worker
+(no Docker here). Known limits: pypdf may return Hebrew from some PDFs in visual (reversed)
+order, depending on how the PDF was produced; headings are not detected separately in PDFs;
+pypdf's own decompression limits plus the worker's 90 s soft time limit bound hostile files.
+

@@ -6,6 +6,7 @@ from celery.signals import after_setup_logger, task_failure
 from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError
 
+from app import storage
 from app.chunking import chunk_text
 from app.config import get_settings
 from app.db import SessionLocal
@@ -16,6 +17,7 @@ from app.embeddings import (
     embedding_lock,
     profile_key,
 )
+from app.extraction import ExtractionError, extract_pdf, page_range
 from app.logging import configure_worker_logging
 from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
 
@@ -78,6 +80,24 @@ def foundation_probe(job_id: str) -> None:
     max_retries=3,
 )
 def process_text(job_id: str) -> None:
+    pages: list[tuple[int, int]] | None = None
+    extracted: str | None = None
+    failure: str | None = None
+    with SessionLocal() as session:
+        reference = session.get(IngestionJob, UUID(job_id))
+        if reference is None or reference.kind != "text_ingestion":
+            return
+        document = session.get(KnowledgeDocument, reference.document_id)
+        key = document.storage_key if document and document.source_type == "pdf" else None
+    if key:
+        # Parsing can take seconds, so no row lock is held; the locked step below checks
+        # that the document still exists before writing anything.
+        try:
+            extracted, pages = extract_pdf(storage.read(key))
+        except ExtractionError as exc:
+            failure = exc.code
+        except storage.StorageError as exc:
+            failure = str(exc)
     with SessionLocal.begin() as session:
         reference = session.get(IngestionJob, UUID(job_id))
         if reference is None or reference.kind != "text_ingestion":
@@ -99,8 +119,24 @@ def process_text(job_id: str) -> None:
         if job is None or job.status == "Ready":
             return
         job.attempts += 1
+        if failure is not None:
+            # Actionable and not retried automatically: the same bytes fail the same way.
+            document.status = job.status = "Failed"
+            document.processing_stage = "failed"
+            document.error_code = job.error_code = failure
+            logger.info(
+                "extraction_failed",
+                extra={"job_id": job_id, "document_id": str(document.id), "error_code": failure},
+            )
+            return
         document.status = job.status = "Processing"
+        if extracted is not None:
+            document.source_text = extracted
         chunks = chunk_text(document.source_text or "")
+        if pages:
+            for values in chunks:
+                location = values["source_location"]
+                location.update(page_range(pages, location["char_start"], location["char_end"]))
         session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id))
         for order, values in enumerate(chunks):
             session.add(
