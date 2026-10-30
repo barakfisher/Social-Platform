@@ -929,3 +929,34 @@ language, goal or writer change) and generic "try again" text for errors a retry
 Limits: ideas come from at most 8 documents, each excerpt a share of the budget (about 100
 tokens with 8 documents × 3 chunks), so a large Knowledge Base is sampled, not covered. The rationale
 is the model's own short text; it is shown as an idea, never as a fact about the brand.
+
+## SP-27: room for the source check on medium Hebrew drafts — 2026-10-30
+
+Problem: in the SP-24 measurement 2 of 15 Terra reviews of the owner's medium Hebrew drafts
+used the whole 4,000-token output limit and ended as `grounding_review_truncated`. A higher
+limit did not fit the review's smallest stage budget ($0.124).
+
+Choice (owner-approved, option 1 of SP-27):
+- GENERATION_MAX_REQUEST_USD rises from $0.31 to $0.37, superseding the $0.31 entry above.
+- GENERATION_REVIEW_MAX_OUTPUT_TOKENS rises from 4,000 to 5,000, and so does its settings
+  maximum. The smallest stage budget becomes $0.148 ($0.37 minus the 20% translation share,
+  halved); Terra's worst case (6,000-token prompt, 5,000 output tokens, one retry) reserves
+  $0.1445, GPT-4.1 as reviewer $0.1045. `test_default_budget_affords_largest_allowed_prompt`
+  asserts this for every choosable stage.
+- Typical cost is unchanged: providers bill used tokens. Create Post's worst case per draft
+  rises with the limit; it is computed from these settings, so no UI constant changed.
+- The settings maximum also caps writer profiles' output limits (`chat_completion` uses the
+  larger maximum); no writer profile changed.
+
+Rejected: shrinking TRANSLATION_BUDGET_SHARE toward the translation's measured worst case
+(about $0.016) leaves little headroom; keeping 4,000 leaves about 1 in 7 medium Hebrew
+reviews to "Check again".
+
+Not verified live: the owner chose not to re-review the cut-off drafts now, expecting mostly
+short posts. Long drafts (up to 2,400 characters) may still need more than 5,000 tokens and
+end as `grounding_review_truncated`, which stays retryable.
+
+Create Post also shows each length's limit: short up to 600 characters (~100 words), medium
+up to 1,200 (~200), long up to 2,400 (~400), in EN and HE. These are the maximums the server
+already enforces; the word counts assume about 6 characters a word.
+

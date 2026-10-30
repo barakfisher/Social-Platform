@@ -906,3 +906,15 @@ Every idea cited only sampled chunks and was in the requested language; no idea 
 by the server checks. Example: "מה ההבדל בין מנטורינג, אימון אישי ומנהיגות…", citing the
 mentoring, coaching, leadership and English Mentorship articles. The UI was checked with
 mocked data in EN/HE at 390 and 1280 px (no horizontal scroll) and by 7 Playwright tests.
+
+## SP-27: review output limit 5,000 — 2026-10-30
+
+Offline only. With the code defaults ($0.37 cap, 5,000 review output tokens) the budget test
+passes for every choosable writer and reviewer (Terra worst case $0.1445 against a $0.148
+stage budget). No paid call was made: the live re-review of the two cut-off medium Hebrew
+drafts was deferred by the owner and remains open in SP-27.
+
+Checks: backend 696 passed on a disposable migrated database as the runtime role; ruff,
+format, `mypy app` and `alembic check` passed. Frontend Prettier, lint, tsc, production build
+and Playwright 64/64 passed, including a new EN/HE test for the length options.
+
