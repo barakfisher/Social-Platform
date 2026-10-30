@@ -1,4 +1,6 @@
 import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from celery import Celery
@@ -17,9 +19,11 @@ from app.embeddings import (
     embedding_lock,
     profile_key,
 )
-from app.extraction import ExtractionError, extract_pdf, page_range
+from app.extraction import ExtractionError, extract_html, extract_pdf, page_range
 from app.logging import configure_worker_logging
 from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
+from app.refresh import AWAITING, apply, changes, lock_original, mark_unchanged, today
+from app.web_fetch import FetchError, fallback_title, fetch_page
 
 celery_app = Celery("social_platform", broker=get_settings().redis_url)
 celery_app.conf.update(
@@ -71,6 +75,36 @@ def foundation_probe(job_id: str) -> None:
         )
 
 
+@dataclass
+class Extracted:
+    text: str | None = None
+    pages: list[tuple[int, int]] | None = None
+    title: str | None = None
+    # A web page fetched by this run, stored before the locked step records its key.
+    new_key: str | None = None
+    failure: str | None = None
+
+
+def extract_source(source_type: str, key: str | None, url: str | None) -> Extracted:
+    """Fetching and parsing take seconds, so they run before any row lock is taken."""
+    result = Extracted()
+    try:
+        if source_type == "pdf" and key:
+            result.text, result.pages = extract_pdf(storage.read(key))
+        elif source_type == "url" and url:
+            if key:
+                page = storage.read(key)
+            else:
+                page = fetch_page(url)
+                result.new_key = storage.put(page)
+            result.text, result.title = extract_html(page)
+    except (ExtractionError, FetchError) as exc:
+        result.failure = exc.code
+    except storage.StorageError as exc:
+        result.failure = str(exc)
+    return result
+
+
 @celery_app.task(
     name="social.process_text",
     autoretry_for=(OperationalError, ConnectionError, TimeoutError),
@@ -80,36 +114,48 @@ def foundation_probe(job_id: str) -> None:
     max_retries=3,
 )
 def process_text(job_id: str) -> None:
-    pages: list[tuple[int, int]] | None = None
-    extracted: str | None = None
-    failure: str | None = None
     with SessionLocal() as session:
         reference = session.get(IngestionJob, UUID(job_id))
         if reference is None or reference.kind != "text_ingestion":
             return
         document = session.get(KnowledgeDocument, reference.document_id)
-        key = document.storage_key if document and document.source_type == "pdf" else None
-    if key:
-        # Parsing can take seconds, so no row lock is held; the locked step below checks
-        # that the document still exists before writing anything.
-        try:
-            extracted, pages = extract_pdf(storage.read(key))
-        except ExtractionError as exc:
-            failure = exc.code
-        except storage.StorageError as exc:
-            failure = str(exc)
+        if document is None:
+            return
+        source = (document.source_type, document.storage_key, document.source_reference)
+    extracted = extract_source(*source)
+    outcome = Prepared()
+    try:
+        outcome = prepare_locked(job_id, extracted)
+    finally:
+        # A fetched page is kept only once a committed row refers to it.
+        if extracted.new_key and not outcome.kept:
+            storage.remove(extracted.new_key)
+
+
+@dataclass
+class Prepared:
+    # The run's fetched page is referenced by a committed row.
+    kept: bool = False
+
+
+def prepare_locked(job_id: str, extracted: Extracted) -> Prepared:
+    """Writes the result under the row locks."""
+    pages, failure = extracted.pages, extracted.failure
+    outcome = Prepared()
     with SessionLocal.begin() as session:
         reference = session.get(IngestionJob, UUID(job_id))
         if reference is None or reference.kind != "text_ingestion":
-            return
+            return outcome
+        # A staging copy's original is locked first (app/refresh.py); otherwise None.
+        original = lock_original(session, reference.document_id)
         # Consistent document-before-job lock ordering serializes retry/delete/delivery.
         document = session.scalar(
             select(KnowledgeDocument)
             .where(KnowledgeDocument.id == reference.document_id)
             .with_for_update()
         )
-        if document is None:
-            return
+        if document is None or (document.replaces_id is not None and original is None):
+            return outcome
         job = session.scalar(
             select(IngestionJob)
             .where(IngestionJob.id == UUID(job_id))
@@ -117,8 +163,25 @@ def process_text(job_id: str) -> None:
             .execution_options(populate_existing=True)
         )
         if job is None or job.status == "Ready":
-            return
+            return outcome
         job.attempts += 1
+        text = extracted.text if extracted.text is not None else document.source_text
+        if (
+            failure is None
+            and original is not None
+            and changes(original.source_text, text)
+            == (
+                [],
+                [],
+            )
+        ):
+            # Loaded again and nothing changed: no new chunks and no paid embedding.
+            mark_unchanged(session, original, document)
+            return outcome
+        # Another delivery may have stored the page first; its copy wins.
+        if extracted.new_key and document.storage_key is None:
+            document.storage_key = extracted.new_key
+            outcome.kept = True
         if failure is not None:
             # Actionable and not retried automatically: the same bytes fail the same way.
             document.status = job.status = "Failed"
@@ -128,11 +191,23 @@ def process_text(job_id: str) -> None:
                 "extraction_failed",
                 extra={"job_id": job_id, "document_id": str(document.id), "error_code": failure},
             )
-            return
-        document.status = job.status = "Processing"
-        if extracted is not None:
-            document.source_text = extracted
-        chunks = chunk_text(document.source_text or "")
+            return outcome
+        document.source_text = text
+        document.error_code = job.error_code = None
+        job.status = "Ready"
+        if document.source_type == "url":
+            document.fetched_at = datetime.now(UTC)
+        if extracted.title and document.title == fallback_title(document.source_reference or ""):
+            document.title = extracted.title
+        if original is not None:
+            # Changed on the site: the owner chooses to replace, append or keep
+            # (app/refresh.py); chunks are made once the choice is known.
+            document.status = "Processing"
+            document.processing_stage = AWAITING
+            logger.info("refresh_awaiting_decision", extra={"job_id": job_id})
+            return outcome
+        document.status = "Processing"
+        chunks = chunk_text(document.source_text or "", added_on=today())
         if pages:
             for values in chunks:
                 location = values["source_location"]
@@ -148,14 +223,13 @@ def process_text(job_id: str) -> None:
                     **values,
                 )
             )
-        document.processing_stage = "text_prepared"
-        document.error_code = job.error_code = None
         # Ready is reserved for fully embedded documents. This job only prepares text.
-        job.status = "Ready"
+        document.processing_stage = "text_prepared"
         logger.info(
             "text_prepared",
             extra={"job_id": job_id, "document_id": str(document.id), "request_id": job.request_id},
         )
+    return outcome
 
 
 @task_failure.connect
@@ -256,7 +330,9 @@ def embed_document(job_id: str) -> None:
                     chunk.embedding_model = settings.embedding_model
                     chunk.embedding_dimensions = settings.embedding_dimensions
                     chunk.embedding_profile = profile
+        replaced_key = None
         with SessionLocal.begin() as session:
+            original = lock_original(session, document_id)
             document = session.scalar(
                 select(KnowledgeDocument)
                 .where(KnowledgeDocument.id == document_id)
@@ -265,9 +341,14 @@ def embed_document(job_id: str) -> None:
             job = session.get(IngestionJob, UUID(job_id))
             if document is None or job is None or document.embedding_profile != profile:
                 return
-            document.status = job.status = "Ready"
             document.processing_stage = "ready"
             document.error_code = job.error_code = None
+            job.status = "Ready"
+            if document.replaces_id is None:
+                document.status = "Ready"
+            elif original is not None:
+                # A loaded-again page changes its searchable original only now (refresh).
+                replaced_key = apply(session, original, document)
             logger.info(
                 "embedding_complete",
                 extra={
@@ -276,6 +357,8 @@ def embed_document(job_id: str) -> None:
                     "request_id": job.request_id,
                 },
             )
+        if replaced_key:
+            storage.remove(replaced_key)
 
 
 @task_failure.connect

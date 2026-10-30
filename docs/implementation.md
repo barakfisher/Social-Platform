@@ -1025,3 +1025,115 @@ storage, a scheduled sweep for unreferenced files, OCR, and a live Docker run wi
 order, depending on how the PDF was produced; headings are not detected separately in PDFs;
 pypdf's own decompression limits plus the worker's 90 s soft time limit bound hostile files.
 
+## SP-17: web page sources (SP-8, SP-9, SP-10 slice) — 2026-10-30
+
+Owner decision: trafilatura (Apache 2.0) extracts a page's main text, as Markdown so
+headings survive; navigation, footers and comments are dropped.
+
+Submission: `POST /knowledge/url` (JSON `{url, title?}`) checks only the URL's form:
+http/https, no user name or password, default ports (80/443) only, at most 2,048
+characters, and no internal IP literal or `localhost`/`.local`/`.internal` name. Each failure
+is a 422 with its code. The URL is normalized (lowercase scheme and host, default port and
+fragment dropped). One source per normalized URL per workspace
+(`uq_url_workspace_checksum`, migration `9d4f2a6c8e17`). Without a title, the source is named
+after host and path until the page's own title is known; an owner's title is never replaced.
+
+Fetching (`app/web_fetch.py`) runs in the worker, before any row lock:
+- Every hop resolves the name and requires every answer to be public (`ip.is_global`, not
+  multicast; IPv4 inside IPv4-mapped, 6to4 and NAT64 addresses is checked as IPv4; Teredo is
+  refused). One internal answer blocks the host.
+- The connection goes to the checked address, with the name in the Host header and TLS SNI,
+  so certificate checks still use the name and a second DNS answer cannot redirect it (DNS
+  rebinding).
+- Redirects are followed by hand, at most 3, each re-checked like the first URL.
+- Environment proxies are ignored (`trust_env=False`): a proxy would resolve the name
+  itself.
+- Limits: 5 s connect and 10 s read timeouts, 30 s in total, and UPLOAD_MAX_BYTES (10 MB)
+  applied after decompression. gzip and deflate go through our own bounded decoder; other
+  encodings are refused. Only `text/html` and `application/xhtml+xml` are accepted.
+- Codes: `url_dns_failed`, `url_blocked_address`, `url_timeout`, `url_too_large`,
+  `url_http_error`, `url_unsupported_type`, `url_too_many_redirects`, `url_fetch_failed`,
+  `url_no_content`, `url_parse_failed`, `source_too_long`.
+
+The fetched HTML is stored privately like an uploaded file. A copy is kept only once a
+committed row refers to it: if the source is deleted while the page is fetched, or the write
+fails, the copy is removed. "Process again" on a web page drops the stored copy and fetches
+the page afresh.
+
+UI: an "Add a web page" form (EN/HE) under the upload form checks the address's form
+before sending, shows the server's codes, and lists web sources as "Web link" with the
+address as an outgoing link (`rel="noopener noreferrer"`). Every fetch failure has its own
+message.
+
+Verification: backend 812 passed (77 new: 52 fetcher, 19 URL source, 6 write guard). The
+fetcher tests cover every internal address class, form checks, IP pinning with Host and SNI,
+IPv6 pinning, mixed DNS answers, redirects to internal addresses and to names that resolve
+inside, redirect limits, HTTP errors, content types, encodings, size limits before and after
+decompression, timeouts, connection errors and the proxy setting. Frontend Playwright 70/70
+(2 new). The real network path ran against a local server on port 80 with only DNS and the
+public-address rule overridden: the request reached the checked IP with `Host: garden.test`,
+followed a 301, decoded gzip, and the extracted text kept both headings.
+
+Not verified: a fetch of a real public site. This sandbox reaches the internet only through
+a proxy, and the fetcher deliberately ignores proxies. It needs a check on the owner's
+machine. Known limits: pages that render their text with JavaScript yield `url_no_content`;
+trafilatura may keep a short menu line on a page with almost no text; DNS lookups use the
+system resolver's own timeout; a redirect to a PDF is refused (`url_unsupported_type`), so
+the owner downloads and uploads it instead.
+
+## SP-17: loading a web page again — 2026-10-30
+
+Owner decisions: the current version stays in use until the new one is ready; when the page
+changed, the owner sees the changes and chooses to replace the source, add the new
+paragraphs to it, or keep it; a searchable source is embedded again automatically after
+the choice (about $0.0001 a page); and wherever sources conflict, newer information wins.
+
+`POST /knowledge/{id}/refresh` works on web sources whose text is prepared or Ready. It
+creates a hidden staging copy (`replaces_id`, one per source, deleted with the source; migration
+`b3e8d5f1c260`) that the normal job fetches and extracts (`app/refresh.py`):
+- Staging copies never become Ready, so retrieval, generation and topic suggestions keep
+  using the original. They are excluded from listing and from GET, retry and delete by ID.
+- Paragraphs are compared, not raw text: whitespace and case are ignored, and the dated
+  headings this feature adds are not content. No new and no removed paragraphs: only
+  `fetched_at` changes (`refresh_result = "unchanged"`), with no chunks and no embedding.
+- Otherwise the staging copy waits in `awaiting_decision`. The list shows the counts;
+  `GET /knowledge/{id}/refresh-changes` returns up to 30 new and 30 removed paragraphs (500
+  characters each). `POST /knowledge/{id}/refresh-decision` takes `replace`, `append` or `keep`:
+  - replace: the new text and its chunks take the original's place (`"replaced"`);
+  - append: only paragraphs the source does not have are added after a heading
+    `## Added YYYY-MM-DD / נוסף YYYY-MM-DD`. Existing text, chunks and embeddings stay;
+    new chunks continue the order and offsets (`"appended"`). Removed paragraphs stay in the
+    source, so a news page keeps earlier items. With no new paragraphs, append keeps;
+  - keep: the staging copy and its page copy are dropped (`"kept"`).
+- A searchable original changes only after the new chunks are embedded, in one transaction
+  that also takes the newest page copy. A source that is not searchable yet changes at once.
+  Replace or append on a searchable source without an embedding key is a 503 and the
+  choice stays open.
+- Every refresh write locks the original before its staging copy. A failed load stays on
+  the staging copy; loading again replaces it. Saved drafts keep their own source snapshots.
+
+Newer wins: every new chunk records `source_location.added_on` (the date its text entered
+the knowledge base; for chunks made before this, retrieval uses the document's creation
+date). The writer prompt (`grounded-post-v5`) gains one line: when sources disagree, state
+only the most recently added version. The source check is unchanged: both versions are in
+the sources, so either is supported; preferring the newer one is the writer's job.
+
+UI: web sources show "Last loaded" and "Load again from the site". While a page loads, the
+original keeps its status. Changed pages show the counts, "Show changes" (new paragraphs
+marked green, removed ones red) and the three choices; "Add the new paragraphs" is disabled
+when there are none. Results and failures have EN/HE messages.
+
+Verification: backend 833 passed (15 refresh tests on the real database: paragraph
+comparison, unchanged, waiting with counts and preview, replace, append with offsets and
+dates and a second load adding nothing, keep, replace and append on a searchable source with
+search results checked while embedding, the embedding-key refusal, failure and retry, delete
+during a refresh, refusals, chunk dates, the prompt line and the date fallback); ruff,
+`mypy app`, `alembic check` and a downgrade/upgrade round trip. Frontend Prettier, lint, tsc,
+production build and Playwright 73/73.
+
+Not verified live: the prompt change needs a quality run with real models
+(`scripts/evaluate_generation.py`, paid; this sandbox has no provider key), and the same
+fetch limits as web page sources apply (no public fetch from this sandbox). Known limits:
+paragraph comparison treats an edited paragraph as one removed and one new; only the first
+chunk of a long appended section starts with the dated heading, but every chunk carries
+added_on; conflicts inside one chunk are not resolved by dates.

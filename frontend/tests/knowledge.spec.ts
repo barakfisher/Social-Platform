@@ -276,7 +276,7 @@ test("a PDF upload shows progress, its type and file name, then a processing fai
   });
   await page.goto("/en/knowledge");
   await expect(page.locator("#upload-limit")).toHaveText(
-    "PDF, TXT or Markdown (UTF-8), up to 5 MB and 120 pages. Scanned PDFs need text recognition (OCR) first. Web links come later.",
+    "PDF, TXT or Markdown (UTF-8), up to 5 MB and 120 pages. Scanned PDFs need text recognition (OCR) first.",
   );
   await page.getByLabel("PDF or text file", { exact: true }).setInputFiles({
     name: "garden-guide.pdf",
@@ -398,4 +398,284 @@ test("a rejected Hebrew text file keeps the choice and explains the fix", async 
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBeTruthy();
+});
+
+test("a web page is added, shown with its link, and explains a fetch failure", async ({
+  page,
+}) => {
+  let item: typeof sourceDocument | null = null;
+  let sent: Record<string, unknown> | null = null;
+  await page.route("**/api/knowledge**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname.endsWith("/url")) {
+      sent = request.postDataJSON();
+      item = {
+        ...sourceDocument,
+        title: "garden.example/hours",
+        source_type: "url",
+        filename: null,
+        url: "https://garden.example/hours",
+      } as typeof sourceDocument;
+      await route.fulfill({ status: 202, json: { ...item, duplicate: false } });
+      return;
+    }
+    await route.fulfill({
+      json: { items: item ? [item] : [], total: item ? 1 : 0 },
+    });
+  });
+  await page.goto("/en/knowledge");
+  await page
+    .getByLabel("Page address (URL)", { exact: true })
+    .fill(" https://garden.example/hours ");
+  await page.getByRole("button", { name: "Add web page", exact: true }).click();
+  await expect(
+    page.getByText("Web page added. It will be fetched and prepared.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(sent).toEqual({ url: "https://garden.example/hours", title: "" });
+  await expect(page.getByLabel("Page address (URL)")).toHaveValue("");
+  const entry = page
+    .getByRole("listitem")
+    .filter({ hasText: "garden.example/hours" });
+  await expect(entry).toContainText("Web link · https://garden.example/hours");
+  const link = entry.getByRole("link", {
+    name: "https://garden.example/hours",
+  });
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  item = {
+    ...item!,
+    status: "Failed",
+    stage: "failed",
+    error_code: "url_no_content",
+  };
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(entry).toContainText("No readable text was found on this page.");
+  await expect(
+    entry.getByRole("button", { name: "Process again", exact: true }),
+  ).toBeVisible();
+});
+
+test("web addresses are checked in Hebrew before and after sending", async ({
+  page,
+}) => {
+  let posts = 0;
+  await page.route("**/api/knowledge**", async (route) => {
+    if (route.request().method() === "POST") {
+      posts += 1;
+      await route.fulfill({
+        status: 422,
+        json: { error: { code: "http_error", message: "url_blocked_address" } },
+      });
+      return;
+    }
+    await route.fulfill({ json: { items: [], total: 0 } });
+  });
+  await page.goto("/he/knowledge");
+  const input = page.getByLabel("כתובת הדף (URL)", { exact: true });
+  const add = page.getByRole("button", { name: "הוספת הדף", exact: true });
+  const alert = page.locator("section [role=alert]");
+  await input.fill("ftp://garden.example/file");
+  await add.click();
+  await expect(alert).toHaveText("אפשר להוסיף רק כתובות http או https.");
+  await input.fill("garden");
+  await add.click();
+  await expect(alert).toHaveText(
+    "יש להזין כתובת מלאה, למשל https://example.com/page.",
+  );
+  expect(posts).toBe(0);
+  await input.fill("http://10.0.0.5/admin");
+  await add.click();
+  await expect(alert).toHaveText(
+    "הכתובת מפנה לרשת פרטית או מקומית, ואי אפשר לטעון אותה.",
+  );
+  expect(posts).toBe(1);
+  await expect(input).toHaveValue("http://10.0.0.5/admin");
+  await expect(input).toHaveAttribute("aria-invalid", "true");
+});
+
+const webPage = {
+  ...sourceDocument,
+  title: "Garden hours",
+  source_type: "url",
+  url: "https://garden.example/hours",
+  status: "Ready",
+  stage: "ready",
+  chunk_count: 2,
+  embedded_chunk_count: 2,
+  fetched_at: "2026-10-30T09:15:00Z",
+  refresh_result: null as string | null,
+  refresh: null as {
+    status: string;
+    stage: string;
+    error_code: string | null;
+  } | null,
+};
+
+test("a changed web page shows its changes and the owner chooses to add them", async ({
+  page,
+}) => {
+  let item = { ...webPage };
+  const decisions: unknown[] = [];
+  await page.route("**/api/knowledge**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/refresh")) {
+      item = {
+        ...item,
+        refresh: { status: "Processing", stage: "fetching", error_code: null },
+      };
+      await route.fulfill({ status: 202, json: item });
+      return;
+    }
+    if (path.endsWith("/refresh-changes")) {
+      await route.fulfill({
+        json: {
+          added: ["Seed library opens on Sunday."],
+          removed: ["Open until seven."],
+          added_count: 3,
+          removed_count: 1,
+        },
+      });
+      return;
+    }
+    if (path.endsWith("/refresh-decision")) {
+      decisions.push(request.postDataJSON());
+      item = {
+        ...item,
+        refresh: null,
+        refresh_result: "appended",
+        fetched_at: "2026-10-30T11:00:00Z",
+      };
+      await route.fulfill({ status: 202, json: item });
+      return;
+    }
+    await route.fulfill({ json: { items: [item], total: 1 } });
+  });
+  await page.goto("/en/knowledge");
+  const entry = page.getByRole("listitem").filter({ hasText: "Garden hours" });
+  await expect(entry.locator("time").nth(1)).toHaveAttribute(
+    "datetime",
+    webPage.fetched_at,
+  );
+  await entry
+    .getByRole("button", { name: "Load again from the site", exact: true })
+    .click();
+  await expect(entry).toContainText("Loading again…");
+  await expect(entry.getByText("Ready", { exact: true })).toBeVisible();
+  item = {
+    ...item,
+    refresh: {
+      status: "Processing",
+      stage: "awaiting_decision",
+      error_code: null,
+      added_count: 3,
+      removed_count: 1,
+    } as typeof item.refresh,
+  };
+  await expect(entry).toContainText(
+    "The page changed: 3 new paragraphs, 1 no longer on the site.",
+    { timeout: 10000 },
+  );
+  await expect(
+    entry.getByRole("button", { name: "Load again from the site" }),
+  ).toHaveCount(0);
+  await entry
+    .getByRole("button", { name: "Show changes", exact: true })
+    .click();
+  await expect(
+    entry.getByText("New on the site", { exact: true }),
+  ).toBeVisible();
+  await expect(entry).toContainText("Seed library opens on Sunday.");
+  await expect(entry).toContainText("Open until seven.");
+  await expect(entry).toContainText("…and 2 more");
+  await entry
+    .getByRole("button", { name: "Add the new paragraphs", exact: true })
+    .click();
+  await expect(entry).toContainText("New paragraphs from the site were added.");
+  expect(decisions).toEqual([{ action: "append" }]);
+  await expect(entry.locator("time").nth(1)).toHaveAttribute(
+    "datetime",
+    "2026-10-30T11:00:00Z",
+  );
+});
+
+test("the Hebrew choice panel offers replace, add and keep", async ({
+  page,
+}) => {
+  let item = {
+    ...webPage,
+    refresh: {
+      status: "Processing",
+      stage: "awaiting_decision",
+      error_code: null,
+      added_count: 0,
+      removed_count: 2,
+    } as typeof webPage.refresh,
+  };
+  const decisions: unknown[] = [];
+  await page.route("**/api/knowledge**", async (route) => {
+    const request = route.request();
+    if (new URL(request.url()).pathname.endsWith("/refresh-decision")) {
+      decisions.push(request.postDataJSON());
+      item = { ...item, refresh: null, refresh_result: "kept" };
+      await route.fulfill({ status: 202, json: item });
+      return;
+    }
+    await route.fulfill({ json: { items: [item], total: 1 } });
+  });
+  await page.goto("/he/knowledge");
+  const entry = page.getByRole("listitem").filter({ hasText: "Garden hours" });
+  await expect(entry).toContainText(
+    "הדף השתנה: 0 פסקאות חדשות, 2 שכבר לא באתר.",
+  );
+  await expect(
+    entry.getByRole("button", { name: "הוספת הפסקאות החדשות", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    entry.getByRole("button", { name: "החלפה בגרסה החדשה", exact: true }),
+  ).toBeEnabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBeTruthy();
+  await entry
+    .getByRole("button", { name: "השארת הגרסה הנוכחית", exact: true })
+    .click();
+  await expect(entry).toContainText("הגרסה הנוכחית נשמרה.");
+  expect(decisions).toEqual([{ action: "keep" }]);
+});
+
+test("a failed reload in Hebrew says the previous version is still used", async ({
+  page,
+}) => {
+  await page.route("**/api/knowledge**", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            ...webPage,
+            refresh: {
+              status: "Failed",
+              stage: "failed",
+              error_code: "url_timeout",
+            },
+          },
+        ],
+        total: 1,
+      },
+    });
+  });
+  await page.goto("/he/knowledge");
+  const entry = page.getByRole("listitem").filter({ hasText: "Garden hours" });
+  await expect(entry).toContainText(
+    "הטעינה מחדש לא הסתיימה: האתר לא ענה בזמן. אפשר לנסות לעבד שוב מאוחר יותר. הגרסה הקודמת עדיין בשימוש.",
+  );
+  await expect(entry).toContainText("נטען לאחרונה");
+  await expect(
+    entry.getByRole("button", { name: "טעינה מחדש מהאתר", exact: true }),
+  ).toBeVisible();
 });
