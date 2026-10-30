@@ -99,6 +99,14 @@ class KnowledgeDocument(Owned, Base):
             unique=True,
             postgresql_where=text("source_type IN ('pdf', 'txt') AND checksum IS NOT NULL"),
         ),
+        # A web page is submitted once per workspace, by its normalized URL's checksum.
+        Index(
+            "uq_url_workspace_checksum",
+            "workspace_id",
+            "checksum",
+            unique=True,
+            postgresql_where=text("source_type = 'url' AND checksum IS NOT NULL"),
+        ),
         CheckConstraint(
             "source_type IN ('text', 'txt', 'pdf', 'url')",
             name="knowledge_documents_source_type_check",

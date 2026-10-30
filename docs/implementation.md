@@ -1025,3 +1025,59 @@ storage, a scheduled sweep for unreferenced files, OCR, and a live Docker run wi
 order, depending on how the PDF was produced; headings are not detected separately in PDFs;
 pypdf's own decompression limits plus the worker's 90 s soft time limit bound hostile files.
 
+## SP-17: web page sources (SP-8, SP-9, SP-10 slice) — 2026-10-30
+
+Owner decision: trafilatura (Apache 2.0) extracts a page's main text, as Markdown so
+headings survive; navigation, footers and comments are dropped.
+
+Submission: `POST /knowledge/url` (JSON `{url, title?}`) checks only the URL's form:
+http/https, no user name or password, default ports (80/443) only, at most 2,048
+characters, and no internal IP literal or `localhost`/`.local`/`.internal` name. Each failure
+is a 422 with its code. The URL is normalized (lowercase scheme and host, default port and
+fragment dropped). One source per normalized URL per workspace
+(`uq_url_workspace_checksum`, migration `9d4f2a6c8e17`). Without a title, the source is named
+after host and path until the page's own title is known; an owner's title is never replaced.
+
+Fetching (`app/web_fetch.py`) runs in the worker, before any row lock:
+- Every hop resolves the name and requires every answer to be public (`ip.is_global`, not
+  multicast; IPv4 inside IPv4-mapped, 6to4 and NAT64 addresses is checked as IPv4; Teredo is
+  refused). One internal answer blocks the host.
+- The connection goes to the checked address, with the name in the Host header and TLS SNI,
+  so certificate checks still use the name and a second DNS answer cannot redirect it (DNS
+  rebinding).
+- Redirects are followed by hand, at most 3, each re-checked like the first URL.
+- Environment proxies are ignored (`trust_env=False`): a proxy would resolve the name
+  itself.
+- Limits: 5 s connect and 10 s read timeouts, 30 s in total, and UPLOAD_MAX_BYTES (10 MB)
+  applied after decompression. gzip and deflate go through our own bounded decoder; other
+  encodings are refused. Only `text/html` and `application/xhtml+xml` are accepted.
+- Codes: `url_dns_failed`, `url_blocked_address`, `url_timeout`, `url_too_large`,
+  `url_http_error`, `url_unsupported_type`, `url_too_many_redirects`, `url_fetch_failed`,
+  `url_no_content`, `url_parse_failed`, `source_too_long`.
+
+The fetched HTML is stored privately like an uploaded file. A copy is kept only once a
+committed row refers to it: if the source is deleted while the page is fetched, or the write
+fails, the copy is removed. "Process again" on a web page drops the stored copy and fetches
+the page afresh.
+
+UI: an "Add a web page" form (EN/HE) under the upload form checks the address's form
+before sending, shows the server's codes, and lists web sources as "Web link" with the
+address as an outgoing link (`rel="noopener noreferrer"`). Every fetch failure has its own
+message.
+
+Verification: backend 812 passed (77 new: 52 fetcher, 19 URL source, 6 write guard). The
+fetcher tests cover every internal address class, form checks, IP pinning with Host and SNI,
+IPv6 pinning, mixed DNS answers, redirects to internal addresses and to names that resolve
+inside, redirect limits, HTTP errors, content types, encodings, size limits before and after
+decompression, timeouts, connection errors and the proxy setting. Frontend Playwright 70/70
+(2 new). The real network path ran against a local server on port 80 with only DNS and the
+public-address rule overridden: the request reached the checked IP with `Host: garden.test`,
+followed a 301, decoded gzip, and the extracted text kept both headings.
+
+Not verified: a fetch of a real public site. This sandbox reaches the internet only through
+a proxy, and the fetcher deliberately ignores proxies. It needs a check on the owner's
+machine. Known limits: pages that render their text with JavaScript yield `url_no_content`;
+trafilatura may keep a short menu line on a page with almost no text; DNS lookups use the
+system resolver's own timeout; a redirect to a PDF is refused (`url_unsupported_type`), so
+the owner downloads and uploads it instead.
+

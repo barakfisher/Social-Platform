@@ -26,6 +26,7 @@ WRITES = [
     ("POST", f"/knowledge/{DOCUMENT}/retry", None),
     ("POST", "/knowledge/text", b"{}"),
     ("POST", "/knowledge/files?filename=notes.pdf", b"%PDF-1.4"),
+    ("POST", "/knowledge/url", b'{"url": "https://garden.example/"}'),
     ("POST", "/dev/jobs/probe", None),
     ("PUT", "/brand", b"{}"),
     ("DELETE", f"/knowledge/{DOCUMENT}", None),

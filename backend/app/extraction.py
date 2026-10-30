@@ -1,8 +1,10 @@
 """Text extraction from uploaded source files (SP-8). Failures carry actionable codes."""
 
+import re
 from bisect import bisect_right
 from io import BytesIO
 
+import trafilatura
 from billiard.exceptions import SoftTimeLimitExceeded
 from pypdf import PdfReader
 
@@ -10,6 +12,7 @@ from app.chunking import normalize_text
 from app.config import get_settings
 
 PAGE_SEPARATOR = "\n\n"
+CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class ExtractionError(Exception):
@@ -79,6 +82,34 @@ def extract_pdf(data: bytes) -> tuple[str, list[tuple[int, int]]]:
     if not parts:
         raise ExtractionError("pdf_requires_ocr")
     return PAGE_SEPARATOR.join(parts), pages
+
+
+def extract_html(data: bytes) -> tuple[str, str | None]:
+    """Main text of a web page as Markdown (headings kept), and the page's title.
+
+    trafilatura drops navigation, footers and comments; it detects the encoding itself.
+    """
+    try:
+        text = trafilatura.extract(
+            data,
+            output_format="markdown",
+            include_comments=False,
+            include_images=False,
+            favor_precision=True,
+        )
+        metadata = trafilatura.extract_metadata(data)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        raise ExtractionError("url_parse_failed") from None
+    text = normalize_text(text or "")
+    if not text:
+        raise ExtractionError("url_no_content")
+    if len(text) > get_settings().source_max_characters:
+        raise ExtractionError("source_too_long")
+    title = normalize_text(metadata.title or "") if metadata else ""
+    title = CONTROL_CHARACTERS.sub(" ", title).strip()[:300]
+    return text, title or None
 
 
 def page_range(pages: list[tuple[int, int]], char_start: int, char_end: int) -> dict:

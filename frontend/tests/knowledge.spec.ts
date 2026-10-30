@@ -276,7 +276,7 @@ test("a PDF upload shows progress, its type and file name, then a processing fai
   });
   await page.goto("/en/knowledge");
   await expect(page.locator("#upload-limit")).toHaveText(
-    "PDF, TXT or Markdown (UTF-8), up to 5 MB and 120 pages. Scanned PDFs need text recognition (OCR) first. Web links come later.",
+    "PDF, TXT or Markdown (UTF-8), up to 5 MB and 120 pages. Scanned PDFs need text recognition (OCR) first.",
   );
   await page.getByLabel("PDF or text file", { exact: true }).setInputFiles({
     name: "garden-guide.pdf",
@@ -398,4 +398,99 @@ test("a rejected Hebrew text file keeps the choice and explains the fix", async 
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBeTruthy();
+});
+
+test("a web page is added, shown with its link, and explains a fetch failure", async ({
+  page,
+}) => {
+  let item: typeof sourceDocument | null = null;
+  let sent: Record<string, unknown> | null = null;
+  await page.route("**/api/knowledge**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname.endsWith("/url")) {
+      sent = request.postDataJSON();
+      item = {
+        ...sourceDocument,
+        title: "garden.example/hours",
+        source_type: "url",
+        filename: null,
+        url: "https://garden.example/hours",
+      } as typeof sourceDocument;
+      await route.fulfill({ status: 202, json: { ...item, duplicate: false } });
+      return;
+    }
+    await route.fulfill({
+      json: { items: item ? [item] : [], total: item ? 1 : 0 },
+    });
+  });
+  await page.goto("/en/knowledge");
+  await page
+    .getByLabel("Page address (URL)", { exact: true })
+    .fill(" https://garden.example/hours ");
+  await page.getByRole("button", { name: "Add web page", exact: true }).click();
+  await expect(
+    page.getByText("Web page added. It will be fetched and prepared.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(sent).toEqual({ url: "https://garden.example/hours", title: "" });
+  await expect(page.getByLabel("Page address (URL)")).toHaveValue("");
+  const entry = page
+    .getByRole("listitem")
+    .filter({ hasText: "garden.example/hours" });
+  await expect(entry).toContainText("Web link · https://garden.example/hours");
+  const link = entry.getByRole("link", {
+    name: "https://garden.example/hours",
+  });
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  item = {
+    ...item!,
+    status: "Failed",
+    stage: "failed",
+    error_code: "url_no_content",
+  };
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(entry).toContainText("No readable text was found on this page.");
+  await expect(
+    entry.getByRole("button", { name: "Process again", exact: true }),
+  ).toBeVisible();
+});
+
+test("web addresses are checked in Hebrew before and after sending", async ({
+  page,
+}) => {
+  let posts = 0;
+  await page.route("**/api/knowledge**", async (route) => {
+    if (route.request().method() === "POST") {
+      posts += 1;
+      await route.fulfill({
+        status: 422,
+        json: { error: { code: "http_error", message: "url_blocked_address" } },
+      });
+      return;
+    }
+    await route.fulfill({ json: { items: [], total: 0 } });
+  });
+  await page.goto("/he/knowledge");
+  const input = page.getByLabel("כתובת הדף (URL)", { exact: true });
+  const add = page.getByRole("button", { name: "הוספת הדף", exact: true });
+  const alert = page.locator("section [role=alert]");
+  await input.fill("ftp://garden.example/file");
+  await add.click();
+  await expect(alert).toHaveText("אפשר להוסיף רק כתובות http או https.");
+  await input.fill("garden");
+  await add.click();
+  await expect(alert).toHaveText(
+    "יש להזין כתובת מלאה, למשל https://example.com/page.",
+  );
+  expect(posts).toBe(0);
+  await input.fill("http://10.0.0.5/admin");
+  await add.click();
+  await expect(alert).toHaveText(
+    "הכתובת מפנה לרשת פרטית או מקומית, ואי אפשר לטעון אותה.",
+  );
+  expect(posts).toBe(1);
+  await expect(input).toHaveValue("http://10.0.0.5/admin");
+  await expect(input).toHaveAttribute("aria-invalid", "true");
 });

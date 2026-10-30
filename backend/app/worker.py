@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from uuid import UUID
 
 from celery import Celery
@@ -17,9 +18,10 @@ from app.embeddings import (
     embedding_lock,
     profile_key,
 )
-from app.extraction import ExtractionError, extract_pdf, page_range
+from app.extraction import ExtractionError, extract_html, extract_pdf, page_range
 from app.logging import configure_worker_logging
 from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
+from app.web_fetch import FetchError, fallback_title, fetch_page
 
 celery_app = Celery("social_platform", broker=get_settings().redis_url)
 celery_app.conf.update(
@@ -71,6 +73,36 @@ def foundation_probe(job_id: str) -> None:
         )
 
 
+@dataclass
+class Extracted:
+    text: str | None = None
+    pages: list[tuple[int, int]] | None = None
+    title: str | None = None
+    # A web page fetched by this run, stored before the locked step records its key.
+    new_key: str | None = None
+    failure: str | None = None
+
+
+def extract_source(source_type: str, key: str | None, url: str | None) -> Extracted:
+    """Fetching and parsing take seconds, so they run before any row lock is taken."""
+    result = Extracted()
+    try:
+        if source_type == "pdf" and key:
+            result.text, result.pages = extract_pdf(storage.read(key))
+        elif source_type == "url" and url:
+            if key:
+                page = storage.read(key)
+            else:
+                page = fetch_page(url)
+                result.new_key = storage.put(page)
+            result.text, result.title = extract_html(page)
+    except (ExtractionError, FetchError) as exc:
+        result.failure = exc.code
+    except storage.StorageError as exc:
+        result.failure = str(exc)
+    return result
+
+
 @celery_app.task(
     name="social.process_text",
     autoretry_for=(OperationalError, ConnectionError, TimeoutError),
@@ -80,28 +112,32 @@ def foundation_probe(job_id: str) -> None:
     max_retries=3,
 )
 def process_text(job_id: str) -> None:
-    pages: list[tuple[int, int]] | None = None
-    extracted: str | None = None
-    failure: str | None = None
     with SessionLocal() as session:
         reference = session.get(IngestionJob, UUID(job_id))
         if reference is None or reference.kind != "text_ingestion":
             return
         document = session.get(KnowledgeDocument, reference.document_id)
-        key = document.storage_key if document and document.source_type == "pdf" else None
-    if key:
-        # Parsing can take seconds, so no row lock is held; the locked step below checks
-        # that the document still exists before writing anything.
-        try:
-            extracted, pages = extract_pdf(storage.read(key))
-        except ExtractionError as exc:
-            failure = exc.code
-        except storage.StorageError as exc:
-            failure = str(exc)
+        if document is None:
+            return
+        source = (document.source_type, document.storage_key, document.source_reference)
+    extracted = extract_source(*source)
+    kept = False
+    try:
+        kept = prepare_locked(job_id, extracted)
+    finally:
+        # A fetched page is kept only once a committed row refers to it.
+        if extracted.new_key and not kept:
+            storage.remove(extracted.new_key)
+
+
+def prepare_locked(job_id: str, extracted: Extracted) -> bool:
+    """Writes the result under the row lock; True when the run's fetched page was kept."""
+    pages, failure = extracted.pages, extracted.failure
+    kept = False
     with SessionLocal.begin() as session:
         reference = session.get(IngestionJob, UUID(job_id))
         if reference is None or reference.kind != "text_ingestion":
-            return
+            return False
         # Consistent document-before-job lock ordering serializes retry/delete/delivery.
         document = session.scalar(
             select(KnowledgeDocument)
@@ -109,7 +145,7 @@ def process_text(job_id: str) -> None:
             .with_for_update()
         )
         if document is None:
-            return
+            return False
         job = session.scalar(
             select(IngestionJob)
             .where(IngestionJob.id == UUID(job_id))
@@ -117,8 +153,12 @@ def process_text(job_id: str) -> None:
             .execution_options(populate_existing=True)
         )
         if job is None or job.status == "Ready":
-            return
+            return False
         job.attempts += 1
+        # Another delivery may have stored the page first; its copy wins.
+        if extracted.new_key and document.storage_key is None:
+            document.storage_key = extracted.new_key
+            kept = True
         if failure is not None:
             # Actionable and not retried automatically: the same bytes fail the same way.
             document.status = job.status = "Failed"
@@ -128,10 +168,12 @@ def process_text(job_id: str) -> None:
                 "extraction_failed",
                 extra={"job_id": job_id, "document_id": str(document.id), "error_code": failure},
             )
-            return
+            return kept
         document.status = job.status = "Processing"
-        if extracted is not None:
-            document.source_text = extracted
+        if extracted.text is not None:
+            document.source_text = extracted.text
+        if extracted.title and document.title == fallback_title(document.source_reference or ""):
+            document.title = extracted.title
         chunks = chunk_text(document.source_text or "")
         if pages:
             for values in chunks:
@@ -156,6 +198,7 @@ def process_text(job_id: str) -> None:
             "text_prepared",
             extra={"job_id": job_id, "document_id": str(document.id), "request_id": job.request_id},
         )
+    return kept
 
 
 @task_failure.connect

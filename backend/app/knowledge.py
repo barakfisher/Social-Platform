@@ -1,5 +1,4 @@
 import hashlib
-import re
 import unicodedata
 from pathlib import PurePosixPath
 from typing import Annotated
@@ -17,10 +16,11 @@ from app.chunking import normalize_text
 from app.config import get_settings
 from app.db import SessionLocal
 from app.embeddings import EmbeddingError, configured, embed_texts, profile_key
-from app.extraction import ExtractionError, decode_text_file
+from app.extraction import CONTROL_CHARACTERS, ExtractionError, decode_text_file
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID, seed_local_scope
 from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
 from app.retrieval import search_context
+from app.web_fetch import FetchError, fallback_title, normalize_url
 from app.worker import process_text
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"], dependencies=[Depends(local_only)])
@@ -64,7 +64,8 @@ def summary(document, session):
         "id": str(document.id),
         "title": document.title,
         "source_type": document.source_type,
-        "filename": document.source_reference if document.storage_key else None,
+        "filename": document.source_reference if document.source_type in ("pdf", "txt") else None,
+        "url": document.source_reference if document.source_type == "url" else None,
         "status": (
             "Processing"
             if document.status == "Ready" and document.embedding_profile != profile_key()
@@ -159,7 +160,6 @@ def submit_text(payload: TextSubmission, request: Request):
 
 # Upload type comes from the extension and must match the file's own signature.
 FILE_TYPES = {".pdf": "pdf", ".txt": "txt", ".md": "txt"}
-CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def clean_filename(value: str) -> str:
@@ -281,6 +281,63 @@ def store_file(request, data, name, title, source_type, text):
         return {**summary(owned(document_id, session), session), "duplicate": False}
 
 
+class UrlSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    url: str = Field(min_length=1, max_length=2048)
+    title: str = Field(default="", max_length=300)
+
+
+@router.post("/url", status_code=202)
+def submit_url(payload: UrlSubmission, request: Request):
+    """Checks the URL's form now; the worker resolves, checks and fetches it (app/web_fetch.py)."""
+    try:
+        url = normalize_url(payload.url)
+    except FetchError as exc:
+        raise HTTPException(422, exc.code) from None
+    title = CONTROL_CHARACTERS.sub(" ", normalize_text(payload.title)).strip()
+    # Duplicate policy: one source per normalized URL (fragment dropped) per workspace.
+    checksum = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    with SessionLocal.begin() as session:
+        seed_local_scope(session)
+        document_id = session.scalar(
+            insert(KnowledgeDocument)
+            .values(
+                user_id=LOCAL_USER_ID,
+                workspace_id=LOCAL_WORKSPACE_ID,
+                title=title or fallback_title(url),
+                source_type="url",
+                source_reference=url,
+                checksum=checksum,
+                status="Pending",
+            )
+            .on_conflict_do_nothing()
+            .returning(KnowledgeDocument.id)
+        )
+        if document_id is None:
+            document = session.scalar(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.workspace_id == LOCAL_WORKSPACE_ID,
+                    KnowledgeDocument.user_id == LOCAL_USER_ID,
+                    KnowledgeDocument.source_type == "url",
+                    KnowledgeDocument.checksum == checksum,
+                )
+            )
+            return {**summary(document, session), "duplicate": True}
+        job = IngestionJob(
+            user_id=LOCAL_USER_ID,
+            workspace_id=LOCAL_WORKSPACE_ID,
+            document_id=document_id,
+            request_id=request.state.request_id,
+            kind="text_ingestion",
+        )
+        session.add(job)
+        session.flush()
+        job_id = job.id
+    dispatch(job_id, document_id)
+    with SessionLocal() as session:
+        return {**summary(owned(document_id, session), session), "duplicate": False}
+
+
 @router.get("")
 def list_documents(
     offset: Annotated[int, Query(ge=0)] = 0, limit: Annotated[int, Query(ge=1, le=50)] = 20
@@ -375,7 +432,13 @@ def retry_document(document_id: UUID):
         document.status = job.status = "Pending"
         document.processing_stage = "pending"
         document.error_code = job.error_code = None
+        # "Process again" fetches a web page afresh; the old copy goes after commit.
+        stale_page = document.storage_key if document.source_type == "url" else None
+        if stale_page:
+            document.storage_key = None
         job_id = job.id
+    if stale_page:
+        storage.remove(stale_page)
     dispatch(job_id, document_id)
     with SessionLocal() as session:
         return summary(owned(document_id, session), session)

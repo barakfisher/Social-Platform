@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   BookOpen,
   FileUp,
+  Link2,
   Plus,
   LoaderCircle,
   RefreshCw,
@@ -16,6 +17,7 @@ type Document = {
   title: string;
   source_type: "text" | "txt" | "pdf" | "url";
   filename: string | null;
+  url?: string | null;
   created_at: string;
   status: string;
   stage: string;
@@ -74,8 +76,30 @@ const messages = {
     uploadTitle: "File title (optional)",
     uploadTitleHint: "Defaults to the file name",
     uploadLimit: (size: string, pages: number) =>
-      `PDF, TXT or Markdown (UTF-8), up to ${size} and ${pages} pages. Scanned PDFs need text recognition (OCR) first. Web links come later.`,
+      `PDF, TXT or Markdown (UTF-8), up to ${size} and ${pages} pages. Scanned PDFs need text recognition (OCR) first.`,
     uploadButton: "Upload file",
+    linkHeading: "Add a web page",
+    linkLabel: "Page address (URL)",
+    linkTitle: "Page title (optional)",
+    linkTitleHint: "Defaults to the page’s own title",
+    linkLimit:
+      "Public web pages only (http or https). The page is fetched in the background; its main text and headings are kept, menus and footers are dropped.",
+    linkButton: "Add web page",
+    linkAdded: "Web page added. It will be fetched and prepared.",
+    linkDuplicate:
+      "This web page is already in your Knowledge Base. No new source was added.",
+    linkErrors: {
+      url_invalid:
+        "Enter a full web address, such as https://example.com/page.",
+      url_scheme_unsupported: "Only http and https addresses are supported.",
+      url_credentials:
+        "Remove the user name or password from the address and try again.",
+      url_port_unsupported:
+        "Only standard web ports are supported. Remove the port number.",
+      url_blocked_address:
+        "This address points to a private or local network, which can’t be fetched.",
+    } as Record<string, string>,
+    linkGeneric: "The web page couldn’t be added. Please try again.",
     uploadGeneric: "The upload didn’t finish. Please try again.",
     uploading: "Uploading",
     uploaded: "File uploaded. Preparation is queued.",
@@ -111,6 +135,22 @@ const messages = {
       source_empty: "No text was found in this source.",
       source_file_missing:
         "The stored file is missing. Delete this source and upload it again.",
+      url_dns_failed:
+        "The site’s address couldn’t be found. Check the link and try Process again.",
+      url_blocked_address:
+        "This address points to a private or local network, which can’t be fetched.",
+      url_timeout: "The site took too long to answer. Try Process again later.",
+      url_too_large: "The page is larger than the size limit.",
+      url_http_error:
+        "The site didn’t return the page (for example, not found or access denied).",
+      url_unsupported_type:
+        "This link isn’t a web page. To add a PDF, download it and upload the file.",
+      url_too_many_redirects: "The link redirects too many times.",
+      url_fetch_failed:
+        "The site couldn’t be reached. Check the link and try Process again.",
+      url_no_content:
+        "No readable text was found on this page. Pages that need JavaScript to show their content aren’t supported; paste the text instead.",
+      url_parse_failed: "This page couldn’t be read.",
     } as Record<string, string>,
     next: "Older sources",
     previous: "Newer sources",
@@ -166,8 +206,27 @@ const messages = {
     uploadTitle: "כותרת לקובץ (לא חובה)",
     uploadTitleHint: "ברירת המחדל היא שם הקובץ",
     uploadLimit: (size: string, pages: number) =>
-      `סוגי קבצים: PDF,‏ TXT או Markdown בקידוד UTF-8, עד ⁦${size}⁩ ו־${pages} עמודים. קובצי PDF סרוקים צריכים לעבור קודם זיהוי טקסט (OCR). קישורים יתווספו בהמשך.`,
+      `סוגי קבצים: PDF,‏ TXT או Markdown בקידוד UTF-8, עד ⁦${size}⁩ ו־${pages} עמודים. קובצי PDF סרוקים צריכים לעבור קודם זיהוי טקסט (OCR).`,
     uploadButton: "העלאת הקובץ",
+    linkHeading: "הוספת דף אינטרנט",
+    linkLabel: "כתובת הדף (URL)",
+    linkTitle: "כותרת לדף (לא חובה)",
+    linkTitleHint: "ברירת המחדל היא הכותרת של הדף עצמו",
+    linkLimit:
+      "דפי אינטרנט ציבוריים בלבד (http או https). הדף נטען ברקע; נשמרים הטקסט הראשי והכותרות, בלי תפריטים ושורות תחתונות.",
+    linkButton: "הוספת הדף",
+    linkAdded: "הדף נוסף. הוא ייטען ויוכן ברקע.",
+    linkDuplicate: "הדף הזה כבר נמצא במאגר הידע. לא נוסף מקור חדש.",
+    linkErrors: {
+      url_invalid: "יש להזין כתובת מלאה, למשל https://example.com/page.",
+      url_scheme_unsupported: "אפשר להוסיף רק כתובות http או https.",
+      url_credentials: "יש להסיר מהכתובת שם משתמש או סיסמה ולנסות שוב.",
+      url_port_unsupported:
+        "אפשר להשתמש רק בפורטים הרגילים של אתרים. יש להסיר את מספר הפורט.",
+      url_blocked_address:
+        "הכתובת מפנה לרשת פרטית או מקומית, ואי אפשר לטעון אותה.",
+    } as Record<string, string>,
+    linkGeneric: "לא הצלחנו להוסיף את הדף. אפשר לנסות שוב.",
     uploadGeneric: "ההעלאה לא הסתיימה. אפשר לנסות שוב.",
     uploading: "מעלה",
     uploaded: "הקובץ הועלה ונשלח להכנה.",
@@ -201,6 +260,22 @@ const messages = {
       source_empty: "לא נמצא טקסט במקור הזה.",
       source_file_missing:
         "הקובץ השמור חסר. יש למחוק את המקור ולהעלות אותו שוב.",
+      url_dns_failed:
+        "לא מצאנו את כתובת האתר. כדאי לבדוק את הקישור ולנסות לעבד שוב.",
+      url_blocked_address:
+        "הכתובת מפנה לרשת פרטית או מקומית, ואי אפשר לטעון אותה.",
+      url_timeout: "האתר לא ענה בזמן. אפשר לנסות לעבד שוב מאוחר יותר.",
+      url_too_large: "הדף גדול ממגבלת הגודל.",
+      url_http_error:
+        "האתר לא החזיר את הדף (למשל, הדף לא נמצא או שהגישה נחסמה).",
+      url_unsupported_type:
+        "הקישור הזה אינו דף אינטרנט. כדי להוסיף PDF, יש להוריד אותו ולהעלות את הקובץ.",
+      url_too_many_redirects: "הקישור מפנה הלאה יותר מדי פעמים.",
+      url_fetch_failed:
+        "לא הצלחנו להגיע לאתר. כדאי לבדוק את הקישור ולנסות לעבד שוב.",
+      url_no_content:
+        "לא נמצא טקסט קריא בדף. דפים שמציגים תוכן רק באמצעות JavaScript אינם נתמכים; אפשר להדביק את הטקסט במקום.",
+      url_parse_failed: "לא הצלחנו לקרוא את הדף.",
     } as Record<string, string>,
     next: "מקורות קודמים",
     previous: "מקורות חדשים יותר",
@@ -235,6 +310,9 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
   const [fileTitle, setFileTitle] = useState("");
   const [progress, setProgress] = useState<number | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [link, setLink] = useState("");
+  const [linkTitle, setLinkTitle] = useState("");
+  const [linkError, setLinkError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [items, setItems] = useState<Document[]>([]);
@@ -250,6 +328,8 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     | "invalid"
     | "uploaded"
     | "uploadDuplicate"
+    | "linkAdded"
+    | "linkDuplicate"
     | null
   >(null);
   const [confirm, setConfirm] = useState<string | null>(null);
@@ -311,6 +391,43 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       await load(0);
     } catch {
       setError(true);
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function submitLink(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setNotice(null);
+    setLinkError(null);
+    if (!/^https?:\/\/\S+$/i.test(link.trim())) {
+      setLinkError(
+        /^[a-z][a-z0-9+.-]*:/i.test(link.trim()) &&
+          !/^https?:/i.test(link.trim())
+          ? "url_scheme_unsupported"
+          : "url_invalid",
+      );
+      return;
+    }
+    setBusy("link");
+    try {
+      const response = await fetch("/api/knowledge/url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: link.trim(), title: linkTitle.trim() }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const code = result.error?.message ?? "";
+        setLinkError(code in t.linkErrors ? code : "generic");
+        return;
+      }
+      setLink("");
+      setLinkTitle("");
+      setNotice(result.duplicate ? "linkDuplicate" : "linkAdded");
+      setOffset(0);
+      await load(0);
+    } catch {
+      setLinkError("generic");
     } finally {
       setBusy(null);
     }
@@ -597,6 +714,78 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
             {t.uploadButton}
           </Button>
         </form>
+        <form
+          onSubmit={submitLink}
+          noValidate
+          className="mt-8 space-y-5 border-t border-border pt-7"
+          aria-labelledby="link-heading"
+        >
+          <h3 id="link-heading" className="font-semibold">
+            {t.linkHeading}
+          </h3>
+          <fieldset disabled={busy === "link"} className="space-y-5">
+            <div>
+              <label
+                htmlFor="source-url"
+                className="mb-2 block text-sm font-medium"
+              >
+                {t.linkLabel}
+              </label>
+              <input
+                id="source-url"
+                type="url"
+                inputMode="url"
+                maxLength={2048}
+                value={link}
+                dir="ltr"
+                onChange={(e) => {
+                  setLink(e.target.value);
+                  setLinkError(null);
+                }}
+                placeholder="https://"
+                aria-describedby="link-limit"
+                aria-invalid={linkError !== null}
+                className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
+              />
+              <p
+                id="link-limit"
+                className="mt-2 text-xs leading-5 text-muted-foreground"
+              >
+                {t.linkLimit}
+              </p>
+            </div>
+            <div>
+              <label
+                htmlFor="link-title"
+                className="mb-2 block text-sm font-medium"
+              >
+                {t.linkTitle}
+              </label>
+              <input
+                id="link-title"
+                maxLength={300}
+                value={linkTitle}
+                dir={linkTitle ? "auto" : locale === "he" ? "rtl" : "ltr"}
+                onChange={(e) => setLinkTitle(e.target.value)}
+                placeholder={t.linkTitleHint}
+                className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
+              />
+            </div>
+          </fieldset>
+          {linkError && (
+            <p role="alert" className="text-sm text-red-800">
+              {t.linkErrors[linkError] ?? t.linkGeneric}
+            </p>
+          )}
+          <Button type="submit" disabled={busy !== null}>
+            {busy === "link" ? (
+              <LoaderCircle size={16} className="animate-spin" />
+            ) : (
+              <Link2 size={16} />
+            )}
+            {t.linkButton}
+          </Button>
+        </form>
         <p className="mt-5 text-xs leading-6 text-muted-foreground">
           {connected ? t.connectionReady : t.connectionMissing}
         </p>
@@ -660,6 +849,20 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                     <>
                       {" · "}
                       <bdi>{item.filename}</bdi>
+                    </>
+                  )}
+                  {item.url && (
+                    <>
+                      {" · "}
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        dir="ltr"
+                        className="break-all underline underline-offset-2"
+                      >
+                        {item.url}
+                      </a>
                     </>
                   )}
                   {!Number.isNaN(Date.parse(item.created_at)) && (
