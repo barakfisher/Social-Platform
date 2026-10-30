@@ -1,4 +1,4 @@
-"""load web pages again through a hidden staging copy (SP-9)"""
+"""load web pages again through a hidden staging copy, replacing or appending (SP-9)"""
 
 import sqlalchemy as sa
 
@@ -19,6 +19,9 @@ def upgrade():
     op.add_column(
         "knowledge_documents", sa.Column("refresh_result", sa.String(length=20), nullable=True)
     )
+    op.add_column(
+        "knowledge_documents", sa.Column("refresh_action", sa.String(length=10), nullable=True)
+    )
     op.create_unique_constraint(
         "knowledge_documents_replaces_id_key", "knowledge_documents", ["replaces_id"]
     )
@@ -33,14 +36,21 @@ def upgrade():
     op.create_check_constraint(
         "knowledge_documents_refresh_result",
         "knowledge_documents",
-        "refresh_result IN ('unchanged', 'updated')",
+        "refresh_result IN ('unchanged', 'replaced', 'appended', 'kept')",
+    )
+    op.create_check_constraint(
+        "knowledge_documents_refresh_action",
+        "knowledge_documents",
+        "refresh_action IN ('replace', 'append')",
     )
 
 
 def downgrade():
+    op.drop_constraint("knowledge_documents_refresh_action", "knowledge_documents")
     op.drop_constraint("knowledge_documents_refresh_result", "knowledge_documents")
     op.drop_constraint("fk_knowledge_documents_replaces", "knowledge_documents")
     op.drop_constraint("knowledge_documents_replaces_id_key", "knowledge_documents")
+    op.drop_column("knowledge_documents", "refresh_action")
     op.drop_column("knowledge_documents", "refresh_result")
     op.drop_column("knowledge_documents", "fetched_at")
     op.drop_column("knowledge_documents", "replaces_id")

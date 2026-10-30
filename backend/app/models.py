@@ -83,9 +83,11 @@ class KnowledgeDocument(Owned, Base):
     # Set only on a hidden staging copy while a web page is loaded again (app/refresh.py).
     # It never becomes Ready, so retrieval keeps using the original until the swap.
     replaces_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, unique=True)
-    # When a web page was last loaded, and what the last "load again" found.
+    # When a web page was last loaded, and how the last "load again" ended.
     fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     refresh_result: Mapped[str | None] = mapped_column(String(20))
+    # On a staging copy: the owner's choice for changed text, applied once it is embedded.
+    refresh_action: Mapped[str | None] = mapped_column(String(10))
     __table_args__ = (
         ownership(),
         UniqueConstraint("id", "workspace_id", "user_id"),
@@ -129,7 +131,11 @@ class KnowledgeDocument(Owned, Base):
         ),
         CheckConstraint("status IN ('Pending', 'Processing', 'Ready', 'Failed')"),
         CheckConstraint(
-            "refresh_result IN ('unchanged', 'updated')", name="knowledge_documents_refresh_result"
+            "refresh_result IN ('unchanged', 'replaced', 'appended', 'kept')",
+            name="knowledge_documents_refresh_result",
+        ),
+        CheckConstraint(
+            "refresh_action IN ('replace', 'append')", name="knowledge_documents_refresh_action"
         ),
     )
 

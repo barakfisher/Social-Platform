@@ -513,18 +513,40 @@ const webPage = {
   } | null,
 };
 
-test("loading a web page again keeps it ready and reports the result", async ({
+test("a changed web page shows its changes and the owner chooses to add them", async ({
   page,
 }) => {
   let item = { ...webPage };
-  let refreshes = 0;
+  const decisions: unknown[] = [];
   await page.route("**/api/knowledge**", async (route) => {
     const request = route.request();
-    if (new URL(request.url()).pathname.endsWith("/refresh")) {
-      refreshes += 1;
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/refresh")) {
       item = {
         ...item,
-        refresh: { status: "Processing", stage: "embedding", error_code: null },
+        refresh: { status: "Processing", stage: "fetching", error_code: null },
+      };
+      await route.fulfill({ status: 202, json: item });
+      return;
+    }
+    if (path.endsWith("/refresh-changes")) {
+      await route.fulfill({
+        json: {
+          added: ["Seed library opens on Sunday."],
+          removed: ["Open until seven."],
+          added_count: 3,
+          removed_count: 1,
+        },
+      });
+      return;
+    }
+    if (path.endsWith("/refresh-decision")) {
+      decisions.push(request.postDataJSON());
+      item = {
+        ...item,
+        refresh: null,
+        refresh_result: "appended",
+        fetched_at: "2026-10-30T11:00:00Z",
       };
       await route.fulfill({ status: 202, json: item });
       return;
@@ -537,29 +559,94 @@ test("loading a web page again keeps it ready and reports the result", async ({
     "datetime",
     webPage.fetched_at,
   );
-  await expect(entry).toContainText("Last loaded");
   await entry
     .getByRole("button", { name: "Load again from the site", exact: true })
     .click();
   await expect(entry).toContainText("Loading again…");
   await expect(entry.getByText("Ready", { exact: true })).toBeVisible();
+  item = {
+    ...item,
+    refresh: {
+      status: "Processing",
+      stage: "awaiting_decision",
+      error_code: null,
+      added_count: 3,
+      removed_count: 1,
+    } as typeof item.refresh,
+  };
+  await expect(entry).toContainText(
+    "The page changed: 3 new paragraphs, 1 no longer on the site.",
+    { timeout: 10000 },
+  );
   await expect(
     entry.getByRole("button", { name: "Load again from the site" }),
   ).toHaveCount(0);
-  expect(refreshes).toBe(1);
-  item = {
-    ...item,
-    refresh: null,
-    refresh_result: "updated",
-    fetched_at: "2026-10-30T11:00:00Z",
-  };
-  await expect(entry).toContainText("Updated from the site.", {
-    timeout: 10000,
-  });
+  await entry
+    .getByRole("button", { name: "Show changes", exact: true })
+    .click();
+  await expect(
+    entry.getByText("New on the site", { exact: true }),
+  ).toBeVisible();
+  await expect(entry).toContainText("Seed library opens on Sunday.");
+  await expect(entry).toContainText("Open until seven.");
+  await expect(entry).toContainText("…and 2 more");
+  await entry
+    .getByRole("button", { name: "Add the new paragraphs", exact: true })
+    .click();
+  await expect(entry).toContainText("New paragraphs from the site were added.");
+  expect(decisions).toEqual([{ action: "append" }]);
   await expect(entry.locator("time").nth(1)).toHaveAttribute(
     "datetime",
     "2026-10-30T11:00:00Z",
   );
+});
+
+test("the Hebrew choice panel offers replace, add and keep", async ({
+  page,
+}) => {
+  let item = {
+    ...webPage,
+    refresh: {
+      status: "Processing",
+      stage: "awaiting_decision",
+      error_code: null,
+      added_count: 0,
+      removed_count: 2,
+    } as typeof webPage.refresh,
+  };
+  const decisions: unknown[] = [];
+  await page.route("**/api/knowledge**", async (route) => {
+    const request = route.request();
+    if (new URL(request.url()).pathname.endsWith("/refresh-decision")) {
+      decisions.push(request.postDataJSON());
+      item = { ...item, refresh: null, refresh_result: "kept" };
+      await route.fulfill({ status: 202, json: item });
+      return;
+    }
+    await route.fulfill({ json: { items: [item], total: 1 } });
+  });
+  await page.goto("/he/knowledge");
+  const entry = page.getByRole("listitem").filter({ hasText: "Garden hours" });
+  await expect(entry).toContainText(
+    "הדף השתנה: 0 פסקאות חדשות, 2 שכבר לא באתר.",
+  );
+  await expect(
+    entry.getByRole("button", { name: "הוספת הפסקאות החדשות", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    entry.getByRole("button", { name: "החלפה בגרסה החדשה", exact: true }),
+  ).toBeEnabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBeTruthy();
+  await entry
+    .getByRole("button", { name: "השארת הגרסה הנוכחית", exact: true })
+    .click();
+  await expect(entry).toContainText("הגרסה הנוכחית נשמרה.");
+  expect(decisions).toEqual([{ action: "keep" }]);
 });
 
 test("a failed reload in Hebrew says the previous version is still used", async ({

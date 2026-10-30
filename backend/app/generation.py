@@ -32,7 +32,7 @@ from app.writer_models import (
 )
 
 router = APIRouter(prefix="/generation", tags=["generation"], dependencies=[Depends(local_only)])
-PROMPT_VERSION = "grounded-post-v4"
+PROMPT_VERSION = "grounded-post-v5"
 # Share of GENERATION_MAX_REQUEST_USD the cross-language query fallback may reserve.
 TRANSLATION_BUDGET_SHARE = 0.2
 SYSTEM = """
@@ -70,6 +70,8 @@ Without offer details, invite in general terms only: no names, dates, prices or 
 If the topic asks for an unsupported claim, exclude it and explain that exclusion in warnings.
 Length is a maximum: short 600 characters, medium 1200, long 2400. Never pad a short source.
 Prefer a shorter faithful post to a longer one with new details.
+Each source's source_location.added_on is the date its text entered the knowledge base. When
+sources disagree, state only the most recently added version and leave the older one out.
 All content must fit the platform character limit supplied in the data."""
 
 

@@ -1083,41 +1083,57 @@ the owner downloads and uploads it instead.
 
 ## SP-17: loading a web page again — 2026-10-30
 
-Owner decisions: the current version stays in use until the new one is ready, and a
-searchable page is embedded again automatically (about $0.0001 a page).
+Owner decisions: the current version stays in use until the new one is ready; when the page
+changed, the owner sees the changes and chooses to replace the source, add the new
+paragraphs to it, or keep it; a searchable source is embedded again automatically after
+the choice (about $0.0001 a page); and wherever sources conflict, newer information wins.
 
 `POST /knowledge/{id}/refresh` works on web sources whose text is prepared or Ready. It
-creates a hidden staging copy (`replaces_id`, migration `b3e8d5f1c260`, one per source,
-deleted with the source) that runs through the normal fetch, extraction and embedding jobs
-(`app/refresh.py`):
+creates a hidden staging copy (`replaces_id`, one per source, deleted with the source; migration
+`b3e8d5f1c260`) that the normal job fetches and extracts (`app/refresh.py`):
 - Staging copies never become Ready, so retrieval, generation and topic suggestions keep
-  using the original. They are excluded from listing, GET, retry and delete by ID.
-- Unchanged extracted text: the staging copy is dropped, only `fetched_at` and
-  `refresh_result = "unchanged"` change, and no embedding is paid for.
-- Changed text, original not yet searchable: the new text and chunks replace the original's
-  at once.
-- Changed text, original Ready: the worker creates and dispatches an embedding job for the
-  staging copy. When it completes, one transaction moves the new chunks onto the original,
-  deletes the old ones and the staging copy, and keeps the original Ready
-  (`refresh_result = "updated"`). If embeddings are not configured, the request is a 503
-  `embedding_not_configured` and nothing starts.
-- Every refresh write locks the original before its staging copy. The replaced page's stored
-  copy is removed after commit.
-- A failed refresh stays on the staging copy (its code is shown in the UI) and the original
-  is untouched. Loading again replaces the failed attempt. A second click while a refresh
-  runs starts nothing new; enabling AI search on the original meanwhile is a 409
-  `refresh_in_progress`.
-- Saved drafts keep their own source snapshots, so a refresh does not change them.
+  using the original. They are excluded from listing and from GET, retry and delete by ID.
+- Paragraphs are compared, not raw text: whitespace and case are ignored, and the dated
+  headings this feature adds are not content. No new and no removed paragraphs: only
+  `fetched_at` changes (`refresh_result = "unchanged"`), with no chunks and no embedding.
+- Otherwise the staging copy waits in `awaiting_decision`. The list shows the counts;
+  `GET /knowledge/{id}/refresh-changes` returns up to 30 new and 30 removed paragraphs (500
+  characters each). `POST /knowledge/{id}/refresh-decision` takes `replace`, `append` or `keep`:
+  - replace: the new text and its chunks take the original's place (`"replaced"`);
+  - append: only paragraphs the source does not have are added after a heading
+    `## Added YYYY-MM-DD / נוסף YYYY-MM-DD`. Existing text, chunks and embeddings stay;
+    new chunks continue the order and offsets (`"appended"`). Removed paragraphs stay in the
+    source, so a news page keeps earlier items. With no new paragraphs, append keeps;
+  - keep: the staging copy and its page copy are dropped (`"kept"`).
+- A searchable original changes only after the new chunks are embedded, in one transaction
+  that also takes the newest page copy. A source that is not searchable yet changes at once.
+  Replace or append on a searchable source without an embedding key is a 503 and the
+  choice stays open.
+- Every refresh write locks the original before its staging copy. A failed load stays on
+  the staging copy; loading again replaces it. Saved drafts keep their own source snapshots.
 
-UI: web sources show "Last loaded" and a "Load again from the site" button. While a refresh
-runs, the original keeps its status and shows "Loading again…", and the list polls. Then it
-shows "No changes since the last load." or "Updated from the site.". A failure says what went
-wrong and that the previous version is still in use (EN/HE).
+Newer wins: every new chunk records `source_location.added_on` (the date its text entered
+the knowledge base; for chunks made before this, retrieval uses the document's creation
+date). The writer prompt (`grounded-post-v5`) gains one line: when sources disagree, state
+only the most recently added version. The source check is unchanged: both versions are in
+the sources, so either is supported; preferring the newer one is the writer's job.
 
-Verification: backend 824 passed (6 refresh tests on the real database, covering unchanged,
-replaced at once, searchable until embedded with search results checked during the refresh,
-failure and retry, delete during a refresh, and refusals), ruff, `mypy app`, `alembic check`
-and a downgrade/upgrade round trip. Frontend Prettier, lint, tsc, production build and
-Playwright 72/72 (2 new). Not verified live: the same fetch limits as web page sources apply
-(no public fetch from this sandbox).
+UI: web sources show "Last loaded" and "Load again from the site". While a page loads, the
+original keeps its status. Changed pages show the counts, "Show changes" (new paragraphs
+marked green, removed ones red) and the three choices; "Add the new paragraphs" is disabled
+when there are none. Results and failures have EN/HE messages.
 
+Verification: backend 833 passed (15 refresh tests on the real database: paragraph
+comparison, unchanged, waiting with counts and preview, replace, append with offsets and
+dates and a second load adding nothing, keep, replace and append on a searchable source with
+search results checked while embedding, the embedding-key refusal, failure and retry, delete
+during a refresh, refusals, chunk dates, the prompt line and the date fallback); ruff,
+`mypy app`, `alembic check` and a downgrade/upgrade round trip. Frontend Prettier, lint, tsc,
+production build and Playwright 73/73.
+
+Not verified live: the prompt change needs a quality run with real models
+(`scripts/evaluate_generation.py`, paid; this sandbox has no provider key), and the same
+fetch limits as web page sources apply (no public fetch from this sandbox). Known limits:
+paragraph comparison treats an edited paragraph as one removed and one new; only the first
+chunk of a long appended section starts with the dated heading, but every chunk carries
+added_on; conflicts inside one chunk are not resolved by dates.

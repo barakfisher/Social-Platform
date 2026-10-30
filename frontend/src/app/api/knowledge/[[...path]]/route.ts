@@ -11,8 +11,8 @@ async function proxy(
   const { path = [] } = await context.params;
   const body =
     request.method === "POST" &&
-    path.length === 1 &&
-    (path[0] === "text" || path[0] === "url");
+    ((path.length === 1 && (path[0] === "text" || path[0] === "url")) ||
+      (path.length === 2 && path[1] === "refresh-decision"));
   // Raw file bytes (SP-9): application/octet-stream needs a CORS preflight, unlike
   // multipart form data, and the backend accepts it only on this route.
   const upload = request.method === "POST" && path.join("/") === "files";

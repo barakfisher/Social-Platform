@@ -17,8 +17,12 @@ def token_count(value: str) -> int:
     return len(encoding().encode_ordinary(value))
 
 
-def chunk_text(text: str, target: int = 800, overlap: int = 100) -> list[dict]:
-    """Keep Unicode character boundaries and offsets into normalized source text."""
+def chunk_text(
+    text: str, target: int = 800, overlap: int = 100, added_on: str | None = None
+) -> list[dict]:
+    """Keep Unicode character boundaries and offsets into normalized source text.
+
+    added_on (ISO date) tells the writer how new the text is (newer wins on conflicts)."""
     if target < 8 or not 0 <= overlap < target // 2:
         raise ValueError("Invalid chunk settings")
     if not text.strip():
@@ -50,6 +54,7 @@ def chunk_text(text: str, target: int = 800, overlap: int = 100) -> list[dict]:
                     "char_start": start,
                     "char_end": end,
                     "tokenizer": "cl100k_base",
+                    **({"added_on": added_on} if added_on else {}),
                 },
             }
         )

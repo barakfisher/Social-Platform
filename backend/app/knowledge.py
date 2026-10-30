@@ -1,7 +1,7 @@
 import hashlib
 import unicodedata
 from pathlib import PurePosixPath
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -12,14 +12,24 @@ from starlette.concurrency import run_in_threadpool
 
 from app import storage
 from app.brand import local_only
-from app.chunking import normalize_text
+from app.chunking import chunk_text, normalize_text
 from app.config import get_settings
 from app.db import SessionLocal
 from app.embeddings import EmbeddingError, configured, embed_texts, profile_key
 from app.extraction import CONTROL_CHARACTERS, ExtractionError, decode_text_file
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID, seed_local_scope
 from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
-from app.refresh import ACTIVE, staging_for
+from app.refresh import (
+    ACTIVE,
+    AWAITING,
+    append_heading,
+    apply,
+    changes,
+    keep,
+    preview,
+    staging_for,
+    today,
+)
 from app.retrieval import search_context
 from app.web_fetch import FetchError, fallback_title, normalize_url
 from app.worker import process_text
@@ -109,11 +119,16 @@ def refresh_state(document, session):
     staging = staging_for(session, document.id)
     if staging is None:
         return None
-    return {
+    state = {
         "status": staging.status,
         "stage": staging.processing_stage,
         "error_code": staging.error_code,
+        "action": staging.refresh_action,
     }
+    if staging.processing_stage == AWAITING:
+        found = preview(document.source_text, staging.source_text)
+        state.update(added_count=found["added_count"], removed_count=found["removed_count"])
+    return state
 
 
 def dispatch(job_id: UUID, document_id: UUID):
@@ -492,10 +507,9 @@ def refresh_page(document_id: UUID, request: Request):
             raise HTTPException(409, "refresh_not_supported")
         if document.processing_stage not in ("text_prepared", "ready"):
             raise HTTPException(409, "refresh_not_ready")
-        if document.status == "Ready" and not configured():
-            raise HTTPException(503, "embedding_not_configured")
         staging = staging_for(session, document_id, lock=True)
         if staging is not None and staging.status in ACTIVE:
+            # Already loading, or changes are waiting for the owner's choice.
             return summary(document, session)
         if staging is not None:
             # The last attempt failed; it is replaced by this one.
@@ -546,7 +560,11 @@ def start_embeddings(document_id: UUID, request: Request):
         if not count:
             raise HTTPException(409, "Prepare text before creating embeddings.")
         staging = staging_for(session, document_id)
-        if staging is not None and staging.status in ACTIVE:
+        if (
+            staging is not None
+            and staging.status in ACTIVE
+            and staging.processing_stage != AWAITING
+        ):
             raise HTTPException(409, "refresh_in_progress")
         if document.status == "Ready" and document.embedding_profile == profile:
             return summary(document, session)
@@ -596,3 +614,79 @@ def dispatch_embeddings(job_id: UUID, document_id: UUID):
                 document.status = job.status = "Failed"
                 document.processing_stage = "embedding_failed"
                 document.error_code = job.error_code = "dispatch_failed"
+
+
+def awaiting(document_id: UUID, session):
+    """The original (locked first) and its staging copy waiting for the owner's choice."""
+    document = owned(document_id, session, lock=True)
+    staging = staging_for(session, document_id, lock=True)
+    if staging is None or staging.processing_stage != AWAITING:
+        raise HTTPException(409, "refresh_not_awaiting")
+    return document, staging
+
+
+@router.get("/{document_id}/refresh-changes")
+def refresh_changes(document_id: UUID):
+    """Paragraphs the site added and removed since the version in use (first 30 of each)."""
+    with SessionLocal.begin() as session:
+        document, staging = awaiting(document_id, session)
+        return preview(document.source_text, staging.source_text)
+
+
+class RefreshDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["replace", "append", "keep"]
+
+
+@router.post("/{document_id}/refresh-decision", status_code=202)
+def decide_refresh(document_id: UUID, payload: RefreshDecision, request: Request):
+    """Applies the owner's choice. A searchable source keeps its current version until the
+    new chunks are embedded; one that is not searchable yet changes at once."""
+    remove_key = None
+    embed_job = None
+    with SessionLocal.begin() as session:
+        document, staging = awaiting(document_id, session)
+        added, _ = changes(document.source_text, staging.source_text)
+        if payload.action == "keep" or (payload.action == "append" and not added):
+            remove_key = keep(session, document, staging)
+        else:
+            if document.status == "Ready" and not configured():
+                raise HTTPException(503, "embedding_not_configured")
+            if payload.action == "append":
+                # Only paragraphs the source does not have yet, under a dated heading.
+                staging.source_text = "\n\n".join([append_heading(today()), *added])
+            staging.refresh_action = payload.action
+            session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == staging.id))
+            for order, values in enumerate(chunk_text(staging.source_text or "", added_on=today())):
+                session.add(
+                    KnowledgeChunk(
+                        user_id=LOCAL_USER_ID,
+                        workspace_id=LOCAL_WORKSPACE_ID,
+                        document_id=staging.id,
+                        chunk_order=order,
+                        **values,
+                    )
+                )
+            staging.processing_stage = "text_prepared"
+            session.flush()
+            if document.status == "Ready":
+                job = IngestionJob(
+                    user_id=LOCAL_USER_ID,
+                    workspace_id=LOCAL_WORKSPACE_ID,
+                    document_id=staging.id,
+                    kind="embedding",
+                    request_id=request.state.request_id,
+                )
+                session.add(job)
+                staging.processing_stage = "embedding_pending"
+                staging.embedding_profile = profile_key()
+                session.flush()
+                embed_job = (job.id, staging.id)
+            else:
+                remove_key = apply(session, document, staging)
+    if remove_key:
+        storage.remove(remove_key)
+    if embed_job:
+        dispatch_embeddings(*embed_job)
+    with SessionLocal() as session:
+        return summary(owned(document_id, session), session)

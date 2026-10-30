@@ -25,6 +25,7 @@ WRITES = [
     ("POST", EMBED, None),
     ("POST", f"/knowledge/{DOCUMENT}/retry", None),
     ("POST", f"/knowledge/{DOCUMENT}/refresh", None),
+    ("POST", f"/knowledge/{DOCUMENT}/refresh-decision", b'{"action": "keep"}'),
     ("POST", "/knowledge/text", b"{}"),
     ("POST", "/knowledge/files?filename=notes.pdf", b"%PDF-1.4"),
     ("POST", "/knowledge/url", b'{"url": "https://garden.example/"}'),

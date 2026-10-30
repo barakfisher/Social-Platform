@@ -12,6 +12,12 @@ import {
 import { Button } from "@/components/ui/button";
 import type { Locale } from "@/lib/i18n";
 
+type Changes = {
+  added: string[];
+  removed: string[];
+  added_count: number;
+  removed_count: number;
+};
 type Document = {
   id: string;
   title: string;
@@ -19,8 +25,14 @@ type Document = {
   filename: string | null;
   url?: string | null;
   fetched_at?: string | null;
-  refresh_result?: "unchanged" | "updated" | null;
-  refresh?: { status: string; stage: string; error_code: string | null } | null;
+  refresh_result?: "unchanged" | "replaced" | "appended" | "kept" | null;
+  refresh?: {
+    status: string;
+    stage: string;
+    error_code: string | null;
+    added_count?: number;
+    removed_count?: number;
+  } | null;
   created_at: string;
   status: string;
   stage: string;
@@ -71,7 +83,22 @@ const messages = {
     refreshing: "Loading again…",
     lastLoaded: "Last loaded",
     refreshUnchanged: "No changes since the last load.",
-    refreshUpdated: "Updated from the site.",
+    refreshReplaced: "Replaced with the new version from the site.",
+    refreshAppended: "New paragraphs from the site were added.",
+    refreshKeptChoice: "Kept the current version.",
+    refreshPreparing: "Preparing the new version for AI search…",
+    changesFound: (added: number, removed: number) =>
+      `The page changed: ${added} new paragraphs, ${removed} no longer on the site. The current version stays in use until you choose.`,
+    showChanges: "Show changes",
+    hideChanges: "Hide changes",
+    newParagraphs: "New on the site",
+    removedParagraphs: "No longer on the site",
+    more: (count: number) => `…and ${count} more`,
+    chooseReplace: "Replace with the new version",
+    chooseAppend: "Add the new paragraphs",
+    chooseKeep: "Keep the current version",
+    choiceHint:
+      "Adding keeps everything already saved. When facts conflict, posts use the newest.",
     refreshFailed: "Loading again didn’t finish:",
     refreshKept: "The previous version is still in use.",
     remove: "Delete",
@@ -208,7 +235,22 @@ const messages = {
     refreshing: "נטען מחדש…",
     lastLoaded: "נטען לאחרונה",
     refreshUnchanged: "אין שינויים מאז הטעינה האחרונה.",
-    refreshUpdated: "עודכן מהאתר.",
+    refreshReplaced: "הוחלף בגרסה החדשה מהאתר.",
+    refreshAppended: "פסקאות חדשות מהאתר נוספו.",
+    refreshKeptChoice: "הגרסה הנוכחית נשמרה.",
+    refreshPreparing: "מכין את הגרסה החדשה לחיפוש AI…",
+    changesFound: (added: number, removed: number) =>
+      `הדף השתנה: ${added} פסקאות חדשות, ${removed} שכבר לא באתר. הגרסה הנוכחית נשארת בשימוש עד שתבחרו.`,
+    showChanges: "הצגת השינויים",
+    hideChanges: "הסתרת השינויים",
+    newParagraphs: "חדש באתר",
+    removedParagraphs: "כבר לא באתר",
+    more: (count: number) => `…ועוד ${count}`,
+    chooseReplace: "החלפה בגרסה החדשה",
+    chooseAppend: "הוספת הפסקאות החדשות",
+    chooseKeep: "השארת הגרסה הנוכחית",
+    choiceHint:
+      "הוספה שומרת את כל מה שכבר נשמר. כשעובדות סותרות, הפוסטים משתמשים בחדשות ביותר.",
     refreshFailed: "הטעינה מחדש לא הסתיימה:",
     refreshKept: "הגרסה הקודמת עדיין בשימוש.",
     remove: "מחיקה",
@@ -303,6 +345,8 @@ const messages = {
   },
 };
 const DEFAULT_LIMITS = { bytes: 10 * 1024 * 1024, pages: 300 };
+const without = <T,>(record: Record<string, T>, key: string) =>
+  Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
 const FILE_EXTENSIONS = [".pdf", ".txt", ".md"];
 const megabytes = (bytes: number) =>
   `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
@@ -374,8 +418,55 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     setLoading(true);
     void load();
   }, [load]);
+  const awaitingChoice = (item: Document) =>
+    item.refresh?.stage === "awaiting_decision";
   const refreshing = (item: Document) =>
-    ["Pending", "Processing"].includes(item.refresh?.status ?? "");
+    ["Pending", "Processing"].includes(item.refresh?.status ?? "") &&
+    !awaitingChoice(item);
+  const [changes, setChanges] = useState<Record<string, Changes>>({});
+  async function toggleChanges(item: Document) {
+    if (changes[item.id]) {
+      setChanges((current) => without(current, item.id));
+      return;
+    }
+    setBusy(item.id);
+    setError(false);
+    try {
+      const response = await fetch(
+        `/api/knowledge/${item.id}/refresh-changes`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) throw new Error();
+      const found: Changes = await response.json();
+      setChanges((current) => ({ ...current, [item.id]: found }));
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function choose(item: Document, choice: "replace" | "append" | "keep") {
+    setBusy(item.id);
+    setError(false);
+    setNotice(null);
+    try {
+      const response = await fetch(
+        `/api/knowledge/${item.id}/refresh-decision`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: choice }),
+        },
+      );
+      if (!response.ok) throw new Error();
+      setChanges((current) => without(current, item.id));
+      await load();
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(null);
+    }
+  }
   const active = items.some(
     (item) =>
       refreshing(item) ||
@@ -913,10 +1004,93 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                     ? ` · ${item.embedded_chunk_count} ${t.embedded}`
                     : ""}
                 </p>
-                {refreshing(item) ? (
+                {awaitingChoice(item) ? (
+                  <div className="mt-3 rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm">
+                    <p>
+                      {t.changesFound(
+                        item.refresh?.added_count ?? 0,
+                        item.refresh?.removed_count ?? 0,
+                      )}
+                    </p>
+                    {changes[item.id] && (
+                      <div className="mt-3 space-y-3">
+                        {(
+                          [
+                            ["added", t.newParagraphs, "border-green-600"],
+                            ["removed", t.removedParagraphs, "border-red-600"],
+                          ] as const
+                        ).map(([kind, heading, border]) =>
+                          changes[item.id][kind].length ? (
+                            <div key={kind}>
+                              <p className="font-medium">{heading}</p>
+                              <ul className="mt-1 space-y-2">
+                                {changes[item.id][kind].map((paragraph, i) => (
+                                  <li
+                                    key={i}
+                                    dir="auto"
+                                    className={`whitespace-pre-wrap break-words border-s-4 ${border} bg-background p-2 text-sm leading-6`}
+                                  >
+                                    {paragraph}
+                                  </li>
+                                ))}
+                              </ul>
+                              {changes[item.id][`${kind}_count`] >
+                                changes[item.id][kind].length && (
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  {t.more(
+                                    changes[item.id][`${kind}_count`] -
+                                      changes[item.id][kind].length,
+                                  )}
+                                </p>
+                              )}
+                            </div>
+                          ) : null,
+                        )}
+                      </div>
+                    )}
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      {t.choiceHint}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy !== null}
+                        aria-expanded={Boolean(changes[item.id])}
+                        onClick={() => void toggleChanges(item)}
+                      >
+                        {changes[item.id] ? t.hideChanges : t.showChanges}
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={busy !== null}
+                        onClick={() => void choose(item, "replace")}
+                      >
+                        {t.chooseReplace}
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={busy !== null || !item.refresh?.added_count}
+                        onClick={() => void choose(item, "append")}
+                      >
+                        {t.chooseAppend}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy !== null}
+                        onClick={() => void choose(item, "keep")}
+                      >
+                        {t.chooseKeep}
+                      </Button>
+                    </div>
+                  </div>
+                ) : refreshing(item) ? (
                   <p className="mt-3 flex items-center gap-2 text-sm text-primary">
                     <LoaderCircle size={14} className="animate-spin" />
-                    {t.refreshing}
+                    {item.refresh?.stage.startsWith("embedding")
+                      ? t.refreshPreparing
+                      : t.refreshing}
                   </p>
                 ) : item.refresh?.status === "Failed" ? (
                   <p className="mt-3 text-sm text-red-800">
@@ -929,9 +1103,14 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                   </p>
                 ) : item.refresh_result ? (
                   <p className="mt-3 text-sm text-muted-foreground">
-                    {item.refresh_result === "unchanged"
-                      ? t.refreshUnchanged
-                      : t.refreshUpdated}
+                    {
+                      {
+                        unchanged: t.refreshUnchanged,
+                        replaced: t.refreshReplaced,
+                        appended: t.refreshAppended,
+                        kept: t.refreshKeptChoice,
+                      }[item.refresh_result]
+                    }
                   </p>
                 ) : null}
                 {item.error_code && (
@@ -971,7 +1150,8 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                     )}
                   {item.source_type === "url" &&
                     ["text_prepared", "ready"].includes(item.stage) &&
-                    !refreshing(item) && (
+                    !refreshing(item) &&
+                    !awaitingChoice(item) && (
                       <Button
                         variant="outline"
                         size="sm"
