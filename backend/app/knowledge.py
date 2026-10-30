@@ -19,6 +19,7 @@ from app.embeddings import EmbeddingError, configured, embed_texts, profile_key
 from app.extraction import CONTROL_CHARACTERS, ExtractionError, decode_text_file
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID, seed_local_scope
 from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
+from app.refresh import ACTIVE, staging_for
 from app.retrieval import search_context
 from app.web_fetch import FetchError, fallback_title, normalize_url
 from app.worker import process_text
@@ -52,6 +53,8 @@ def owned(document_id: UUID, session, lock=False):
         KnowledgeDocument.id == document_id,
         KnowledgeDocument.user_id == LOCAL_USER_ID,
         KnowledgeDocument.workspace_id == LOCAL_WORKSPACE_ID,
+        # Staging copies of a page being loaded again are internal (app/refresh.py).
+        KnowledgeDocument.replaces_id.is_(None),
     )
     document = session.scalar(query.with_for_update() if lock else query)
     if document is None:
@@ -92,7 +95,24 @@ def summary(document, session):
             .where(KnowledgeChunk.document_id == document.id)
         ),
         "created_at": document.created_at.isoformat(),
+        "fetched_at": document.fetched_at.isoformat() if document.fetched_at else None,
+        "refresh_result": document.refresh_result,
+        "refresh": refresh_state(document, session),
         "status_url": f"/knowledge/{document.id}",
+    }
+
+
+def refresh_state(document, session):
+    """The page being loaded again, if any; the original stays in use meanwhile."""
+    if document.source_type != "url":
+        return None
+    staging = staging_for(session, document.id)
+    if staging is None:
+        return None
+    return {
+        "status": staging.status,
+        "stage": staging.processing_stage,
+        "error_code": staging.error_code,
     }
 
 
@@ -346,6 +366,7 @@ def list_documents(
         query = select(KnowledgeDocument).where(
             KnowledgeDocument.user_id == LOCAL_USER_ID,
             KnowledgeDocument.workspace_id == LOCAL_WORKSPACE_ID,
+            KnowledgeDocument.replaces_id.is_(None),
         )
         total = session.scalar(select(func.count()).select_from(query.subquery()))
         documents = session.scalars(
@@ -447,12 +468,67 @@ def retry_document(document_id: UUID):
 @router.delete("/{document_id}")
 def delete_document(document_id: UUID):
     with SessionLocal.begin() as session:
-        key = owned(document_id, session, lock=True).storage_key
+        keys = [owned(document_id, session, lock=True).storage_key]
+        staging = staging_for(session, document_id, lock=True)
+        if staging is not None:
+            keys.append(staging.storage_key)
+        # The staging copy, chunks and jobs go with it (ON DELETE CASCADE).
         session.execute(delete(KnowledgeDocument).where(KnowledgeDocument.id == document_id))
     # After commit: a failure here leaves an unreferenced private file, never a dangling row.
-    if key:
-        storage.remove(key)
+    for key in keys:
+        if key:
+            storage.remove(key)
     return {"deleted": True}
+
+
+@router.post("/{document_id}/refresh", status_code=202)
+def refresh_page(document_id: UUID, request: Request):
+    """Loads a web page again. The current version stays in use until the new one is ready;
+    unchanged text costs nothing more (app/refresh.py)."""
+    stale_key = None
+    with SessionLocal.begin() as session:
+        document = owned(document_id, session, lock=True)
+        if document.source_type != "url":
+            raise HTTPException(409, "refresh_not_supported")
+        if document.processing_stage not in ("text_prepared", "ready"):
+            raise HTTPException(409, "refresh_not_ready")
+        if document.status == "Ready" and not configured():
+            raise HTTPException(503, "embedding_not_configured")
+        staging = staging_for(session, document_id, lock=True)
+        if staging is not None and staging.status in ACTIVE:
+            return summary(document, session)
+        if staging is not None:
+            # The last attempt failed; it is replaced by this one.
+            stale_key = staging.storage_key
+            session.execute(delete(KnowledgeDocument).where(KnowledgeDocument.id == staging.id))
+        url = document.source_reference or ""
+        staging = KnowledgeDocument(
+            user_id=LOCAL_USER_ID,
+            workspace_id=LOCAL_WORKSPACE_ID,
+            title=fallback_title(url),
+            source_type="url",
+            source_reference=url,
+            replaces_id=document.id,
+            status="Pending",
+        )
+        session.add(staging)
+        session.flush()
+        job = IngestionJob(
+            user_id=LOCAL_USER_ID,
+            workspace_id=LOCAL_WORKSPACE_ID,
+            document_id=staging.id,
+            request_id=request.state.request_id,
+            kind="text_ingestion",
+        )
+        session.add(job)
+        document.refresh_result = None
+        session.flush()
+        job_id, staging_id = job.id, staging.id
+    if stale_key:
+        storage.remove(stale_key)
+    dispatch(job_id, staging_id)
+    with SessionLocal() as session:
+        return summary(owned(document_id, session), session)
 
 
 @router.post("/{document_id}/embed", status_code=202)
@@ -469,6 +545,9 @@ def start_embeddings(document_id: UUID, request: Request):
         )
         if not count:
             raise HTTPException(409, "Prepare text before creating embeddings.")
+        staging = staging_for(session, document_id)
+        if staging is not None and staging.status in ACTIVE:
+            raise HTTPException(409, "refresh_in_progress")
         if document.status == "Ready" and document.embedding_profile == profile:
             return summary(document, session)
         job = session.scalar(

@@ -494,3 +494,101 @@ test("web addresses are checked in Hebrew before and after sending", async ({
   await expect(input).toHaveValue("http://10.0.0.5/admin");
   await expect(input).toHaveAttribute("aria-invalid", "true");
 });
+
+const webPage = {
+  ...sourceDocument,
+  title: "Garden hours",
+  source_type: "url",
+  url: "https://garden.example/hours",
+  status: "Ready",
+  stage: "ready",
+  chunk_count: 2,
+  embedded_chunk_count: 2,
+  fetched_at: "2026-10-30T09:15:00Z",
+  refresh_result: null as string | null,
+  refresh: null as {
+    status: string;
+    stage: string;
+    error_code: string | null;
+  } | null,
+};
+
+test("loading a web page again keeps it ready and reports the result", async ({
+  page,
+}) => {
+  let item = { ...webPage };
+  let refreshes = 0;
+  await page.route("**/api/knowledge**", async (route) => {
+    const request = route.request();
+    if (new URL(request.url()).pathname.endsWith("/refresh")) {
+      refreshes += 1;
+      item = {
+        ...item,
+        refresh: { status: "Processing", stage: "embedding", error_code: null },
+      };
+      await route.fulfill({ status: 202, json: item });
+      return;
+    }
+    await route.fulfill({ json: { items: [item], total: 1 } });
+  });
+  await page.goto("/en/knowledge");
+  const entry = page.getByRole("listitem").filter({ hasText: "Garden hours" });
+  await expect(entry.locator("time").nth(1)).toHaveAttribute(
+    "datetime",
+    webPage.fetched_at,
+  );
+  await expect(entry).toContainText("Last loaded");
+  await entry
+    .getByRole("button", { name: "Load again from the site", exact: true })
+    .click();
+  await expect(entry).toContainText("Loading again…");
+  await expect(entry.getByText("Ready", { exact: true })).toBeVisible();
+  await expect(
+    entry.getByRole("button", { name: "Load again from the site" }),
+  ).toHaveCount(0);
+  expect(refreshes).toBe(1);
+  item = {
+    ...item,
+    refresh: null,
+    refresh_result: "updated",
+    fetched_at: "2026-10-30T11:00:00Z",
+  };
+  await expect(entry).toContainText("Updated from the site.", {
+    timeout: 10000,
+  });
+  await expect(entry.locator("time").nth(1)).toHaveAttribute(
+    "datetime",
+    "2026-10-30T11:00:00Z",
+  );
+});
+
+test("a failed reload in Hebrew says the previous version is still used", async ({
+  page,
+}) => {
+  await page.route("**/api/knowledge**", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            ...webPage,
+            refresh: {
+              status: "Failed",
+              stage: "failed",
+              error_code: "url_timeout",
+            },
+          },
+        ],
+        total: 1,
+      },
+    });
+  });
+  await page.goto("/he/knowledge");
+  const entry = page.getByRole("listitem").filter({ hasText: "Garden hours" });
+  await expect(entry).toContainText(
+    "הטעינה מחדש לא הסתיימה: האתר לא ענה בזמן. אפשר לנסות לעבד שוב מאוחר יותר. הגרסה הקודמת עדיין בשימוש.",
+  );
+  await expect(entry).toContainText("נטען לאחרונה");
+  await expect(
+    entry.getByRole("button", { name: "טעינה מחדש מהאתר", exact: true }),
+  ).toBeVisible();
+});

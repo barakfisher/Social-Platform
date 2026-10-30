@@ -80,9 +80,25 @@ class KnowledgeDocument(Owned, Base):
     checksum: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), default="Pending", index=True)
     error_code: Mapped[str | None] = mapped_column(String(100))
+    # Set only on a hidden staging copy while a web page is loaded again (app/refresh.py).
+    # It never becomes Ready, so retrieval keeps using the original until the swap.
+    replaces_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, unique=True)
+    # When a web page was last loaded, and what the last "load again" found.
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refresh_result: Mapped[str | None] = mapped_column(String(20))
     __table_args__ = (
         ownership(),
         UniqueConstraint("id", "workspace_id", "user_id"),
+        ForeignKeyConstraint(
+            ["replaces_id", "workspace_id", "user_id"],
+            [
+                "knowledge_documents.id",
+                "knowledge_documents.workspace_id",
+                "knowledge_documents.user_id",
+            ],
+            ondelete="CASCADE",
+            name="fk_knowledge_documents_replaces",
+        ),
         Index(
             "uq_text_workspace_checksum",
             "workspace_id",
@@ -112,6 +128,9 @@ class KnowledgeDocument(Owned, Base):
             name="knowledge_documents_source_type_check",
         ),
         CheckConstraint("status IN ('Pending', 'Processing', 'Ready', 'Failed')"),
+        CheckConstraint(
+            "refresh_result IN ('unchanged', 'updated')", name="knowledge_documents_refresh_result"
+        ),
     )
 
 

@@ -18,6 +18,9 @@ type Document = {
   source_type: "text" | "txt" | "pdf" | "url";
   filename: string | null;
   url?: string | null;
+  fetched_at?: string | null;
+  refresh_result?: "unchanged" | "updated" | null;
+  refresh?: { status: string; stage: string; error_code: string | null } | null;
   created_at: string;
   status: string;
   stage: string;
@@ -64,6 +67,13 @@ const messages = {
       "AI search preparation did not finish. Please retry or check the provider connection.",
     embedded: "prepared for AI search",
     retry: "Process again",
+    refreshPage: "Load again from the site",
+    refreshing: "Loading again…",
+    lastLoaded: "Last loaded",
+    refreshUnchanged: "No changes since the last load.",
+    refreshUpdated: "Updated from the site.",
+    refreshFailed: "Loading again didn’t finish:",
+    refreshKept: "The previous version is still in use.",
     remove: "Delete",
     confirm: "Delete this source and its prepared text?",
     yes: "Delete source",
@@ -194,6 +204,13 @@ const messages = {
       "הכנת חיפוש AI לא הסתיימה. אפשר לנסות שוב או לבדוק את החיבור לספק.",
     embedded: "מוכנים לחיפוש AI",
     retry: "ניסיון עיבוד נוסף",
+    refreshPage: "טעינה מחדש מהאתר",
+    refreshing: "נטען מחדש…",
+    lastLoaded: "נטען לאחרונה",
+    refreshUnchanged: "אין שינויים מאז הטעינה האחרונה.",
+    refreshUpdated: "עודכן מהאתר.",
+    refreshFailed: "הטעינה מחדש לא הסתיימה:",
+    refreshKept: "הגרסה הקודמת עדיין בשימוש.",
     remove: "מחיקה",
     confirm: "למחוק את המקור ואת המקטעים שהוכנו ממנו?",
     yes: "מחיקת המקור",
@@ -357,10 +374,13 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     setLoading(true);
     void load();
   }, [load]);
+  const refreshing = (item: Document) =>
+    ["Pending", "Processing"].includes(item.refresh?.status ?? "");
   const active = items.some(
     (item) =>
-      item.stage !== "text_prepared" &&
-      ["Pending", "Processing"].includes(item.status),
+      refreshing(item) ||
+      (item.stage !== "text_prepared" &&
+        ["Pending", "Processing"].includes(item.status)),
   );
   useEffect(() => {
     if (!active) return;
@@ -502,21 +522,17 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
   }
   async function action(
     document: Document,
-    kind: "retry" | "delete" | "view" | "embed",
+    kind: "retry" | "delete" | "view" | "embed" | "refresh",
   ) {
     setBusy(document.id);
     setError(false);
     setNotice(null);
     try {
       const response = await fetch(
-        `/api/knowledge/${document.id}${kind === "retry" ? "/retry" : kind === "embed" ? "/embed" : ""}`,
+        `/api/knowledge/${document.id}${kind === "view" || kind === "delete" ? "" : `/${kind}`}`,
         {
           method:
-            kind === "delete"
-              ? "DELETE"
-              : kind === "retry" || kind === "embed"
-                ? "POST"
-                : "GET",
+            kind === "delete" ? "DELETE" : kind === "view" ? "GET" : "POST",
           cache: "no-store",
         },
       );
@@ -877,6 +893,19 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                       </time>
                     </>
                   )}
+                  {item.fetched_at &&
+                    !Number.isNaN(Date.parse(item.fetched_at)) && (
+                      <>
+                        {" · "}
+                        {t.lastLoaded}{" "}
+                        <time dateTime={item.fetched_at}>
+                          {new Intl.DateTimeFormat(locale, {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          }).format(new Date(item.fetched_at))}
+                        </time>
+                      </>
+                    )}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {item.chunk_count} {t.chunks}
@@ -884,6 +913,27 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                     ? ` · ${item.embedded_chunk_count} ${t.embedded}`
                     : ""}
                 </p>
+                {refreshing(item) ? (
+                  <p className="mt-3 flex items-center gap-2 text-sm text-primary">
+                    <LoaderCircle size={14} className="animate-spin" />
+                    {t.refreshing}
+                  </p>
+                ) : item.refresh?.status === "Failed" ? (
+                  <p className="mt-3 text-sm text-red-800">
+                    {t.refreshFailed}{" "}
+                    {item.refresh.stage === "embedding_failed"
+                      ? t.embeddingError
+                      : (t.processingErrors[item.refresh.error_code ?? ""] ??
+                        t.failure)}{" "}
+                    {t.refreshKept}
+                  </p>
+                ) : item.refresh_result ? (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    {item.refresh_result === "unchanged"
+                      ? t.refreshUnchanged
+                      : t.refreshUpdated}
+                  </p>
+                ) : null}
                 {item.error_code && (
                   <p className="mt-3 text-sm text-red-800">
                     {item.stage === "embedding_failed"
@@ -919,16 +969,31 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                         {t.retry}
                       </Button>
                     )}
-                  {item.chunk_count > 0 && item.status !== "Ready" && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busy !== null || !connected}
-                      onClick={() => void action(item, "embed")}
-                    >
-                      {t.embed}
-                    </Button>
-                  )}
+                  {item.source_type === "url" &&
+                    ["text_prepared", "ready"].includes(item.stage) &&
+                    !refreshing(item) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy !== null}
+                        onClick={() => void action(item, "refresh")}
+                      >
+                        <RefreshCw size={14} />
+                        {t.refreshPage}
+                      </Button>
+                    )}
+                  {item.chunk_count > 0 &&
+                    item.status !== "Ready" &&
+                    !refreshing(item) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy !== null || !connected}
+                        onClick={() => void action(item, "embed")}
+                      >
+                        {t.embed}
+                      </Button>
+                    )}
                   <Button
                     variant="ghost"
                     size="sm"

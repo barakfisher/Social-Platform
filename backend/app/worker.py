@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from celery import Celery
@@ -18,9 +19,13 @@ from app.embeddings import (
     embedding_lock,
     profile_key,
 )
+from app.embeddings import (
+    configured as embeddings_configured,
+)
 from app.extraction import ExtractionError, extract_html, extract_pdf, page_range
 from app.logging import configure_worker_logging
 from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
+from app.refresh import lock_original, mark_unchanged, swap
 from app.web_fetch import FetchError, fallback_title, fetch_page
 
 celery_app = Celery("social_platform", broker=get_settings().redis_url)
@@ -121,31 +126,53 @@ def process_text(job_id: str) -> None:
             return
         source = (document.source_type, document.storage_key, document.source_reference)
     extracted = extract_source(*source)
-    kept = False
+    outcome = Prepared()
     try:
-        kept = prepare_locked(job_id, extracted)
+        outcome = prepare_locked(job_id, extracted)
     finally:
         # A fetched page is kept only once a committed row refers to it.
-        if extracted.new_key and not kept:
+        if extracted.new_key and not outcome.kept:
             storage.remove(extracted.new_key)
+    if outcome.replaced_key:
+        storage.remove(outcome.replaced_key)
+    if outcome.embed_job:
+        try:
+            embed_document.apply_async(
+                args=[str(outcome.embed_job)], task_id=str(outcome.embed_job)
+            )
+        except Exception:
+            # The Pending job is durable; app.reconcile dispatches it again.
+            logger.warning("refresh_embedding_dispatch_failed", extra={"job_id": job_id})
 
 
-def prepare_locked(job_id: str, extracted: Extracted) -> bool:
-    """Writes the result under the row lock; True when the run's fetched page was kept."""
+@dataclass
+class Prepared:
+    # The run's fetched page is referenced by a committed row.
+    kept: bool = False
+    # Embedding job of a staging copy whose original is searchable (refresh, app/refresh.py).
+    embed_job: UUID | None = None
+    # A page the original no longer uses, to remove after commit.
+    replaced_key: str | None = None
+
+
+def prepare_locked(job_id: str, extracted: Extracted) -> Prepared:
+    """Writes the result under the row locks."""
     pages, failure = extracted.pages, extracted.failure
-    kept = False
+    outcome = Prepared()
     with SessionLocal.begin() as session:
         reference = session.get(IngestionJob, UUID(job_id))
         if reference is None or reference.kind != "text_ingestion":
-            return False
+            return outcome
+        # A staging copy's original is locked first (app/refresh.py); otherwise None.
+        original = lock_original(session, reference.document_id)
         # Consistent document-before-job lock ordering serializes retry/delete/delivery.
         document = session.scalar(
             select(KnowledgeDocument)
             .where(KnowledgeDocument.id == reference.document_id)
             .with_for_update()
         )
-        if document is None:
-            return False
+        if document is None or (document.replaces_id is not None and original is None):
+            return outcome
         job = session.scalar(
             select(IngestionJob)
             .where(IngestionJob.id == UUID(job_id))
@@ -153,12 +180,17 @@ def prepare_locked(job_id: str, extracted: Extracted) -> bool:
             .execution_options(populate_existing=True)
         )
         if job is None or job.status == "Ready":
-            return False
+            return outcome
         job.attempts += 1
+        text = extracted.text if extracted.text is not None else document.source_text
+        if failure is None and original is not None and text == original.source_text:
+            # Loaded again and nothing changed: no new chunks and no paid embedding.
+            mark_unchanged(session, original, document)
+            return outcome
         # Another delivery may have stored the page first; its copy wins.
         if extracted.new_key and document.storage_key is None:
             document.storage_key = extracted.new_key
-            kept = True
+            outcome.kept = True
         if failure is not None:
             # Actionable and not retried automatically: the same bytes fail the same way.
             document.status = job.status = "Failed"
@@ -168,10 +200,11 @@ def prepare_locked(job_id: str, extracted: Extracted) -> bool:
                 "extraction_failed",
                 extra={"job_id": job_id, "document_id": str(document.id), "error_code": failure},
             )
-            return kept
+            return outcome
         document.status = job.status = "Processing"
-        if extracted.text is not None:
-            document.source_text = extracted.text
+        document.source_text = text
+        if document.source_type == "url":
+            document.fetched_at = datetime.now(UTC)
         if extracted.title and document.title == fallback_title(document.source_reference or ""):
             document.title = extracted.title
         chunks = chunk_text(document.source_text or "")
@@ -198,7 +231,29 @@ def prepare_locked(job_id: str, extracted: Extracted) -> bool:
             "text_prepared",
             extra={"job_id": job_id, "document_id": str(document.id), "request_id": job.request_id},
         )
-    return kept
+        if original is not None:
+            if original.status != "Ready":
+                # The original is not searchable yet, so it takes the new text right away.
+                outcome.replaced_key = swap(session, original, document)
+            elif not embeddings_configured():
+                document.status = "Failed"
+                document.processing_stage = "embedding_failed"
+                document.error_code = "embedding_not_configured"
+            else:
+                # Searchable originals stay in use until the new version is embedded.
+                embed_job = IngestionJob(
+                    user_id=document.user_id,
+                    workspace_id=document.workspace_id,
+                    document_id=document.id,
+                    kind="embedding",
+                    request_id=job.request_id,
+                )
+                session.add(embed_job)
+                document.processing_stage = "embedding_pending"
+                document.embedding_profile = profile_key()
+                session.flush()
+                outcome.embed_job = embed_job.id
+    return outcome
 
 
 @task_failure.connect
@@ -299,7 +354,9 @@ def embed_document(job_id: str) -> None:
                     chunk.embedding_model = settings.embedding_model
                     chunk.embedding_dimensions = settings.embedding_dimensions
                     chunk.embedding_profile = profile
+        replaced_key = None
         with SessionLocal.begin() as session:
+            original = lock_original(session, document_id)
             document = session.scalar(
                 select(KnowledgeDocument)
                 .where(KnowledgeDocument.id == document_id)
@@ -308,9 +365,14 @@ def embed_document(job_id: str) -> None:
             job = session.get(IngestionJob, UUID(job_id))
             if document is None or job is None or document.embedding_profile != profile:
                 return
-            document.status = job.status = "Ready"
             document.processing_stage = "ready"
             document.error_code = job.error_code = None
+            job.status = "Ready"
+            if document.replaces_id is None:
+                document.status = "Ready"
+            elif original is not None:
+                # A loaded-again page replaces its searchable original only now (refresh).
+                replaced_key = swap(session, original, document)
             logger.info(
                 "embedding_complete",
                 extra={
@@ -319,6 +381,8 @@ def embed_document(job_id: str) -> None:
                     "request_id": job.request_id,
                 },
             )
+        if replaced_key:
+            storage.remove(replaced_key)
 
 
 @task_failure.connect

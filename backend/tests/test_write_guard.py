@@ -24,6 +24,7 @@ WRITES = [
     ("POST", f"/posts/{uuid4()}/review", b"{}"),
     ("POST", EMBED, None),
     ("POST", f"/knowledge/{DOCUMENT}/retry", None),
+    ("POST", f"/knowledge/{DOCUMENT}/refresh", None),
     ("POST", "/knowledge/text", b"{}"),
     ("POST", "/knowledge/files?filename=notes.pdf", b"%PDF-1.4"),
     ("POST", "/knowledge/url", b'{"url": "https://garden.example/"}'),

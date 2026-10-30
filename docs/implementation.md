@@ -1081,3 +1081,43 @@ trafilatura may keep a short menu line on a page with almost no text; DNS lookup
 system resolver's own timeout; a redirect to a PDF is refused (`url_unsupported_type`), so
 the owner downloads and uploads it instead.
 
+## SP-17: loading a web page again — 2026-10-30
+
+Owner decisions: the current version stays in use until the new one is ready, and a
+searchable page is embedded again automatically (about $0.0001 a page).
+
+`POST /knowledge/{id}/refresh` works on web sources whose text is prepared or Ready. It
+creates a hidden staging copy (`replaces_id`, migration `b3e8d5f1c260`, one per source,
+deleted with the source) that runs through the normal fetch, extraction and embedding jobs
+(`app/refresh.py`):
+- Staging copies never become Ready, so retrieval, generation and topic suggestions keep
+  using the original. They are excluded from listing, GET, retry and delete by ID.
+- Unchanged extracted text: the staging copy is dropped, only `fetched_at` and
+  `refresh_result = "unchanged"` change, and no embedding is paid for.
+- Changed text, original not yet searchable: the new text and chunks replace the original's
+  at once.
+- Changed text, original Ready: the worker creates and dispatches an embedding job for the
+  staging copy. When it completes, one transaction moves the new chunks onto the original,
+  deletes the old ones and the staging copy, and keeps the original Ready
+  (`refresh_result = "updated"`). If embeddings are not configured, the request is a 503
+  `embedding_not_configured` and nothing starts.
+- Every refresh write locks the original before its staging copy. The replaced page's stored
+  copy is removed after commit.
+- A failed refresh stays on the staging copy (its code is shown in the UI) and the original
+  is untouched. Loading again replaces the failed attempt. A second click while a refresh
+  runs starts nothing new; enabling AI search on the original meanwhile is a 409
+  `refresh_in_progress`.
+- Saved drafts keep their own source snapshots, so a refresh does not change them.
+
+UI: web sources show "Last loaded" and a "Load again from the site" button. While a refresh
+runs, the original keeps its status and shows "Loading again…", and the list polls. Then it
+shows "No changes since the last load." or "Updated from the site.". A failure says what went
+wrong and that the previous version is still in use (EN/HE).
+
+Verification: backend 824 passed (6 refresh tests on the real database, covering unchanged,
+replaced at once, searchable until embedded with search results checked during the refresh,
+failure and retry, delete during a refresh, and refusals), ruff, `mypy app`, `alembic check`
+and a downgrade/upgrade round trip. Frontend Prettier, lint, tsc, production build and
+Playwright 72/72 (2 new). Not verified live: the same fetch limits as web page sources apply
+(no public fetch from this sandbox).
+
