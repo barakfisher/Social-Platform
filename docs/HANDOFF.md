@@ -106,3 +106,9 @@ The current handoff is `.ai/handoff.md`, rewritten for this delivery. It superse
 gate notes above: PR #2 merged as 1347763. This delivery adds source-review-v4, GPT-5.6-terra
 as the default user-selectable reviewer with cost estimates, the $0.16 request cap and a
 concurrent session's spending-limit fix. Check GitHub and `main` by content for its merge.
+
+## Writer context delivery — 2026-10-31
+
+The current handoff is `.ai/handoff.md`, rewritten for the "writer reads everything relevant"
+change on `claude/writer-context-relevance`. It supersedes the SP-27 handoff notes: #24, #25
+(SP-10) and #26 merged. Check GitHub and `main` by content for this branch's merge.
