@@ -1,8 +1,10 @@
 "use client";
 import {
   CheckCircle2,
+  Info,
   LoaderCircle,
   RotateCw,
+  SearchCheck,
   TriangleAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,6 +14,9 @@ import type { Review } from "@/lib/posts";
 type Copy = {
   title: string;
   clean: string;
+  notRequestedTitle: string;
+  notRequested: string;
+  check: string;
   uncheckedTitle: string;
   blockedTitle: string;
   blocked: string;
@@ -28,6 +33,10 @@ const copy: Record<Locale, Copy> = {
   en: {
     title: "Points to check",
     clean: "Every factual claim was found in your sources.",
+    notRequestedTitle: "Sources not checked yet",
+    notRequested:
+      "Read the draft before publishing. To compare each claim with your sources, check it: it is charged only when you ask.",
+    check: "Check sources",
     uncheckedTitle:
       "The source check did not complete. The facts in this draft were not checked.",
     blockedTitle: "Do not publish this draft",
@@ -103,6 +112,10 @@ const copy: Record<Locale, Copy> = {
   he: {
     title: "נקודות לבדיקה",
     clean: "כל הטענות העובדתיות נמצאו במקורות שלך.",
+    notRequestedTitle: "המקורות עוד לא נבדקו",
+    notRequested:
+      "כדאי לקרוא את הטיוטה לפני פרסום. כדי להשוות כל טענה למקורות שלך, אפשר לבדוק אותה: הבדיקה מחויבת רק כשמבקשים.",
+    check: "בדיקת מקורות",
     uncheckedTitle: "בדיקת המקורות לא הושלמה. העובדות בטיוטה לא נבדקו.",
     blockedTitle: "אין לפרסם את הטיוטה הזו",
     blocked:
@@ -191,10 +204,46 @@ export function ReviewFindings({
 }) {
   const t = copy[locale];
   if (!review) return null;
+  const notRequested = review.status === "not_requested";
   const unchecked = review.status === "unchecked";
   const blocked = review.status === "blocked";
   // A block is lifted only by checking a newly saved version, never by retrying.
-  const offerRecheck = onRecheck && ((unchecked && review.retryable) || stale);
+  const offerRecheck =
+    onRecheck && (notRequested || (unchecked && review.retryable) || stale);
+  if (notRequested)
+    return (
+      <section
+        aria-labelledby="review-findings-title"
+        data-testid="review-not-requested"
+        className="mt-5 rounded-lg border border-border bg-muted/50 p-4 text-sm"
+      >
+        <h4
+          id="review-findings-title"
+          className="flex items-center gap-2 font-medium"
+        >
+          <Info size={16} aria-hidden className="shrink-0" />
+          {t.notRequestedTitle}
+        </h4>
+        <p className="mt-2 text-muted-foreground">{t.notRequested}</p>
+        {review.findings.length > 0 && (
+          <>
+            {stale && <p className="mt-2 text-xs">{t.stale}</p>}
+            <FindingList t={t} findings={review.findings} />
+          </>
+        )}
+        {offerRecheck && (
+          <RecheckAction
+            t={t}
+            label={t.check}
+            icon={<SearchCheck size={14} />}
+            busy={busy}
+            canRecheck={canRecheck}
+            cost={cost}
+            onRecheck={onRecheck}
+          />
+        )}
+      </section>
+    );
   if (!unchecked && !blocked && review.findings.length === 0 && !stale)
     return (
       <p
@@ -227,53 +276,96 @@ export function ReviewFindings({
       {blocked ? (
         <p className="mt-2">{t.blocked}</p>
       ) : unchecked ? (
-        <p className="mt-2">
-          {t.reasons[review.reason ?? ""] ?? t.unknownReason}
-        </p>
+        <>
+          <p className="mt-2">
+            {t.reasons[review.reason ?? ""] ?? t.unknownReason}
+          </p>
+          {/* The free checks still ran: a failed source check keeps them. */}
+          {review.findings.length > 0 && (
+            <FindingList t={t} findings={review.findings} />
+          )}
+        </>
       ) : (
-        <ul className="mt-3 space-y-3">
-          {review.findings.map((finding, index) => {
-            const [problem, action] =
-              t.findings[finding.code] ?? t.unknownFinding;
-            return (
-              <li key={index} className="rounded-md bg-white/70 p-3">
-                {finding.claim && (
-                  <blockquote
-                    dir="auto"
-                    className="border-s-2 border-amber-400 ps-3 italic"
-                  >
-                    {finding.claim}
-                  </blockquote>
-                )}
-                <p className={finding.claim ? "mt-2" : ""}>{problem}</p>
-                <p className="mt-1 text-xs text-amber-900/80">{action}</p>
-              </li>
-            );
-          })}
-        </ul>
+        <FindingList t={t} findings={review.findings} />
       )}
       {offerRecheck && (
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy || !canRecheck}
-            onClick={onRecheck}
-          >
-            {busy ? (
-              <LoaderCircle className="animate-spin" size={14} />
-            ) : (
-              <RotateCw size={14} />
-            )}
-            {busy ? t.rechecking : t.recheck}
-          </Button>
-          {canRecheck ? (
-            cost && <span className="text-xs">{cost}</span>
-          ) : (
-            <span className="text-xs">{t.saveFirst}</span>
-          )}
-        </div>
+        <RecheckAction
+          t={t}
+          label={t.recheck}
+          icon={<RotateCw size={14} />}
+          busy={busy}
+          canRecheck={canRecheck}
+          cost={cost}
+          onRecheck={onRecheck}
+        />
       )}
     </section>
+  );
+}
+
+function FindingList({
+  t,
+  findings,
+}: {
+  t: Copy;
+  findings: Review["findings"];
+}) {
+  return (
+    <ul className="mt-3 space-y-3">
+      {findings.map((finding, index) => {
+        const [problem, action] = t.findings[finding.code] ?? t.unknownFinding;
+        return (
+          <li key={index} className="rounded-md bg-white/70 p-3">
+            {finding.claim && (
+              <blockquote
+                dir="auto"
+                className="border-s-2 border-amber-400 ps-3 italic"
+              >
+                {finding.claim}
+              </blockquote>
+            )}
+            <p className={finding.claim ? "mt-2" : ""}>{problem}</p>
+            <p className="mt-1 text-xs text-amber-900/80">{action}</p>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function RecheckAction({
+  t,
+  label,
+  icon,
+  busy,
+  canRecheck,
+  cost,
+  onRecheck,
+}: {
+  t: Copy;
+  label: string;
+  icon: React.ReactNode;
+  busy: boolean;
+  canRecheck: boolean;
+  cost?: string;
+  onRecheck: () => void;
+}) {
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-3">
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={busy || !canRecheck}
+        onClick={onRecheck}
+      >
+        {busy ? <LoaderCircle className="animate-spin" size={14} /> : icon}
+        {busy ? t.rechecking : label}
+      </Button>
+      {canRecheck ? (
+        cost && <span className="text-xs">{cost}</span>
+      ) : (
+        <span className="text-xs">{t.saveFirst}</span>
+      )}
+    </div>
   );
 }

@@ -189,8 +189,11 @@ def test_writer_and_reviewer_prompts_admit_a_full_context_and_the_longest_draft(
     body = payload(language="he", length="long", topic="מנטורינג " * 100)
     response = client.post("/generation", json=body)
     assert response.status_code == 200, response.text
-    # A reviewer prompt over the budget still returns 200, marked unchecked.
-    assert response.json()["metadata"]["grounding_review"]["status"] == "checked"
+    # "Check sources" on that draft: a reviewer prompt over the budget would still return 200,
+    # marked unchecked, so only "checked" shows it fit.
+    checked = client.post(f"/generation/{response.json()['id']}/review", json={})
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["metadata"]["grounding_review"]["status"] == "checked"
     cited = response.json()["sources"]
     assert len(cited) == len(sent_sources(generation))
     assert prompt_tokens(json.dumps(cited, ensure_ascii=False)) > (

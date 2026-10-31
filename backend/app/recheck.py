@@ -16,7 +16,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.generation import GenerateInput, brand_constraints, generation_lock
 from app.generation_provider import GenerationError
-from app.grounding import REVIEW_VERSION, check_draft
+from app.grounding import blocked_review, check_draft, text_fingerprint
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID
 from app.models import BrandDNA, GenerationRun, Post
 from app.posts import serialize
@@ -142,12 +142,9 @@ def recheck_draft(post_id: UUID, payload: RecheckDraftInput):
             # Only generated drafts carry the sources and preferences a review needs.
             if "preferences" not in settings:
                 raise HTTPException(409, "review_unavailable")
-            previous = settings.get("grounding_review") or {}
-            # A block stands until the owner saves a new version; retrying the same text
-            # could otherwise replace it with a luckier review.
-            if previous.get("status") == "blocked" and (
-                previous.get("checked_version") == payload.version
-            ):
+            # A block stands for its text, not its version number: re-saving or pasting back
+            # the same words could otherwise replace it with a luckier review.
+            if text_fingerprint(post.content) in settings.get("blocked_texts", {}):
                 raise HTTPException(409, "draft_blocked")
             inputs = generation_inputs(settings["preferences"], post.id)
             model = review_model(payload.review_model, settings["preferences"])
@@ -158,19 +155,15 @@ def recheck_draft(post_id: UUID, payload: RecheckDraftInput):
             if exc.detail != "draft_blocked":
                 raise
             # The owner's saved text is kept, never deleted, but recorded as blocked.
-            review = {
-                "version": REVIEW_VERSION,
-                "status": "blocked",
-                "reason": "draft_blocked",
-                "retryable": False,
-                "findings": [],
-                "checked_at": datetime.now(UTC).isoformat(),
-            }
+            review = blocked_review(datetime.now(UTC).isoformat(), payload.version)
         review["checked_version"] = payload.version
         with SessionLocal.begin() as session:
             post = session.get(Post, post_id)
             if post is None:
                 raise HTTPException(404, "Draft not found.")
+            blocked_texts = dict(post.generation_settings.get("blocked_texts", {}))
+            if review["status"] == "blocked":
+                blocked_texts[text_fingerprint(content)] = review["checked_at"]
             updated = session.scalar(
                 update(Post)
                 .where(
@@ -184,6 +177,7 @@ def recheck_draft(post_id: UUID, payload: RecheckDraftInput):
                         **post.generation_settings,
                         "grounding_review": review,
                         "grounded": review["status"] == "checked" and not review["findings"],
+                        "blocked_texts": blocked_texts,
                     }
                 )
                 .returning(Post)

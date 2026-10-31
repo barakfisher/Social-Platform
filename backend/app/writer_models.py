@@ -44,10 +44,22 @@ class WriterProfile:
 # draft from Wikipedia sources used all of 2,000 and was cut off (2026-10-28), so 4,000.
 # Typical tokens re-measured on a live Hebrew medium draft reading every relevant chunk
 # (18,236 / 3,271, 2026-10-31).
+# Claude Opus 5.5: 1.67-1.71 on the owner's six Hebrew topics, 1.80-1.85 on short scenario
+# prompts (the Claude 5.5 family measured 1.66 EN / 1.78 HE on long text), so 1.8. Typical
+# tokens are the medians of those six drafts (14,570-29,127 / 1,225-2,368 incl. reasoning,
+# 2026-10-31); 4,000 leaves room for a long post.
+# GPT-5.6-sol: o200k counts match within a constant 27 tokens, as GPT-4.1. Typical tokens are
+# the medians of the same six drafts (8,562-17,431 / 340-1,004 incl. reasoning, 2026-10-31).
 WRITER_PROFILES = {
     "openai/gpt-4.1": WriterProfile(token_ratio=Decimal("1.0"), typical_tokens=(13886, 311)),
     "google/gemini-3.8-flash": WriterProfile(
         token_ratio=Decimal("1.25"), typical_tokens=(18236, 3271), output_tokens=4000
+    ),
+    "anthropic/claude-opus-5.5": WriterProfile(
+        token_ratio=Decimal("1.8"), typical_tokens=(22252, 1683), output_tokens=4000
+    ),
+    "openai/gpt-5.6-sol": WriterProfile(
+        token_ratio=Decimal("1.0"), typical_tokens=(13232, 596), output_tokens=3000
     ),
 }
 

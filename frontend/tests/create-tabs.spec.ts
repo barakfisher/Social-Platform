@@ -103,12 +103,12 @@ test("the estimated cost stays next to Generate and links to the models tab", as
   await mockApi(page);
   await page.goto("/en/create");
   const summary = page.getByTestId("generate-cost");
-  // GPT-4.1 writing + GPT-5.6 Terra source check.
-  await expect(summary).toHaveText("~$0.035 per draft · up to $0.15");
+  // Writing only: the source check is charged when the owner asks for it.
+  await expect(summary).toHaveText("~$0.007 per draft · up to $0.03");
   await expect(
     page.getByRole("button", { name: "Generate draft", exact: true }),
   ).toHaveAccessibleDescription(
-    "Estimated cost: ~$0.035 per draft · up to $0.15",
+    "Estimated cost: ~$0.007 per draft · up to $0.03",
   );
   await page.getByRole("button", { name: "Change models" }).click();
   const modelsTab = page.getByRole("tab", { name: "Models and cost" });
@@ -117,9 +117,9 @@ test("the estimated cost stays next to Generate and links to the models tab", as
   await page
     .getByLabel("Writing model", { exact: true })
     .selectOption("google/gemini-3.8-flash");
-  await expect(summary).toHaveText("~$0.032 per draft · up to $0.14");
+  await expect(summary).toHaveText("~$0.004 per draft · up to $0.02");
   await expect(page.getByTestId("total-draft-cost")).toHaveText(
-    "~$0.032 per draft · up to $0.14",
+    "~$0.004 per draft · up to $0.02",
   );
 });
 

@@ -11,8 +11,10 @@ export type Finding = {
   claim: string | null;
 };
 export type Review = {
-  // "blocked": saved drafts only; the text is kept but must not be published.
-  status: "checked" | "unchecked" | "blocked";
+  // "not_requested": a new draft before "Check sources"; findings hold only the free
+  // checks (unlisted contact details, wrong language). "blocked": saved drafts only; the
+  // text is kept but must not be published.
+  status: "not_requested" | "checked" | "unchecked" | "blocked";
   findings: Finding[];
   // Unchecked only: why the check did not complete, and whether retrying can help.
   reason: string | null;

@@ -110,10 +110,12 @@ const copy = {
     writerModel: "Writing model",
     reviewModel: "Source check model",
     reviewHint:
-      "Estimated cost per draft: typical, and the most the server will reserve.",
-    total: "Estimated total per draft (writing + source check)",
-    totalHint: "Search for relevant sources is billed separately.",
+      "Charged only when you press “Check sources” on a draft: typical cost per check, and the most the server will reserve.",
+    total: "Estimated writing cost per draft",
+    totalHint:
+      "The source check is not included: it runs only when you ask for it. Search for relevant sources is billed separately.",
     perDraft: "per draft",
+    perCheck: "per check",
     upTo: "up to",
     recommended: "recommended",
     costUnavailable: "cost unavailable",
@@ -226,10 +228,12 @@ const copy = {
     writerModel: "מודל לכתיבה",
     reviewModel: "מודל לבדיקת המקורות",
     reviewHint:
-      "עלות משוערת לכל טיוטה: עלות טיפוסית, והסכום המרבי שהשרת ישריין.",
-    total: "עלות כוללת משוערת לטיוטה (כתיבה ובדיקת מקורות)",
-    totalHint: "החיפוש במקורות הרלוונטיים מחויב בנפרד.",
+      "מחויב רק כשלוחצים על „בדיקת מקורות” בטיוטה: עלות טיפוסית לבדיקה, והסכום המרבי שהשרת ישריין.",
+    total: "עלות כתיבה משוערת לטיוטה",
+    totalHint:
+      "בדיקת המקורות לא כלולה: היא רצה רק כשמבקשים אותה. החיפוש במקורות הרלוונטיים מחויב בנפרד.",
     perDraft: "לטיוטה",
+    perCheck: "לבדיקה",
     upTo: "עד",
     recommended: "מומלץ",
     costUnavailable: "העלות אינה זמינה",
@@ -270,6 +274,8 @@ const modelNames: Record<string, string> = {
   "openai/gpt-5.6-terra": "GPT-5.6 Terra",
   "openai/gpt-4.1": "GPT-4.1",
   "google/gemini-3.8-flash": "Gemini 3.8 Flash",
+  "anthropic/claude-opus-5.5": "Claude Opus 5.5",
+  "openai/gpt-5.6-sol": "GPT-5.6 Sol",
 };
 function isModelOptions(data: unknown): data is ModelOptions {
   const value = data as ModelOptions | null;
@@ -339,11 +345,12 @@ export function CreatePost({ locale }: { locale: Locale }) {
     currency: "USD",
     maximumSignificantDigits: 2,
   });
-  function modelCost(option: ModelOption) {
+  // A writer is paid on every draft; the source check only when the owner asks for one.
+  function modelCost(option: ModelOption, unit = t.perDraft) {
     return !option.available
       ? t.unavailable
       : option.typical_usd !== null && option.max_usd !== null
-        ? `~${money.format(option.typical_usd)} ${t.perDraft} · ${t.upTo} ${money.format(option.max_usd)}`
+        ? `~${money.format(option.typical_usd)} ${unit} · ${t.upTo} ${money.format(option.max_usd)}`
         : t.costUnavailable;
   }
   // Notes describe a model as a source checker, so writer options pass none.
@@ -351,12 +358,13 @@ export function CreatePost({ locale }: { locale: Locale }) {
     option: ModelOption,
     defaultId: string,
     notes: Record<string, string> = {},
+    unit = t.perDraft,
   ) {
     const labels = [
       option.id === defaultId ? t.recommended : null,
       notes[option.id] ?? null,
     ].filter(Boolean);
-    return `${modelNames[option.id] ?? option.id}${labels.length ? ` (${labels.join(", ")})` : ""} — ${modelCost(option)}`;
+    return `${modelNames[option.id] ?? option.id}${labels.length ? ` (${labels.join(", ")})` : ""} — ${modelCost(option, unit)}`;
   }
   function chosen(options: ModelOptions | "error" | null, id: string) {
     return options && options !== "error"
@@ -366,17 +374,13 @@ export function CreatePost({ locale }: { locale: Locale }) {
   // A closed select truncates long options on phones, so the chosen cost is repeated below.
   const selectedWriter = chosen(writerModels, form.writer_model);
   const selectedModel = chosen(reviewModels, form.review_model);
-  // Hidden while either list loads; unknown when either list or price is unavailable.
+  // A draft pays for writing only; the source check is priced where it is requested.
+  // Hidden while the list loads; unknown when the list or the price is unavailable.
   const totalCost =
-    writerModels === null || reviewModels === null
+    writerModels === null
       ? null
-      : selectedWriter?.available &&
-          selectedModel?.available &&
-          selectedWriter.typical_usd !== null &&
-          selectedWriter.max_usd !== null &&
-          selectedModel.typical_usd !== null &&
-          selectedModel.max_usd !== null
-        ? `~${money.format(selectedWriter.typical_usd + selectedModel.typical_usd)} ${t.perDraft} · ${t.upTo} ${money.format(selectedWriter.max_usd + selectedModel.max_usd)}`
+      : selectedWriter
+        ? modelCost(selectedWriter)
         : t.costUnavailable;
   async function generate(event: React.FormEvent) {
     event.preventDefault();
@@ -896,7 +900,12 @@ export function CreatePost({ locale }: { locale: Locale }) {
                             value={option.id}
                             disabled={!option.available}
                           >
-                            {modelLabel(option, reviewModels.default, t.notes)}
+                            {modelLabel(
+                              option,
+                              reviewModels.default,
+                              t.notes,
+                              t.perCheck,
+                            )}
                           </option>
                         ))
                       )}
@@ -908,7 +917,7 @@ export function CreatePost({ locale }: { locale: Locale }) {
                       aria-live="polite"
                       className="mt-2 text-sm"
                     >
-                      {modelCost(selectedModel)}
+                      {modelCost(selectedModel, t.perCheck)}
                     </p>
                   )}
                   <p
@@ -1031,7 +1040,9 @@ export function CreatePost({ locale }: { locale: Locale }) {
             stale={content !== reviewedText}
             canRecheck={recheckable}
             busy={busy === "review"}
-            cost={selectedModel ? modelCost(selectedModel) : undefined}
+            cost={
+              selectedModel ? modelCost(selectedModel, t.perCheck) : undefined
+            }
             onRecheck={() => void recheck()}
           />
           <div className="mt-5 flex flex-wrap items-center gap-4">

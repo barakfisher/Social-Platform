@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from unittest.mock import patch
 
 import pytest
@@ -579,6 +580,16 @@ def contact_review(
         ("פרטים ב-cedar.co.il היום.", "cedar.co.il"),
         ("Tel:050-1234567 for details.", "050-1234567"),
         ("Call 050.123.4567 today.", "050.123.4567"),
+        ("Register at cedar-garden.top today.", "cedar-garden.top"),
+        ("הירשמו בcedar.com היום.", "cedar.com"),
+        ("לפרטים נוספים על הסדנה הירשמו בcedar-garden.top היום.", "cedar-garden.top"),
+        ("Visit \u0430pple.com today.", "\u0430pple.com"),
+        ("Visit studi\u0585.com today.", "studi\u0585.com"),
+        ("Visit CEDAR-GARDEN.TOP today.", "CEDAR-GARDEN.TOP"),
+        ("Visit _cedar-garden.top_ today.", "cedar-garden.top"),
+        ("Visit cedar-garden\uff0etop today.", "cedar-garden.top"),
+        ("Visit cedar-garden\u200b.top today.", "cedar-garden.top"),
+        ("Write to john.smith@evil.top today.", "john.smith@evil.top"),
     ],
     ids=[
         "handle",
@@ -598,6 +609,16 @@ def contact_review(
         "he-hyphen-prefixed-domain",
         "phone-after-colon",
         "dotted-phone",
+        "bare-domain-any-ending",
+        "he-prefix-glued-domain",
+        "he-prefix-glued-any-ending",
+        "cyrillic-look-alike",
+        "armenian-look-alike",
+        "uppercase-any-ending",
+        "markdown-italics",
+        "fullwidth-dot",
+        "zero-width-before-dot",
+        "dotted-email",
     ],
 )
 def test_contact_detail_the_owner_did_not_give_is_a_finding(draft: str, detail: str) -> None:
@@ -623,6 +644,33 @@ def test_contact_detail_the_owner_did_not_give_is_a_finding(draft: str, detail: 
 def test_owner_contact_details_are_not_findings(draft, offer, cta, brand) -> None:
     result = contact_review(draft, offer=offer, cta=cta, brand=brand)
     assert [f["code"] for f in result["findings"]] == []
+
+
+@pytest.mark.parametrize(
+    "draft,offer",
+    [
+        ("Email dana.levi@gmail.com today.", "Write to dana.levi@cedar.example"),
+        ("Visit cedar.com\u200b.evil.top today.", "See cedar.com"),
+        ("Visit \u0585cedar.com today.", "See cedar.com"),
+    ],
+    ids=["dotted-email-name", "zero-width-split", "foreign-letter-in-front"],
+)
+def test_a_planted_detail_never_passes_as_the_owners(draft, offer) -> None:
+    result = contact_review(draft, offer=offer)
+    assert [f["code"] for f in result["findings"]] == ["unlisted_contact_detail"]
+
+
+def test_the_owners_link_in_curly_quotes_is_not_a_finding() -> None:
+    result = contact_review(
+        "Join at \u201chttps://cedar.example/join\u201d today.", offer="cedar.example/join"
+    )
+    assert result["findings"] == []
+
+
+def test_a_look_alike_of_the_owners_link_is_a_finding() -> None:
+    # Cyrillic "а" in place of Latin "a": not the owner's link, however alike it looks.
+    result = contact_review("Visit \u0430pple.com today.", offer="Visit apple.com")
+    assert [f["code"] for f in result["findings"]] == ["unlisted_contact_detail"]
 
 
 def test_a_detail_the_brand_prohibits_is_still_a_finding() -> None:
@@ -652,16 +700,35 @@ def test_many_tiny_quotes_against_a_long_source_stay_bounded() -> None:
         "Read the report.pdf and Node.js notes.",
         "We ran in 2019 2020 2021 and more.",
         "Open 2026-12-01 - 2026-12-15 only.",
+        "Built on Next.js and Vue.js.",
+        "Meet Mr.Smith at 3.5kg, U.S.A. time, wait...what.",
+        "Photos in garden.jpg and plan.docx, notes in notes.txt.",
+        "It ended.Next week we start.",
     ],
 )
 def test_dates_numbers_and_file_names_are_not_contact_details(draft: str) -> None:
     assert contact_details(draft) == {}
 
 
+# Far above a linear scan of these runs (milliseconds), far below a quadratic one.
+MAX_SCAN_SECONDS = 1.0
+
+
 def test_contact_detection_stays_fast_on_long_planted_runs() -> None:
     # Possessive patterns: a long run with no "@" or no domain must not backtrack per position.
-    for text in ["a" * 40000, "a" * 40000 + "@", "a@" + "b" * 40000, "1 " * 20000]:
+    for text in [
+        "a-" * 20000,
+        "a-a." * 10000,
+        "a" * 40000,
+        "a" * 40000 + "@",
+        "a@" + "b" * 40000,
+        "1 " * 20000,
+        "a." * 20000,
+        "a-" * 20000 + ".top",
+    ]:
+        started = time.monotonic()
         contact_details(text)
+        assert time.monotonic() - started < MAX_SCAN_SECONDS, text[:8]
 
 
 @pytest.mark.parametrize(
