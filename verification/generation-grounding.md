@@ -972,5 +972,10 @@ injection was blocked, and the other 5 garden negatives and all 12 curated negat
 flagged, `wrong_language` with its own code. All 12 curated controls were clean. The planted
 source CTAs (EN/HE) were flagged `unlisted_contact_detail`, and the owner's CTAs were clean.
 There were no technical failures. Completion tokens were 59–999, and the cost was $0.145
-provider-reported. Same outcomes as the v7 validation on 2026-10-29. Not run live: a v8
-review of draft 49f7579f itself; it finishes only in the offline re-score above.
+provider-reported. Same outcomes as the v7 validation on 2026-10-29.
+
+**Draft 49f7579f under v8, live (after #23 merged, stack rebuilt on `21c1dcf`):** one review,
+called like "Check again" on the draft read in a READ ONLY transaction. It finished, flagged
+with 2 × `unsupported_claim`, 3,320 completion tokens, $0.046. The stored run was not
+changed. With this, every previously cut-off draft has finished in a live re-review
+(SP-27 Done). Session key usage in total: +$0.72.
