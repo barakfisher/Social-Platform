@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BookOpen,
   FileUp,
@@ -58,8 +58,18 @@ const messages = {
     empty: "No sources yet. Add your first text above.",
     sources: "Your sources",
     loading: "Loading sources…",
+    listError:
+      "We couldn’t load your sources. Check the connection and try again.",
     error:
       "We couldn’t complete that request. Your unsaved text is still here. Please try again.",
+    actionErrors: {
+      refresh_in_progress:
+        "This page is already loading again. Try again when it finishes.",
+      refresh_not_ready:
+        "This page can be loaded again once its text is prepared.",
+      refresh_not_awaiting:
+        "This choice was already made or the reload ended. The list is updated.",
+    } as Record<string, string>,
     refresh: "Refresh",
     pending: "Queued",
     processing: "Processing",
@@ -139,6 +149,7 @@ const messages = {
     linkGeneric: "The web page couldn’t be added. Please try again.",
     uploadGeneric: "The upload didn’t finish. Please try again.",
     uploading: "Uploading",
+    saving: "Upload complete. Checking and saving the file…",
     uploaded: "File uploaded. Preparation is queued.",
     uploadDuplicate:
       "This file is already in your Knowledge Base. No new source was added.",
@@ -160,6 +171,8 @@ const messages = {
       source_too_long: "The file has more text than a source may hold.",
       file_name_invalid: "The file name can’t be used. Rename the file.",
       storage_failed: "The file couldn’t be stored. Please try again.",
+      upload_conflict:
+        "A matching file was deleted while this one uploaded. Upload it again.",
     } as Record<string, string>,
     processingErrors: {
       pdf_requires_ocr:
@@ -211,8 +224,15 @@ const messages = {
     empty: "עדיין אין מקורות. אפשר להוסיף את הטקסט הראשון למעלה.",
     sources: "המקורות שלך",
     loading: "טוען מקורות…",
+    listError: "לא הצלחנו לטעון את המקורות. כדאי לבדוק את החיבור ולנסות שוב.",
     error:
       "לא הצלחנו להשלים את הבקשה. הטקסט שלא נשמר עדיין כאן. אפשר לנסות שוב.",
+    actionErrors: {
+      refresh_in_progress: "הדף כבר נטען מחדש. אפשר לנסות שוב כשהטעינה תסתיים.",
+      refresh_not_ready: "אפשר לטעון את הדף מחדש אחרי שהטקסט שלו הוכן.",
+      refresh_not_awaiting:
+        "הבחירה כבר נעשתה או שהטעינה מחדש הסתיימה. הרשימה עודכנה.",
+    } as Record<string, string>,
     refresh: "רענון",
     pending: "בתור",
     processing: "בעיבוד",
@@ -288,6 +308,7 @@ const messages = {
     linkGeneric: "לא הצלחנו להוסיף את הדף. אפשר לנסות שוב.",
     uploadGeneric: "ההעלאה לא הסתיימה. אפשר לנסות שוב.",
     uploading: "מעלה",
+    saving: "ההעלאה הסתיימה. בודק ושומר את הקובץ…",
     uploaded: "הקובץ הועלה ונשלח להכנה.",
     uploadDuplicate: "הקובץ הזה כבר נמצא במאגר הידע. לא נוסף מקור חדש.",
     chooseFile: "יש לבחור קובץ להעלאה.",
@@ -308,6 +329,7 @@ const messages = {
       source_too_long: "בקובץ יש יותר טקסט ממה שמקור יכול להכיל.",
       file_name_invalid: "אי אפשר להשתמש בשם הקובץ. יש לשנות את שמו.",
       storage_failed: "לא הצלחנו לשמור את הקובץ. אפשר לנסות שוב.",
+      upload_conflict: "קובץ זהה נמחק בזמן ההעלאה. אפשר להעלות את הקובץ שוב.",
     } as Record<string, string>,
     processingErrors: {
       pdf_requires_ocr:
@@ -344,15 +366,89 @@ const messages = {
     invalid: "יש להזין כותרת וטקסט.",
   },
 };
+const POLL_INTERVAL_MS = 3000;
 const DEFAULT_LIMITS = { bytes: 10 * 1024 * 1024, pages: 300 };
 const without = <T,>(record: Record<string, T>, key: string) =>
   Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
 const FILE_EXTENSIONS = [".pdf", ".txt", ".md"];
 const megabytes = (bytes: number) =>
   `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
+// Processing again cannot fix these: the owner has to change the file or the link.
+const FINAL_ERRORS = new Set([
+  "pdf_requires_ocr",
+  "pdf_encrypted",
+  "pdf_corrupt",
+  "pdf_too_many_pages",
+  "source_too_long",
+  "source_file_missing",
+  "url_blocked_address",
+  "url_unsupported_type",
+]);
+type Messages = (typeof messages)[Locale];
+const awaitingChoice = (item: Document) =>
+  item.refresh?.stage === "awaiting_decision";
+const refreshing = (item: Document) =>
+  ["Pending", "Processing"].includes(item.refresh?.status ?? "") &&
+  !awaitingChoice(item);
+// The list is polled while any source is in flight; text_prepared, Ready, Failed
+// and a reload waiting for the owner's choice are resting states.
+const inFlight = (item: Document) =>
+  refreshing(item) ||
+  (item.stage !== "text_prepared" &&
+    ["Pending", "Processing"].includes(item.status));
+const statusLabel = (item: Document, t: Messages) =>
+  item.stage === "embedding_failed"
+    ? t.embeddingFailed
+    : ["embedding", "embedding_pending"].includes(item.stage)
+      ? t.embedding
+      : item.stage === "text_prepared"
+        ? t.prepared
+        : item.status === "Failed"
+          ? t.failed
+          : item.status === "Ready"
+            ? t.ready
+            : item.status === "Processing"
+              ? t.processing
+              : t.pending;
+// What a source settled into, announced to screen readers when polling ends for it.
+// A finished reload says what happened to the page rather than the source's status.
+const outcome = (item: Document, t: Messages, wasReloading: boolean) =>
+  awaitingChoice(item)
+    ? t.changesFound(
+        item.refresh?.added_count ?? 0,
+        item.refresh?.removed_count ?? 0,
+      )
+    : item.refresh?.status === "Failed"
+      ? `${t.refreshFailed} ${t.refreshKept}`
+      : wasReloading && item.refresh_result
+        ? {
+            unchanged: t.refreshUnchanged,
+            replaced: t.refreshReplaced,
+            appended: t.refreshAppended,
+            kept: t.refreshKeptChoice,
+          }[item.refresh_result]
+        : statusLabel(item, t);
+// Shows Hebrew and other non-ASCII addresses as written; the link keeps the encoded
+// form. Bidirectional control characters stay encoded so they cannot reorder the text.
+const readableUrl = (url: string) => {
+  try {
+    return decodeURI(url).replace(/[‎‏‪-‮⁦-⁩]/g, encodeURIComponent);
+  } catch {
+    return url;
+  }
+};
+// Gives each row's buttons a name that says which source they act on.
+const forSource = (label: string, item: Document) => `${label}: ${item.title}`;
+const errorCode = async (response: Response) => {
+  const body = await response.json().catch(() => ({}));
+  return (body.error?.message ?? "") as string;
+};
+const known = (code: string, texts: Record<string, string>) =>
+  Object.hasOwn(texts, code) ? code : "generic";
 export function KnowledgeBase({ locale }: { locale: Locale }) {
   const t = messages[locale];
-  const [connected, setConnected] = useState(false);
+  // null until the configuration answers, so "not connected" never flashes.
+  const [connected, setConnected] = useState<boolean | null>(null);
   const [limits, setLimits] = useState(DEFAULT_LIMITS);
   useEffect(() => {
     fetch("/api/knowledge/configuration", { cache: "no-store" })
@@ -381,7 +477,21 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState(false);
+  // A failed action: a code from actionErrors, or "generic".
+  const [error, setError] = useState<string | null>(null);
+  const [listFailed, setListFailed] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  // Element ids to focus after the next render, first one found wins. Buttons are
+  // disabled while a request runs, which drops focus to <body>; this puts it back.
+  const [focusTarget, setFocusTarget] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!focusTarget) return;
+    focusTarget
+      .map((id) => document.getElementById(id))
+      .find((element) => element !== null)
+      ?.focus();
+    setFocusTarget(null);
+  }, [focusTarget]);
   const [notice, setNotice] = useState<
     | "saved"
     | "duplicate"
@@ -405,9 +515,9 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
         const data = await response.json();
         setItems(data.items);
         setTotal(data.total);
-        setError(false);
+        setListFailed(false);
       } catch {
-        setError(true);
+        setListFailed(true);
       } finally {
         setLoading(false);
       }
@@ -418,11 +528,32 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     setLoading(true);
     void load();
   }, [load]);
-  const awaitingChoice = (item: Document) =>
-    item.refresh?.stage === "awaiting_decision";
-  const refreshing = (item: Document) =>
-    ["Pending", "Processing"].includes(item.refresh?.status ?? "") &&
-    !awaitingChoice(item);
+  // What each source was doing at the last load: "reload", "processing" or nothing.
+  const wasInFlight = useRef(new Map<string, string>());
+  useEffect(() => {
+    const settled = items.filter(
+      (item) => wasInFlight.current.get(item.id) && !inFlight(item),
+    );
+    const reloading = new Set(
+      settled
+        .filter((item) => wasInFlight.current.get(item.id) === "reload")
+        .map((item) => item.id),
+    );
+    wasInFlight.current = new Map(
+      items
+        .filter(inFlight)
+        .map((item) => [item.id, refreshing(item) ? "reload" : "processing"]),
+    );
+    if (!settled.length) return;
+    const text = settled
+      .map(
+        (item) => `${item.title}: ${outcome(item, t, reloading.has(item.id))}`,
+      )
+      .join(" ");
+    // An unchanged text is not read again, so a repeat (the same failure after
+    // Process again) gets an invisible difference.
+    setAnnouncement((previous) => (previous === text ? `${text} ` : text));
+  }, [items, t]);
   const [changes, setChanges] = useState<Record<string, Changes>>({});
   async function toggleChanges(item: Document) {
     if (changes[item.id]) {
@@ -430,24 +561,30 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       return;
     }
     setBusy(item.id);
-    setError(false);
+    setError(null);
     try {
       const response = await fetch(
         `/api/knowledge/${item.id}/refresh-changes`,
         { cache: "no-store" },
       );
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        const code = await errorCode(response);
+        setError(known(code, t.actionErrors));
+        if (code === "refresh_not_awaiting") await load();
+        return;
+      }
       const found: Changes = await response.json();
       setChanges((current) => ({ ...current, [item.id]: found }));
     } catch {
-      setError(true);
+      setError("generic");
     } finally {
       setBusy(null);
+      setFocusTarget([`changes-${item.id}`, `source-${item.id}`]);
     }
   }
   async function choose(item: Document, choice: "replace" | "append" | "keep") {
     setBusy(item.id);
-    setError(false);
+    setError(null);
     setNotice(null);
     try {
       const response = await fetch(
@@ -458,35 +595,38 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
           body: JSON.stringify({ action: choice }),
         },
       );
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        const code = await errorCode(response);
+        setError(known(code, t.actionErrors));
+        if (code === "refresh_not_awaiting") await load();
+        return;
+      }
       setChanges((current) => without(current, item.id));
       await load();
     } catch {
-      setError(true);
+      setError("generic");
     } finally {
       setBusy(null);
+      // The choice panel is gone; the row's title is the nearest stable place.
+      setFocusTarget([`source-${item.id}`]);
     }
   }
-  const active = items.some(
-    (item) =>
-      refreshing(item) ||
-      (item.stage !== "text_prepared" &&
-        ["Pending", "Processing"].includes(item.status)),
-  );
+  const active = items.some(inFlight);
   useEffect(() => {
     if (!active) return;
-    const timer = setInterval(() => void load(), 3000);
+    const timer = setInterval(() => void load(), POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [active, load]);
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!title.trim() || !text.trim()) {
       setNotice("invalid");
+      setFocusTarget([title.trim() ? "source-text" : "source-title"]);
       return;
     }
     setBusy("submit");
     setNotice(null);
-    setError(false);
+    setError(null);
     try {
       const response = await fetch("/api/knowledge/text", {
         method: "POST",
@@ -501,9 +641,10 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       setOffset(0);
       await load(0);
     } catch {
-      setError(true);
+      setError("generic");
     } finally {
       setBusy(null);
+      setFocusTarget(["source-title"]);
     }
   }
   async function submitLink(event: React.FormEvent<HTMLFormElement>) {
@@ -517,6 +658,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
           ? "url_scheme_unsupported"
           : "url_invalid",
       );
+      setFocusTarget(["source-url"]);
       return;
     }
     setBusy("link");
@@ -529,7 +671,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       const result = await response.json().catch(() => ({}));
       if (!response.ok) {
         const code = result.error?.message ?? "";
-        setLinkError(code in t.linkErrors ? code : "generic");
+        setLinkError(known(code, t.linkErrors));
         return;
       }
       setLink("");
@@ -541,6 +683,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       setLinkError("generic");
     } finally {
       setBusy(null);
+      setFocusTarget(["source-url"]);
     }
   }
   async function uploadFile(event: React.FormEvent<HTMLFormElement>) {
@@ -548,22 +691,22 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     const form = event.currentTarget;
     setNotice(null);
     setUploadError(null);
-    if (!file) {
-      setUploadError("chooseFile");
-      return;
-    }
     // The server checks the same limits; checking here saves a pointless upload.
-    const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
-    if (!FILE_EXTENSIONS.includes(extension)) {
-      setUploadError("file_type_unsupported");
-      return;
-    }
-    if (file.size > limits.bytes) {
-      setUploadError("file_too_large");
-      return;
-    }
-    if (file.size === 0) {
-      setUploadError("source_empty");
+    const extension = file
+      ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase()
+      : "";
+    const refused = !file
+      ? "chooseFile"
+      : !FILE_EXTENSIONS.includes(extension)
+        ? "file_type_unsupported"
+        : file.size > limits.bytes
+          ? "file_too_large"
+          : file.size === 0
+            ? "source_empty"
+            : null;
+    if (!file || refused) {
+      setUploadError(refused);
+      setFocusTarget(["source-file"]);
       return;
     }
     setBusy("upload");
@@ -585,8 +728,10 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
         request.responseType = "json";
         request.upload.onprogress = (e) => {
           if (e.lengthComputable)
-            setProgress(Math.round((e.loaded / e.total) * 100));
+            setProgress(Math.min(99, Math.round((e.loaded / e.total) * 100)));
         };
+        // Every byte is sent; the server is now checking and storing the file.
+        request.upload.onload = () => setProgress(100);
         request.onload = () =>
           resolve({ status: request.status, body: request.response ?? {} });
         request.onerror = () => reject(new Error("network"));
@@ -595,7 +740,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       if (result.status < 200 || result.status >= 300) {
         const code =
           result.body.error?.message ?? result.body.error?.code ?? "";
-        setUploadError(code in t.uploadErrors ? code : "generic");
+        setUploadError(known(code, t.uploadErrors));
         return;
       }
       form.reset();
@@ -609,6 +754,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     } finally {
       setBusy(null);
       setProgress(null);
+      setFocusTarget(["source-file"]);
     }
   }
   async function action(
@@ -616,8 +762,9 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     kind: "retry" | "delete" | "view" | "embed" | "refresh",
   ) {
     setBusy(document.id);
-    setError(false);
+    setError(null);
     setNotice(null);
+    let deleted = false;
     try {
       const response = await fetch(
         `/api/knowledge/${document.id}${kind === "view" || kind === "delete" ? "" : `/${kind}`}`,
@@ -627,11 +774,16 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
           cache: "no-store",
         },
       );
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        const code = await errorCode(response);
+        setError(known(code, t.actionErrors));
+        return;
+      }
       if (kind === "view") setExpanded(await response.json());
       else {
         setConfirm(null);
         if (kind === "delete") {
+          deleted = true;
           setNotice("deleted");
           if (expanded?.id === document.id) setExpanded(null);
         }
@@ -640,10 +792,25 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
         else await load();
       }
     } catch {
-      setError(true);
+      setError("generic");
     } finally {
       setBusy(null);
+      // The pressed button stays for "view"; retry, reload and AI search replace
+      // it with progress, and a deleted row is gone, so focus moves up.
+      setFocusTarget(
+        deleted
+          ? ["sources-heading"]
+          : [`${kind}-${document.id}`, `source-${document.id}`],
+      );
     }
+  }
+  function openConfirm(item: Document) {
+    setConfirm(item.id);
+    setFocusTarget([`confirm-${item.id}`]);
+  }
+  function closeConfirm(item: Document) {
+    setConfirm(null);
+    setFocusTarget([`delete-${item.id}`]);
   }
   const sourceType = (item: Document) =>
     ({
@@ -652,20 +819,6 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       pdf: t.typePdf,
       url: t.typeUrl,
     })[item.source_type] ?? t.typePasted;
-  const status = (item: Document) =>
-    item.stage === "embedding_failed"
-      ? t.embeddingFailed
-      : ["embedding", "embedding_pending"].includes(item.stage)
-        ? t.embedding
-        : item.stage === "text_prepared"
-          ? t.prepared
-          : item.status === "Failed"
-            ? t.failed
-            : item.status === "Ready"
-              ? t.ready
-              : item.status === "Processing"
-                ? t.processing
-                : t.pending;
   return (
     <section aria-labelledby="knowledge-title" className="mt-10 space-y-6">
       <div className="rounded-2xl border border-border bg-card p-6 sm:p-9">
@@ -693,6 +846,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                 dir={title ? "auto" : locale === "he" ? "rtl" : "ltr"}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder={t.titleHint}
+                aria-invalid={notice === "invalid" && !title.trim()}
                 className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
               />
             </div>
@@ -713,6 +867,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                 onChange={(e) => setText(e.target.value)}
                 placeholder={t.textHint}
                 aria-describedby="source-limit"
+                aria-invalid={notice === "invalid" && !text.trim()}
                 className="w-full resize-y rounded-lg border border-border bg-background p-3 text-start text-sm leading-6 focus-visible:outline-2 focus-visible:outline-primary"
               />
               <p
@@ -752,7 +907,9 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                 id="source-file"
                 type="file"
                 accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
-                aria-describedby="upload-limit"
+                aria-describedby={
+                  uploadError ? "upload-limit upload-error" : "upload-limit"
+                }
                 aria-invalid={uploadError !== null}
                 onChange={(e) => {
                   setFile(e.target.files?.[0] ?? null);
@@ -787,26 +944,33 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
           </fieldset>
           {progress !== null && (
             <div>
+              {/* Sending the bytes, then the server checking and storing them;
+                  background preparation shows on the source's row afterwards. */}
               <div
                 role="progressbar"
-                aria-label={t.uploading}
+                aria-label={progress < 100 ? t.uploading : t.saving}
                 aria-valuemin={0}
                 aria-valuemax={100}
-                aria-valuenow={progress}
+                aria-valuenow={progress < 100 ? progress : undefined}
                 className="h-2 w-full overflow-hidden rounded-full bg-muted"
               >
                 <div
-                  className="h-full bg-primary transition-[width]"
+                  className={`h-full bg-primary transition-[width] ${progress < 100 ? "" : "animate-pulse"}`}
                   style={{ width: `${progress}%` }}
                 />
               </div>
+              {/* Only the phase is live; reading every percent would flood a screen
+                  reader, and the progress bar already carries the number. */}
               <p className="mt-1 text-xs text-muted-foreground">
-                {t.uploading} {progress}%
+                <span role="status">
+                  {progress < 100 ? t.uploading : t.saving}
+                </span>
+                {progress < 100 && <span aria-hidden> {progress}%</span>}
               </p>
             </div>
           )}
           {uploadError && (
-            <p role="alert" className="text-sm text-red-800">
+            <p id="upload-error" role="alert" className="text-sm text-red-800">
               {uploadError === "chooseFile"
                 ? t.chooseFile
                 : (t.uploadErrors[uploadError] ?? t.uploadGeneric)}
@@ -850,7 +1014,9 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                   setLinkError(null);
                 }}
                 placeholder="https://"
-                aria-describedby="link-limit"
+                aria-describedby={
+                  linkError ? "link-limit link-error" : "link-limit"
+                }
                 aria-invalid={linkError !== null}
                 className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
               />
@@ -880,7 +1046,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
             </div>
           </fieldset>
           {linkError && (
-            <p role="alert" className="text-sm text-red-800">
+            <p id="link-error" role="alert" className="text-sm text-red-800">
               {t.linkErrors[linkError] ?? t.linkGeneric}
             </p>
           )}
@@ -893,16 +1059,18 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
             {t.linkButton}
           </Button>
         </form>
-        <p className="mt-5 text-xs leading-6 text-muted-foreground">
-          {connected ? t.connectionReady : t.connectionMissing}
-        </p>
+        {connected !== null && (
+          <p className="mt-5 text-xs leading-6 text-muted-foreground">
+            {connected ? t.connectionReady : t.connectionMissing}
+          </p>
+        )}
       </div>
       {error && (
         <div
           role="alert"
           className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
         >
-          {t.error}
+          {t.actionErrors[error] ?? t.error}
           <Button
             variant="outline"
             size="sm"
@@ -916,9 +1084,16 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       <p role="status" className="text-sm text-primary">
         {notice ? t[notice] : ""}
       </p>
+      <p role="status" className="sr-only">
+        {announcement}
+      </p>
       <div className="rounded-2xl border border-border bg-card p-6 sm:p-9">
         <div className="mb-6 flex items-center justify-between gap-3">
-          <h3 className="text-lg font-semibold">
+          <h3
+            id="sources-heading"
+            tabIndex={-1}
+            className="rounded text-lg font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          >
             {t.sources} <span className="text-muted-foreground">({total})</span>
           </h3>
           <Button
@@ -931,23 +1106,54 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
             {t.refresh}
           </Button>
         </div>
+        {listFailed && !loading && (
+          <div
+            role="alert"
+            className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+          >
+            {t.listError}
+            <Button
+              variant="outline"
+              size="sm"
+              className="ms-3"
+              onClick={() => void load()}
+            >
+              {t.refresh}
+            </Button>
+          </div>
+        )}
         {loading ? (
-          <p role="status">{t.loading}</p>
+          <p role="status" className="flex items-center gap-2 text-sm">
+            <LoaderCircle size={16} className="animate-spin" aria-hidden />
+            {t.loading}
+          </p>
         ) : items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t.empty}</p>
+          // A failed first load is not an empty Knowledge Base.
+          listFailed ? null : (
+            <p className="text-sm text-muted-foreground">{t.empty}</p>
+          )
         ) : (
           <ul className="space-y-4">
             {items.map((item) => (
               <li key={item.id} className="rounded-xl border border-border p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h4
+                    id={`source-${item.id}`}
+                    tabIndex={-1}
                     dir="auto"
-                    className="min-w-0 max-w-full break-words font-medium"
+                    className="min-w-0 max-w-full break-words rounded font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   >
                     {item.title}
                   </h4>
-                  <span className="rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">
-                    {status(item)}
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">
+                    {inFlight(item) && (
+                      <LoaderCircle
+                        size={12}
+                        className="animate-spin"
+                        aria-hidden
+                      />
+                    )}
+                    {statusLabel(item, t)}
                   </span>
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">
@@ -968,7 +1174,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                         dir="ltr"
                         className="break-all underline underline-offset-2"
                       >
-                        {item.url}
+                        {readableUrl(item.url)}
                       </a>
                     </>
                   )}
@@ -1053,10 +1259,15 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <Button
+                        id={`changes-${item.id}`}
                         variant="outline"
                         size="sm"
                         disabled={busy !== null}
                         aria-expanded={Boolean(changes[item.id])}
+                        aria-label={forSource(
+                          changes[item.id] ? t.hideChanges : t.showChanges,
+                          item,
+                        )}
                         onClick={() => void toggleChanges(item)}
                       >
                         {changes[item.id] ? t.hideChanges : t.showChanges}
@@ -1064,6 +1275,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                       <Button
                         size="sm"
                         disabled={busy !== null}
+                        aria-label={forSource(t.chooseReplace, item)}
                         onClick={() => void choose(item, "replace")}
                       >
                         {t.chooseReplace}
@@ -1071,6 +1283,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                       <Button
                         size="sm"
                         disabled={busy !== null || !item.refresh?.added_count}
+                        aria-label={forSource(t.chooseAppend, item)}
                         onClick={() => void choose(item, "append")}
                       >
                         {t.chooseAppend}
@@ -1079,6 +1292,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                         variant="ghost"
                         size="sm"
                         disabled={busy !== null}
+                        aria-label={forSource(t.chooseKeep, item)}
                         onClick={() => void choose(item, "keep")}
                       >
                         {t.chooseKeep}
@@ -1124,9 +1338,15 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                 )}
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button
+                    id={`view-${item.id}`}
                     variant="outline"
                     size="sm"
                     disabled={busy !== null}
+                    aria-expanded={expanded?.id === item.id}
+                    aria-label={forSource(
+                      expanded?.id === item.id ? t.close : t.view,
+                      item,
+                    )}
                     onClick={() =>
                       expanded?.id === item.id
                         ? setExpanded(null)
@@ -1137,14 +1357,17 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                   </Button>
                   {item.stage !== "text_prepared" &&
                     !item.stage.startsWith("embedding") &&
-                    item.status !== "Ready" && (
+                    item.status !== "Ready" &&
+                    !FINAL_ERRORS.has(item.error_code ?? "") && (
                       <Button
+                        id={`retry-${item.id}`}
                         variant="outline"
                         size="sm"
                         disabled={busy !== null}
+                        aria-label={forSource(t.retry, item)}
                         onClick={() => void action(item, "retry")}
                       >
-                        <RefreshCw size={14} />
+                        <RefreshCw size={14} aria-hidden />
                         {t.retry}
                       </Button>
                     )}
@@ -1153,12 +1376,14 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                     !refreshing(item) &&
                     !awaitingChoice(item) && (
                       <Button
+                        id={`refresh-${item.id}`}
                         variant="outline"
                         size="sm"
                         disabled={busy !== null}
+                        aria-label={forSource(t.refreshPage, item)}
                         onClick={() => void action(item, "refresh")}
                       >
-                        <RefreshCw size={14} />
+                        <RefreshCw size={14} aria-hidden />
                         {t.refreshPage}
                       </Button>
                     )}
@@ -1166,21 +1391,25 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                     item.status !== "Ready" &&
                     !refreshing(item) && (
                       <Button
+                        id={`embed-${item.id}`}
                         variant="outline"
                         size="sm"
                         disabled={busy !== null || !connected}
+                        aria-label={forSource(t.embed, item)}
                         onClick={() => void action(item, "embed")}
                       >
                         {t.embed}
                       </Button>
                     )}
                   <Button
+                    id={`delete-${item.id}`}
                     variant="ghost"
                     size="sm"
                     disabled={busy !== null}
-                    onClick={() => setConfirm(item.id)}
+                    aria-label={forSource(t.remove, item)}
+                    onClick={() => openConfirm(item)}
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={14} aria-hidden />
                     {t.remove}
                   </Button>
                 </div>
@@ -1193,12 +1422,27 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                   </p>
                 )}
                 {confirm === item.id && (
-                  <div className="mt-4 rounded-lg bg-muted p-4">
-                    <p className="mb-3 text-sm">{t.confirm}</p>
+                  <div
+                    role="group"
+                    aria-labelledby={`confirm-${item.id}`}
+                    className="mt-4 rounded-lg bg-muted p-4"
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") closeConfirm(item);
+                    }}
+                  >
+                    {/* Focused on open so the question is read before the buttons. */}
+                    <p
+                      id={`confirm-${item.id}`}
+                      tabIndex={-1}
+                      className="mb-3 rounded text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    >
+                      {t.confirm}
+                    </p>
                     <div className="flex gap-2">
                       <Button
                         size="sm"
                         disabled={busy !== null}
+                        aria-label={forSource(t.yes, item)}
                         onClick={() => void action(item, "delete")}
                       >
                         {t.yes}
@@ -1206,7 +1450,8 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => setConfirm(null)}
+                        aria-label={forSource(t.cancel, item)}
+                        onClick={() => closeConfirm(item)}
                       >
                         {t.cancel}
                       </Button>
