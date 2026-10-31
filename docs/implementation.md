@@ -1344,3 +1344,138 @@ Facebook ideas were the same proposed series.
 Open: first-person story ideas rest on the plan's recommendation, not on stories in the
 Knowledge Base; a draft from them has no real story to tell and the source check will flag
 invented ones. The prompt rule against restating posts holds in most but not all calls.
+
+## Decision: the source check runs only on request; the writer gets its share — 2026-10-31
+
+Problem: every draft paid automatically for a source check that cost more than the writing
+(Terra ~$0.036–0.041 a check, GPT-4.1 ~$0.008–0.03 a draft). On the owner's real drafts the
+checks raised 33 flags: 2 real problems, 9 writer additions, 15 false alarms and 7 wrong
+citations (read-only classification of stored runs, no provider calls), and 3 of 10 checks did
+not finish. The app keeps drafts and does not publish, and the owner reads every post before
+posting it. The owner's direction: spend on writing and on reading sources, not on checking.
+
+Choice (owner-approved):
+- Generating a draft calls only the writer. The draft is stored with review status
+  `not_requested` ("Sources not checked yet"), which is not "check failed", and is not marked
+  grounded. Drafts with a stored check look as before.
+- The free deterministic checks still run on every draft with no model call:
+  `unlisted_contact_detail` (a link, email, handle or phone not in the offer details, call to
+  action or brand profile) and `wrong_language` (wrong script).
+- Create Post and History show a neutral panel with those findings and a "Check sources"
+  button with the check's cost "per check". It uses the existing review routes (the ones
+  behind "Check again") on the saved version; unsaved edits must be saved first.
+- A check that does not complete keeps the free findings (the "did not complete" panel lists
+  them under its reason), and after edits the "not checked yet" panel marks its findings as
+  referring to the earlier version.
+- The estimated cost in Create Post is the writer's cost alone; the check's cost is shown next
+  to its model and its button.
+- Spending: the writer may reserve all of GENERATION_MAX_REQUEST_USD less the translation
+  fallback's 20% (it had half); "Check sources" runs alone, so the reviewer may reserve the
+  whole cap. GENERATION_MAX_REQUEST_USD 0.65 → 0.80, so Claude Opus 5.5 fits (next section).
+  Topic suggestions reserve against the same cap, so their ceiling also rises to $0.80; a
+  request still reserves only its own estimate.
+
+Protection against planted instructions (owner decision, option A of three): the automatic
+check was the only block for `copied_instructions` / `revealed_instructions` at generation.
+That protection now rests on the owner reading the post before publishing, plus the free
+contact-detail check, which catches the main way a planted instruction would cause harm (a link
+or contact detail that is not the owner's). A block still applies when the owner runs "Check
+sources".
+
+Residual risk, accepted: a web page in the Knowledge Base can steer a post's message, wording
+or emphasis without any warning, as long as it adds no contact details or links. Only a careful
+read catches it. When a draft is built on a web page the owner did not write, pressing "Check
+sources" before publishing is worth its cost.
+
+Rejected alternatives:
+- Keep the automatic check: pays about 15× the writing on every draft for 2 real findings in 33
+  flags, and teaches the owner to ignore its warnings.
+- Check automatically only when a draft cites a web page (option B): keeps paying for checks on
+  part of the drafts, for a risk the owner's own reading covers.
+- Scan each source once when it is added (option C): planted instructions belong to the source,
+  not the draft, so one scan per document would be the cheapest protection over time, but it is
+  a new feature. A possible follow-up, not in the backlog.
+- Keep the writer at half the cap: the reviewer's half would sit unused on every draft, and the
+  writer could not afford Opus.
+
+The free link check, broadened (owner decision after the security review, option A of three):
+since it is now the only automatic warning on a new draft, the bare-domain rule no longer
+needs one of 38 listed endings. Any all-lowercase or all-capital ending counts unless it is a
+common file extension (`FILE_EXTENSIONS` in app/grounding.py), so "cedar-garden.top" and
+"CEDAR-GARDEN.TOP" are caught and "report.pdf", "Next.js" and "ended.Next" are not. A listed
+ending counts in any case. Domain labels take letters of any script but Hebrew, so a domain may
+start right after a Hebrew prefix letter ("בcedar.com"), and a look-alike of the owner's link
+("аpple.com" with a Cyrillic а, "studiօ.com" with an Armenian օ) is a finding even when the
+offer names the real one. The text is NFKC-normalized and stripped of invisible characters
+first, so fullwidth dots and letters and zero-width characters hide no link (findings show the
+normalized form). A domain never ends before "@" (a second security review caught
+"dana.levi@gmail.com" read as the link "dana.levi", which a planted email sharing the owner's
+first.last name would have passed as the owner's), never starts inside a hyphenated word (long
+hyphen runs had made matching quadratic; the speed test now has a time limit), and works inside
+Markdown underscores. The owner's link in curly quotes is still the owner's. Emails, handles and phones
+after a prefix letter were already caught. REVIEW_VERSION stays source-review-v8: a version bump
+would force every cached draft to be regenerated before saving, for a check that runs again on
+every new draft and every "Check sources" anyway.
+- Rejected: shipping the official list of domain endings (IANA, about 1,450) as static data. It
+  goes stale as endings are added, and needs a refresh routine for little gain over the
+  file-extension rule.
+- Rejected: a public-suffix package. A new dependency for the same result.
+- Rejected: accepting the gaps. The decision above leans on this check.
+- Known limits: endings that are also file extensions (.zip, .mov, .sh, .md, .py) are not
+  caught without a scheme, www. or a path, and "cedar.com.zip" reads as "cedar.com"; a link
+  spelled out ("cedar dot top", "cedar[.]top") or a bare IP address is not caught;
+  Hebrew-script domains are not caught. False alarms: a sentence missing its space after a
+  period ("ended.next", "THE END.THANKS"), code names in technical posts ("console.log"),
+  and brands that are domains ("monday.com") unless the owner gave them.
+
+### A block belongs to the text, not the version number
+
+Problem: a block (the check found copied instructions) stood only for the version it was
+recorded on. Every save raises the version, even an unchanged or whitespace-only one, and
+History enables Save for a whitespace edit, so saving the same words once was enough to make
+"Check sources" available again and roll for a luckier review. Writing a different text in
+between, checking it clean, then pasting the blocked text back also cleared it.
+
+Choice (owner-approved, option A): when a check blocks a saved draft, its text fingerprint is
+stored in `generation_settings.blocked_texts` with the time of the block (`text_fingerprint` in
+`app/grounding.py`: SHA-256 of the text after NFKC, invisible characters removed and spacing
+collapsed). "Check sources" refuses any saved text whose fingerprint is listed, with 409
+`draft_blocked` and no model call, whatever the version. Saving a listed text, under any version,
+restores the blocked review for that version, so History shows "Do not publish" rather than an
+"earlier version" note with a check button that would fail. The list is never cleared; it lives
+and is deleted with the draft. No existing draft held a block (checked read-only: 1 saved draft,
+none blocked), so there is no fallback for the old version-only record.
+
+Rejected: keeping the version number when a save leaves the text unchanged (option B) blocks the
+plain re-save but not A→B→A, and makes the version mean "same text" in one route only, which
+the edit-conflict check depends on; hashing the exact bytes, which a space or a zero-width
+character defeats.
+
+Known limit: any real edit, even one word, is a new text and may be checked. That is
+intended, since the owner then has a changed text in front of them, but it means the block
+deters an accidental re-roll, not a deliberate one.
+
+Writers listed (owner-approved): Claude Opus 5.5 and GPT-5.6-sol join GENERATION_WRITER_MODELS
+as optional writers with measured profiles (`app/writer_models.py`); GPT-4.1 stays the default.
+Measurements: verification/generation-grounding.md, "Writer candidates: Claude Opus 5.5 and
+GPT-5.6-sol". The owner will pick the default after reading the drafts blind.
+
+Open conflict with SP-22: the recorded rule says the default changes only to a writer with fewer
+unsupported additions than GPT-4.1 on the 20 scenarios and no injection failure. By count
+neither candidate qualifies (Opus 10/20, Sol 7/20, GPT-4.1 5/20), although all their additions
+are audience or place framing and none is an invented price, date or experience, which GPT-4.1
+produced. Choosing either as default after the blind reading means changing that rule here
+first, with the reason.
+
+Verification: backend 868 passed on a disposable migrated database, without `.env` (generation never calls the
+reviewer, the writer gets the whole remaining budget, free checks run on every new draft, a
+draft can be saved unchecked, "Check sources" replaces the stored state, a re-saved, respaced or pasted-back blocked text
+stays blocked with no model call); the code-defaults
+spending guard fails at $0.65 with Opus listed; each new link form, the dotted email, the
+look-alikes and the slow hyphen runs failed before the fix, and file names, framework names
+and a missing space stay clear; ruff,
+format and `mypy app`. Frontend: lint,
+typecheck, format, build and 104 Playwright tests, including the "not checked yet" panel in EN
+on Create Post and HE in History (both fail when the button is hidden), its stale note, and
+free findings kept after a failed check (backend and UI tests, both failing before the fix); screenshots of the
+models tab and the panel at 1280 and 375 px in EN and HE, with no horizontal scroll.

@@ -23,7 +23,14 @@ class Settings(BaseSettings):
     # needs a measured profile in app.writer_models (docs/implementation.md, SP-22).
     generation_model: str = "openai/gpt-4.1"
     generation_writer_models: list[str] = Field(
-        default=["openai/gpt-4.1", "google/gemini-3.8-flash"], min_length=1, max_length=5
+        default=[
+            "openai/gpt-4.1",
+            "google/gemini-3.8-flash",
+            "anthropic/claude-opus-5.5",
+            "openai/gpt-5.6-sol",
+        ],
+        min_length=1,
+        max_length=5,
     )
     # Default source-check model; users may pick any model in generation_review_models.
     generation_review_model: str = "openai/gpt-5.6-terra"
@@ -45,9 +52,10 @@ class Settings(BaseSettings):
     # (docs/implementation.md, "The writer reads everything relevant").
     generation_context_budget: int = Field(default=24000, ge=100, le=48000)
     generation_max_distance: float = Field(default=0.65, ge=0, le=2)
-    # A reservation ceiling, not spend: it must afford the largest admitted prompt for every
-    # writer and reviewer (tests/test_generation_budget.py).
-    generation_max_request_usd: float = Field(default=0.65, gt=0, le=1)
+    # A reservation ceiling, not spend: a draft's writer and an on-request source check each
+    # get it, and it must afford the largest admitted prompt for every writer and reviewer
+    # (tests/test_generation_budget.py).
+    generation_max_request_usd: float = Field(default=0.80, gt=0, le=1)
     # Private uploaded source files (SP-9). Opaque keys only; never served directly.
     source_storage_dir: str = "var/sources"
     upload_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)

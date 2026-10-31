@@ -103,7 +103,7 @@ async function openModels(page: Page, locale: "en" | "he" = "en") {
     .click();
 }
 
-test("writer select shows costs, the total follows both selects and the choice is sent", async ({
+test("writer select shows costs, the total follows the writer only and both choices are sent", async ({
   page,
 }) => {
   let sent: Record<string, unknown> | null = null;
@@ -126,14 +126,17 @@ test("writer select shows costs, the total follows both selects and the choice i
     "~$0.007 per draft · up to $0.03",
   );
   const total = page.getByTestId("total-draft-cost");
-  // GPT-4.1 writing + GPT-5.6 Terra source check.
-  await expect(total).toHaveText("~$0.035 per draft · up to $0.15");
+  // Writing only: the source check is charged when the owner asks for it.
+  await expect(total).toHaveText("~$0.007 per draft · up to $0.03");
   await writer.selectOption("google/gemini-3.8-flash");
-  await expect(total).toHaveText("~$0.032 per draft · up to $0.14");
+  await expect(total).toHaveText("~$0.004 per draft · up to $0.02");
   await page
     .getByLabel("Source check model", { exact: true })
     .selectOption("openai/gpt-4.1");
-  await expect(total).toHaveText("~$0.012 per draft · up to $0.07");
+  await expect(page.getByTestId("review-model-cost")).toHaveText(
+    "~$0.008 per check · up to $0.05",
+  );
+  await expect(total).toHaveText("~$0.004 per draft · up to $0.02");
   await page.getByRole("tab", { name: "Post details" }).click();
   await page
     .getByLabel("What would you like to write about?", { exact: true })

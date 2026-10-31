@@ -6,6 +6,7 @@ instructions) block a draft, because then the review of that draft cannot be tru
 """
 
 import functools
+import hashlib
 import json
 import re
 import unicodedata
@@ -238,22 +239,39 @@ def matched_quote(quote: str, source: str) -> str | None:
     return None
 
 
-# Links (with a scheme, www., a path, or a common top-level domain), emails, @handles (also
-# after an attached Hebrew prefix, "ל@x") and phone numbers (also after "Tel:"). Possessive
-# label patterns and start-limiting lookbehinds keep matching linear on long planted runs.
+# Links (with a scheme, www., a path, or a domain ending), emails, @handles (also after an
+# attached Hebrew prefix, "ל@x") and phone numbers (also after "Tel:"). A bare domain may end
+# in a listed top-level domain in any case, or in any other all-lowercase or all-capital
+# ending that is not a file extension ("cedar-garden.top", not "report.pdf" or "ended.Next").
+# Domain labels take letters of any script but Hebrew, so a domain may start right after a
+# Hebrew prefix letter ("בcedar.com") and a look-alike of the owner's link ("аpple.com",
+# "studiօ.com") is not the owner's link. A domain never starts inside a hyphenated word, and
+# never ends before "@" (that is an email). Possessive label patterns and start-limiting
+# lookbehinds keep matching linear on long planted runs.
 TOP_LEVEL_DOMAINS = (
     "com|org|net|io|co|il|me|ly|ai|app|dev|info|biz|edu|gov|shop|link|example|uk|au|de|fr|eu|"
     "us|ca|in|xyz|site|online|store|tv|be|gl|ee|gle|to|so"
 )
+FILE_EXTENSIONS = (
+    "pdf|docx?|xlsx?|pptx?|csv|txt|rtf|odt|md|json|xml|ya?ml|html?|css|jsx?|tsx?|py|rb|php|"
+    "java|cpp|sh|exe|dmg|zip|rar|gz|tar|jpe?g|png|gif|svg|webp|heic|mp3|mp4|wav|mov|avi|mkv"
+)
+LETTER_OR_DIGIT = r"[^\W_\u0590-\u05ff]"
+DOMAIN_LABEL = rf"(?:{LETTER_OR_DIGIT}|-)++"
+DOMAIN_START = rf"(?<!{LETTER_OR_DIGIT})(?<![.@])(?<!{LETTER_OR_DIGIT}-)(?!-)"
+DOMAIN_END = rf"(?!{LETTER_OR_DIGIT}|[@-])"
 CONTACT_DETAIL = re.compile(
     r"(?P<link>(?:https?://|www\.)[^\s<>\"]++"
-    r"|(?<![\w.@])(?:[a-z0-9-]++\.)+[a-z]{2,}/[^\s<>\"]*+"
-    rf"|(?<![\w.@])(?:[a-z0-9-]++\.)+(?:{TOP_LEVEL_DOMAINS})(?![\w-]))"
+    rf"|{DOMAIN_START}(?:{DOMAIN_LABEL}\.)+[a-z]{{2,}}/[^\s<>\"]*+"
+    rf"|{DOMAIN_START}(?:{DOMAIN_LABEL}\.)+(?:(?:{TOP_LEVEL_DOMAINS})"
+    rf"|(?!(?:{FILE_EXTENSIONS}){DOMAIN_END})(?-i:[a-z]{{2,}}|[A-Z]{{2,}})){DOMAIN_END})"
     r"|(?P<email>(?<![\w.+-])[\w.+-]++@[\w-]++(?:\.[\w-]++)++)"
     r"|(?P<handle>(?<![A-Za-z0-9_@.])@[A-Za-z0-9_.]{2,})"
     r"|(?P<phone>(?<![\d])\+?\d[\d\s().-]{6,}\d(?![\d:]))",
     re.IGNORECASE,
 )
+# Characters that render as nothing; one beside a dot would split a link in two.
+INVISIBLE = re.compile(r"[\u00ad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
 # Dates, times, year lists, versions and grouped numbers that look like long digit runs
 # ("1.12.2026", "2026-12-01", "2019 2020 2021", "10.0.19045.2364", "125 000 000").
 NOT_A_PHONE = re.compile(
@@ -269,8 +287,11 @@ def contact_details(text: str) -> dict[str, str]:
     nine digits (so +972 and 0 prefixes agree), emails and handles case-insensitively.
     """
     found: dict[str, str] = {}
+    # Fullwidth letters and dots ("ｃｅｄａｒ．top") read as plain ones, invisible characters as
+    # nothing, so they hide no link; details are reported in this normalized form.
+    text = INVISIBLE.sub("", unicodedata.normalize("NFKC", text)).replace("\u3002", ".")
     for match in CONTACT_DETAIL.finditer(text):
-        detail = match.group().rstrip(".,;:!?)")
+        detail = match.group().rstrip(".,;:!?)\u201d\u2019\u00bb")
         kind = match.lastgroup
         if kind == "phone":
             digits = re.sub(r"\D", "", detail)
@@ -300,6 +321,82 @@ def unlisted_contact_findings(sentences: list[str], owner_text: str) -> list[dic
         for key, detail in contact_details(sentence).items()
         if key not in owner
     ]
+
+
+def owner_given_text(offer_details: str, preferences: dict, brand: dict) -> str:
+    """The owner's own text: offer details, the chosen call to action and the brand profile,
+    except prohibited claims (a detail the owner forbids is not one they gave)."""
+    return " ".join(
+        [
+            offer_details,
+            str(preferences.get("cta") or ""),
+            *(str(v) for k, v in brand.items() if k != "prohibited_claims"),
+        ]
+    )
+
+
+def draft_sentences(content: str) -> list[str]:
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", content) if s.strip()]
+
+
+def wrong_language(content: str, language: str | None) -> bool:
+    """A predominantly wrong-script EN/HE draft. Proper names may use the other script."""
+    letters = re.findall(r"[A-Za-z֐-׿]", content)
+    hebrew = sum("֐" <= letter <= "׿" for letter in letters)
+    return (
+        not letters
+        or (language == "en" and hebrew > len(letters) / 2)
+        or (language == "he" and hebrew < len(letters) / 2)
+    )
+
+
+def free_findings(
+    content: str, brand: dict, preferences: dict, *, offer_details: str = ""
+) -> list[dict]:
+    """The checks that need no model (unlisted contact details, wrong language)."""
+    findings = unlisted_contact_findings(
+        draft_sentences(content), owner_given_text(offer_details, preferences, brand)
+    )
+    if wrong_language(content, preferences.get("language")):
+        findings.append({"code": "wrong_language", "sentence": None, "claim": None})
+    return findings
+
+
+def unrequested_review(
+    content: str, brand: dict, preferences: dict, *, offer_details: str = ""
+) -> dict:
+    """A new draft before the owner asks for a source check: only the free checks, on every
+    draft. The model check runs on request ("Check sources"); the owner reads every post
+    before publishing, and the residual injection risk is recorded in docs/implementation.md."""
+    return {
+        "version": REVIEW_VERSION,
+        "status": "not_requested",
+        "reason": None,
+        "retryable": False,
+        "findings": free_findings(content, brand, preferences, offer_details=offer_details),
+        "checked_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def text_fingerprint(content: str) -> str:
+    """Identifies a saved text whatever its version number, spacing or invisible characters,
+    so a blocked text cannot earn a second review by being saved again."""
+    text = INVISIBLE.sub("", unicodedata.normalize("NFKC", content))
+    return hashlib.sha256(" ".join(text.split()).encode()).hexdigest()
+
+
+def blocked_review(checked_at: str, checked_version: int) -> dict:
+    """A saved draft's text after a check found copied instructions in it. The block stands
+    for that text until the owner saves different words."""
+    return {
+        "version": REVIEW_VERSION,
+        "status": "blocked",
+        "reason": "draft_blocked",
+        "retryable": False,
+        "findings": [],
+        "checked_at": checked_at,
+        "checked_version": checked_version,
+    }
 
 
 def split_tokens(text: str) -> list[tuple[str, int, int]]:
@@ -442,18 +539,10 @@ def review_draft(
         raise GenerationError("review_model_unavailable")
     if not sources and not offer_details:
         raise GenerationError("insufficient_grounding")
-    # Deterministically catch a predominantly wrong-script EN/HE response. It is still
-    # reviewed: a writer steered by source text into another language must not skip the
-    # blocking check. Proper names may use the other script.
-    letters = re.findall(r"[A-Za-z֐-׿]", content)
-    hebrew = sum("֐" <= letter <= "׿" for letter in letters)
-    language = preferences.get("language")
-    wrong_script = (
-        not letters
-        or (language == "en" and hebrew > len(letters) / 2)
-        or (language == "he" and hebrew < len(letters) / 2)
-    )
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", content) if s.strip()]
+    # A wrong-script draft is still reviewed: a writer steered by source text into another
+    # language must not skip the blocking check.
+    wrong_script = wrong_language(content, preferences.get("language"))
+    sentences = draft_sentences(content)
     # The reviewer cites short aliases instead of UUIDs: each claim repeats its chunk ID, and
     # UUIDs alone would push a full-length review past its output limit.
     aliases = {f"S{i}": source for i, source in enumerate(sources, start=1)}
@@ -478,9 +567,10 @@ def review_draft(
             data,
             tokens,
             schema=Review.model_json_schema(),
+            # The check runs on request, alone, so it may use the whole per-request cap.
             budget_usd=min(
-                budget_usd if budget_usd is not None else settings.generation_max_request_usd / 2,
-                settings.generation_max_request_usd / 2,
+                budget_usd if budget_usd is not None else settings.generation_max_request_usd,
+                settings.generation_max_request_usd,
             ),
             output_tokens=settings.generation_review_max_output_tokens,
             model_id=model_id,
@@ -532,7 +622,7 @@ def review_draft(
     }
     # Findings carry only codes and text copied from the draft itself; model-written prose
     # is never stored or shown.
-    findings = [
+    findings: list[dict] = [
         {
             "code": "contradicted_claim" if claim.contradicted else "unsupported_claim",
             "sentence": sentences[sentence.index],
@@ -542,16 +632,9 @@ def review_draft(
         for claim in sentence.claims
         if claim.kind == "factual" and (claim.contradicted or not claim.supported)
     ]
-    # The owner's own text: offer details, the chosen call to action and the brand profile,
-    # except prohibited claims (a detail the owner forbids is not one they gave).
-    owner_text = " ".join(
-        [
-            offer_details,
-            str(preferences.get("cta") or ""),
-            *(str(v) for k, v in brand.items() if k != "prohibited_claims"),
-        ]
+    findings += unlisted_contact_findings(
+        sentences, owner_given_text(offer_details, preferences, brand)
     )
-    findings += unlisted_contact_findings(sentences, owner_text)
     issues = [*(["wrong_language"] if wrong_script else []), *review.issues]
     findings += [
         {"code": issue, "sentence": None, "claim": None} for issue in dict.fromkeys(issues)
@@ -591,7 +674,8 @@ def review_draft(
 def check_draft(content: str, sources: list[dict], brand: dict, preferences: dict, **options):
     """Review a draft for display: findings, or an unchecked state with its reason.
 
-    Raises only draft_blocked. Every other failure leaves the draft visible and unchecked.
+    Raises only draft_blocked. Every other failure leaves the draft visible and unchecked,
+    still with the free findings, which the contact-detail protection relies on.
     """
     checked_at = datetime.now(UTC).isoformat()
     try:
@@ -604,7 +688,9 @@ def check_draft(content: str, sources: list[dict], brand: dict, preferences: dic
             "status": "unchecked",
             "reason": exc.code,
             "retryable": exc.code in RETRYABLE_FAILURES,
-            "findings": [],
+            "findings": free_findings(
+                content, brand, preferences, offer_details=options.get("offer_details", "")
+            ),
             "checked_at": checked_at,
             "failure": dict(exc.metadata),
         }
