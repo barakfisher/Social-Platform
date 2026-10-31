@@ -339,15 +339,15 @@ test("source check model shows estimated costs and the choice is sent", async ({
   const select = page.getByLabel("Source check model", { exact: true });
   await expect(select).toHaveValue("openai/gpt-5.6-terra");
   await expect(select.locator("option")).toHaveText([
-    "GPT-5.6 Terra (recommended, stricter) — ~$0.016 per draft · up to $0.063",
-    "GPT-4.1 (cheaper, less strict) — ~$0.008 per draft · up to $0.05",
+    "GPT-5.6 Terra (recommended, stricter) — ~$0.016 per check · up to $0.063",
+    "GPT-4.1 (cheaper, less strict) — ~$0.008 per check · up to $0.05",
     "vendor/delisted — unavailable",
   ]);
   await expect(select.locator("option").nth(2)).toBeDisabled();
   const cost = page.getByTestId("review-model-cost");
-  await expect(cost).toHaveText("~$0.016 per draft · up to $0.063");
+  await expect(cost).toHaveText("~$0.016 per check · up to $0.063");
   await select.selectOption("openai/gpt-4.1");
-  await expect(cost).toHaveText("~$0.008 per draft · up to $0.05");
+  await expect(cost).toHaveText("~$0.008 per check · up to $0.05");
   await page.getByRole("tab", { name: "Post details" }).click();
   await page
     .getByLabel("What would you like to write about?", { exact: true })

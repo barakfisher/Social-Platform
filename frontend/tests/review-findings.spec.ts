@@ -257,7 +257,7 @@ test("an unchecked draft explains why and checks the stored version again", asyn
     "The source check did not complete",
   );
   await expect(panel).toContainText("Another try usually works.");
-  await expect(panel).toContainText("~$0.016 per draft");
+  await expect(panel).toContainText("~$0.016 per check");
 
   // Unsaved edits cannot be checked: only server-saved text is reviewed.
   const draft = page.getByLabel("Your draft", { exact: true });
@@ -369,4 +369,166 @@ test("a blocked saved draft keeps its text, shows do-not-publish, and is checkab
   await panel.getByRole("button", { name: "Check again" }).click();
   await expect(page.getByTestId("review-clean")).toBeVisible();
   expect(reviews).toEqual([2]);
+});
+
+const notRequested = (findings: Review["findings"]): Review => ({
+  ...checked,
+  status: "not_requested",
+  findings,
+});
+
+test("a new draft is not source-checked until asked, but shows the free findings and the check's cost", async ({
+  page,
+}) => {
+  const contact = {
+    code: "unlisted_contact_detail",
+    sentence: "Book at zebra.example.",
+    claim: "zebra.example",
+  };
+  const draft: GeneratedPost = {
+    ...run,
+    language: "en",
+    content: "Mentors give advice. Book at zebra.example.",
+    metadata: {
+      ...run.metadata,
+      grounding_review: notRequested([contact]),
+    },
+  };
+  const urls: string[] = [];
+  await mockGeneration(page, draft, (url) => {
+    urls.push(url);
+    return url.endsWith("/review")
+      ? {
+          ...draft,
+          metadata: {
+            ...draft.metadata,
+            grounding_review: { ...checked, findings: [contact] },
+          },
+        }
+      : draft;
+  });
+  await page.goto("/en/create");
+  await page
+    .getByLabel("What would you like to write about?")
+    .fill("Mentoring");
+  await page
+    .getByRole("button", { name: "Generate draft", exact: true })
+    .click();
+  const panel = page.getByTestId("review-not-requested");
+  await expect(panel.getByRole("heading")).toHaveText(
+    "Sources not checked yet",
+  );
+  await expect(page.getByTestId("review-findings")).toHaveCount(0);
+  await expect(page.getByTestId("review-clean")).toHaveCount(0);
+  await expect(panel.locator("blockquote")).toHaveText("zebra.example");
+  await expect(panel).toContainText(
+    "This link or contact detail is not in your offer details or brand profile.",
+  );
+  await expect(panel).toContainText("~$0.016 per check · up to $0.063");
+  // Generating never asked for the paid check.
+  expect(urls.filter((url) => url.endsWith("/review"))).toEqual([]);
+
+  await expect(panel).not.toContainText("earlier version");
+  const text = page.getByLabel("Your draft", { exact: true });
+  await text.fill(`${draft.content} Edited.`);
+  // Findings for the generated text must not read as findings for the edit.
+  await expect(panel).toContainText(
+    "These notes refer to an earlier version, before your edits.",
+  );
+  await expect(
+    panel.getByRole("button", { name: "Check sources" }),
+  ).toBeDisabled();
+  await expect(panel).toContainText("Save your edits to check them.");
+  await text.fill(draft.content);
+
+  await panel.getByRole("button", { name: "Check sources" }).click();
+  await expect(page.getByTestId("review-not-requested")).toHaveCount(0);
+  await expect(
+    page.getByTestId("review-findings").getByRole("heading"),
+  ).toHaveText("Points to check");
+  expect(urls.at(-1)).toContain(`/api/generation/${run.id}/review`);
+});
+
+test("a saved Hebrew draft that was never checked offers the source check", async ({
+  page,
+}) => {
+  let stored: SavedPost = {
+    id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    platform: "linkedin",
+    language: "he",
+    content: "מנטור הוא יועץ מנוסה.",
+    status: "Draft",
+    version: 1,
+    sources: [],
+    generation_run_id: null,
+    generation_settings: {
+      grounding_review: { ...notRequested([]), checked_version: 1 },
+      preferences: { review_model: "openai/gpt-5.6-terra" },
+    },
+    created_at: "2026-10-31T10:00:00Z",
+  };
+  const reviews: number[] = [];
+  await page.route("**/api/generation/review-models", (route) =>
+    route.fulfill({ json: reviewModels }),
+  );
+  await page.route("**/api/posts**", async (route) => {
+    const request = route.request();
+    if (request.url().endsWith("/review")) {
+      reviews.push(request.postDataJSON().version);
+      stored = {
+        ...stored,
+        generation_settings: {
+          ...stored.generation_settings,
+          grounding_review: { ...checked, checked_version: stored.version },
+        },
+      };
+      await route.fulfill({ json: stored });
+      return;
+    }
+    await route.fulfill({ json: { items: [stored], total: 1 } });
+  });
+  await page.goto("/he/history");
+  await page.getByRole("button", { name: "עריכת טיוטה", exact: true }).click();
+  const panel = page.getByTestId("review-not-requested");
+  await expect(panel.getByRole("heading")).toHaveText("המקורות עוד לא נבדקו");
+  await expect(panel).toContainText("לבדיקה");
+  await panel.getByRole("button", { name: "בדיקת מקורות" }).click();
+  await expect(page.getByTestId("review-clean")).toBeVisible();
+  expect(reviews).toEqual([1]);
+});
+
+test("a check that did not complete still shows the free findings", async ({
+  page,
+}) => {
+  const contact = {
+    code: "unlisted_contact_detail",
+    sentence: "Book at zebra.example.",
+    claim: "zebra.example",
+  };
+  await mockGeneration(page, {
+    ...unchecked("generation_unavailable", true),
+    metadata: {
+      ...run.metadata,
+      grounding_review: {
+        ...checked,
+        status: "unchecked",
+        reason: "generation_unavailable",
+        retryable: true,
+        findings: [contact],
+      },
+    },
+  });
+  await page.goto("/en/create");
+  await page
+    .getByLabel("What would you like to write about?")
+    .fill("Mentoring");
+  await page
+    .getByRole("button", { name: "Generate draft", exact: true })
+    .click();
+  const panel = page.getByTestId("review-findings");
+  await expect(panel).toContainText("Another try usually works.");
+  await expect(panel.locator("blockquote")).toHaveText("zebra.example");
+  await expect(panel).toContainText(
+    "This link or contact detail is not in your offer details or brand profile.",
+  );
 });

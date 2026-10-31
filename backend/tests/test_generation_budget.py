@@ -23,6 +23,14 @@ DEFAULT_MODEL_PRICING = {
         "prompt_price": Decimal("0.000000825"),
         "completion_price": Decimal("0.000004125"),
     },
+    "anthropic/claude-opus-5.5": {
+        "prompt_price": Decimal("0.000004"),
+        "completion_price": Decimal("0.00002"),
+    },
+    "openai/gpt-5.6-sol": {
+        "prompt_price": Decimal("0.000004"),
+        "completion_price": Decimal("0.00002"),
+    },
 }
 
 
@@ -35,23 +43,27 @@ def defaults(monkeypatch):
     return Settings(_env_file=None)
 
 
-def smallest_stage_budget(settings: Settings) -> Decimal:
+def stage_models(settings: Settings) -> list[tuple[str, int, int, Decimal]]:
+    """(model, worst-case provider prompt tokens, output limit, smallest allowance) for every
+    choosable stage. The writer is a draft's only paid stage, left with the cap after the
+    translation fallback's share; the source check runs on request with the whole cap."""
     cap = Decimal(str(settings.generation_max_request_usd))
-    return cap * (1 - Decimal(str(TRANSLATION_BUDGET_SHARE))) / 2
-
-
-def stage_models(settings: Settings) -> list[tuple[str, int, int]]:
-    """(model, worst-case provider prompt tokens, output limit) for every choosable stage."""
     writers = [
         (
             model,
             provider_tokens(settings.generation_prompt_budget, WRITER_PROFILES[model]),
             WRITER_PROFILES[model].output_tokens or settings.generation_max_output_tokens,
+            cap * (1 - Decimal(str(TRANSLATION_BUDGET_SHARE))),
         )
         for model in settings.generation_writer_models
     ]
     return writers + [
-        (model, settings.generation_prompt_budget, settings.generation_review_max_output_tokens)
+        (
+            model,
+            settings.generation_prompt_budget,
+            settings.generation_review_max_output_tokens,
+            cap,
+        )
         for model in settings.generation_review_models
     ]
 
@@ -61,12 +73,12 @@ def test_default_budget_affords_largest_allowed_prompt(defaults):
     # even after the translation fallback reserves its share, for every writer (at its own
     # token ratio and output limit) and every reviewer a user may choose. Otherwise a full
     # source context fails with generation_spending_limit.
-    for model_id, prompt_tokens, output_limit in stage_models(defaults):
+    for model_id, prompt_tokens, output_limit, allowance in stage_models(defaults):
         model = DEFAULT_MODEL_PRICING[model_id]
         worst_case = attempt_estimate_usd(prompt_tokens, output_limit, model) * (
             defaults.generation_retries + 1
         )
-        assert worst_case <= smallest_stage_budget(defaults), model_id
+        assert worst_case <= allowance, model_id
 
 
 def test_default_context_budget_fits_inside_prompt_budget(defaults):

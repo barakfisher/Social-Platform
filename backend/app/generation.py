@@ -16,7 +16,7 @@ from app.db import SessionLocal
 from app.db import engine as lock_engine
 from app.embeddings import EmbeddingError, embed_texts, profile_key
 from app.generation_provider import GenerationError, chat_completion, generation_key
-from app.grounding import REVIEW_VERSION, check_draft
+from app.grounding import REVIEW_VERSION, unrequested_review
 from app.grounding import prompt_tokens as generation_tokens
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID
 from app.models import BrandDNA, GenerationRun, KnowledgeDocument
@@ -243,7 +243,6 @@ def request_inputs(payload: GenerateInput) -> dict:
 def generate_locked(payload: GenerateInput):
     settings = get_settings()
     inputs = request_inputs(payload)
-    review_model = inputs["review_model"]
     writer_model = inputs["writer_model"]
     profile = writer_profile(writer_model)
     # The model choices are operational settings, never writer or reviewer instructions.
@@ -329,7 +328,9 @@ def generate_locked(payload: GenerateInput):
                 workspace_id=LOCAL_WORKSPACE_ID,
                 max_distance=settings.generation_max_distance,
             )
-        stage_budget = settings.generation_max_request_usd / 2
+        # The writer is the only paid stage of a draft; the source check runs on request with
+        # its own allowance (app/recheck.py).
+        stage_budget = settings.generation_max_request_usd
         if not sources:
             translated = translate_query(
                 payload.topic,
@@ -337,7 +338,7 @@ def generate_locked(payload: GenerateInput):
             )
             if translated is not None:
                 query, translation_metadata, translation_reservation = translated
-                stage_budget = (settings.generation_max_request_usd - translation_reservation) / 2
+                stage_budget = settings.generation_max_request_usd - translation_reservation
                 vector = embed_texts([query])[0]
                 with SessionLocal() as session:
                     sources = relevant_context(
@@ -388,26 +389,19 @@ def generate_locked(payload: GenerateInput):
         by_id = {s["chunk_id"]: s for s in sources}
         if any(source_id not in by_id for source_id in completion.source_ids):
             raise GenerationError("generation_invalid_sources", metadata)
-        # A draft that cites nothing is still shown; it is reviewed against everything the
-        # writer saw, so its factual claims surface as findings rather than an error.
+        # A draft that cites nothing is still shown; a source check on request reviews it
+        # against everything the writer saw, so its claims surface as findings, not an error.
         references = [
             by_id[source_id] for source_id in dict.fromkeys(completion.source_ids)
         ] or sources
         warnings = [warning[:300] for warning in completion.warnings]
-        try:
-            review = check_draft(
-                completion.content.strip(),
-                references,
-                brand_values,
-                preferences,
-                offer_details=payload.offer_details,
-                budget_usd=stage_budget,
-                model_id=review_model,
-            )
-        except GenerationError as exc:
-            raise GenerationError(exc.code, {"generation": metadata, **exc.metadata}) from None
-        review_usage = review.get("usage") or review.get("failure", {}).get("usage") or {}
-        costs = [metadata.get("usage", {}).get("cost_usd"), review_usage.get("cost_usd")]
+        review = unrequested_review(
+            completion.content.strip(),
+            brand_values,
+            preferences,
+            offer_details=payload.offer_details,
+        )
+        costs = [metadata.get("usage", {}).get("cost_usd")]
         if translation_metadata is not None:
             metadata["retrieval_translation"] = translation_metadata
             costs.append(translation_metadata.get("cost_usd"))
@@ -421,7 +415,7 @@ def generate_locked(payload: GenerateInput):
             "sources": references,
             "offer_details": payload.offer_details,
             "warnings": warnings,
-            "grounded": review["status"] == "checked" and not review["findings"],
+            "grounded": False,
             "metadata": {
                 **metadata,
                 "prompt_version": PROMPT_VERSION,
@@ -456,7 +450,6 @@ def generate_locked(payload: GenerateInput):
                 "insufficient_context",
                 "generation_prompt_limit",
                 "generation_topic_too_long",
-                "draft_blocked",
             )
             else 503
         )

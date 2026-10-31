@@ -35,7 +35,7 @@ const copy = {
     deleted: "Draft deleted.",
     reviewUnavailable:
       "This draft was not generated with the current source check, so it cannot be checked again.",
-    perDraft: "per check",
+    perCheck: "per check",
   },
   he: {
     title: "כל הטיוטות במקום אחד",
@@ -66,7 +66,7 @@ const copy = {
     deleted: "הטיוטה נמחקה.",
     reviewUnavailable:
       "הטיוטה לא נוצרה עם בדיקת המקורות הנוכחית, ולכן אי אפשר לבדוק אותה שוב.",
-    perDraft: "לבדיקה",
+    perCheck: "לבדיקה",
   },
 };
 export function History({ locale }: { locale: Locale }) {
@@ -324,7 +324,7 @@ export function History({ locale }: { locale: Locale }) {
                 cost={
                   cost === undefined
                     ? undefined
-                    : `~${new Intl.NumberFormat(locale === "he" ? "he-IL" : "en-US", { style: "currency", currency: "USD", maximumSignificantDigits: 2 }).format(cost)} ${t.perDraft}`
+                    : `~${new Intl.NumberFormat(locale === "he" ? "he-IL" : "en-US", { style: "currency", currency: "USD", maximumSignificantDigits: 2 }).format(cost)} ${t.perCheck}`
                 }
                 onRecheck={() => void recheck()}
               />

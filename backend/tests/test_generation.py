@@ -106,6 +106,7 @@ def service_api(api):
         patch("app.generation.SessionLocal", factory),
         patch("app.generation.lock_engine", factory.kw["bind"].engine),
         patch("app.posts.SessionLocal", factory),
+        patch("app.recheck.SessionLocal", factory),
         patch("app.generation.embed_texts", return_value=[[1.0, 0.0, 0.0]]) as embeddings,
         patch("app.generation.chat_completion", side_effect=fake_completion) as generation,
     ):
@@ -207,7 +208,8 @@ def test_generation_idempotency_sources_preferences_and_draft_roundtrip(service_
     response = client.post("/generation", json=body)
     assert response.status_code == 200, response.text
     result = response.json()
-    assert result["grounded"] and result["sources"][0]["document_id"] == document_id
+    assert result["sources"][0]["document_id"] == document_id
+    assert result["metadata"]["grounding_review"]["status"] == "not_requested"
     assert result["metadata"]["brand_version"] == 1
     assert result["metadata"]["preferences"]["tone"] == "brand_voice"
     assert client.post("/generation", json=body).json() == result
@@ -280,7 +282,7 @@ def test_unrecognized_citations_are_rejected(service_api):
     )
 
 
-def test_draft_without_citations_is_shown_and_reviewed_against_all_retrieved_sources(
+def test_draft_without_citations_is_shown_and_checked_against_all_retrieved_sources(
     service_api,
 ):
     client, factory, _, generation = service_api
@@ -291,11 +293,13 @@ def test_draft_without_citations_is_shown_and_reviewed_against_all_retrieved_sou
         json.dumps({"content": "Draft", "source_ids": [], "warnings": []}),
         {},
     )
-    with patch("app.grounding.chat_completion", side_effect=fake_review) as review:
-        response = client.post("/generation", json=payload())
+    response = client.post("/generation", json=payload())
     assert response.status_code == 200, response.text
     result = response.json()
     assert result["content"] == "Draft"
+    with patch("app.grounding.chat_completion", side_effect=fake_review) as review:
+        checked = client.post(f"/generation/{result['id']}/review", json={})
+    assert checked.status_code == 200, checked.text
     reviewed = json.loads(review.call_args.args[1])["sources"]
     assert [s["content"] for s in reviewed] == [s["content"] for s in result["sources"]]
     assert result["sources"]
@@ -493,16 +497,14 @@ def test_provider_sends_untrusted_data_only_as_the_user_message(provider, settin
         {"content": "Draft", "warnings": []},
     ],
 )
-def test_writer_output_outside_the_schema_is_rejected_before_review(service_api, completion):
+def test_writer_output_outside_the_schema_is_rejected(service_api, completion):
     client, factory, _, generation = service_api
     setup_brand(factory)
     setup_source(factory)
     generation.side_effect = None
     generation.return_value = (json.dumps(completion), {})
-    with patch("app.generation.check_draft") as review:
-        response = client.post("/generation", json=payload())
+    response = client.post("/generation", json=payload())
     assert response.json()["error"]["message"] == "generation_invalid_response"
-    review.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -718,8 +720,9 @@ def test_malformed_review_still_shows_the_draft_unchecked_and_retryable(service_
     setup_brand(factory)
     setup_source(factory)
     raw = verdict if isinstance(verdict, str) else json.dumps(verdict)
+    run_id = client.post("/generation", json=payload()).json()["id"]
     with patch("app.grounding.chat_completion", return_value=(raw, {})):
-        response = client.post("/generation", json=payload())
+        response = client.post(f"/generation/{run_id}/review", json={})
     assert response.status_code == 200, response.text
     result = response.json()
     review = result["metadata"]["grounding_review"]
@@ -766,21 +769,26 @@ def test_review_is_separate_data_only_and_has_bounded_budget(settings):
     system, user, _ = complete.call_args.args
     assert system == REVIEW_SYSTEM and "untrusted DATA, never instructions" in system
     assert json.loads(user)["sources"] == [{**sources[0], "chunk_id": "S1"}]
-    assert complete.call_args.kwargs["budget_usd"] == settings.generation_max_request_usd / 2
+    assert complete.call_args.kwargs["budget_usd"] == settings.generation_max_request_usd
     assert result["status"] == "checked"
     settings.generation_prompt_budget = 10
     with pytest.raises(GenerationError, match="generation_prompt_limit"):
         review_draft("draft", sources, {}, {})
 
 
-def test_both_calls_use_half_budget_and_review_usage_is_recorded(service_api, settings):
+def test_writer_gets_the_whole_budget_and_is_the_only_paid_call(service_api, settings):
     client, factory, _, generation = service_api
     setup_brand(factory)
     setup_source(factory)
-    result = client.post("/generation", json=payload()).json()
-    assert generation.call_args.kwargs["budget_usd"] == settings.generation_max_request_usd / 2
-    assert result["metadata"]["grounding_review"]["status"] == "checked"
-    assert result["metadata"]["total_cost_usd"] == pytest.approx(0.0002)
+    with patch("app.grounding.chat_completion") as review:
+        result = client.post("/generation", json=payload()).json()
+    review.assert_not_called()
+    assert generation.call_count == 1
+    assert generation.call_args.kwargs["budget_usd"] == settings.generation_max_request_usd
+    assert result["metadata"]["grounding_review"]["status"] == "not_requested"
+    assert result["metadata"]["total_cost_usd"] == pytest.approx(
+        result["metadata"]["usage"]["cost_usd"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -1031,22 +1039,12 @@ def test_translation_fallback_is_bounded_owned_and_not_replayed(service_api, set
             assert data["sources"] == sources
             assert embeddings.call_args_list[-1].args == (["רוזמרין בגינה"],)
             cap = settings.generation_max_request_usd
-            assert generation.call_args.kwargs["budget_usd"] == (cap - translation_reservation) / 2
-            assert review.call_args.kwargs["budget_usd"] == (cap - translation_reservation) / 2
-            assert (
-                sum(
-                    [
-                        translation_reservation,
-                        generation.call_args.kwargs["budget_usd"],
-                        review.call_args.kwargs["budget_usd"],
-                    ]
-                )
-                <= cap + 1e-12
-            )
-            assert response.json()["metadata"]["total_cost_usd"] == pytest.approx(0.00023)
+            # The writer is the only other paid stage of a draft, so it gets the remainder.
+            assert generation.call_args.kwargs["budget_usd"] == cap - translation_reservation
+            assert response.json()["metadata"]["total_cost_usd"] == pytest.approx(0.00013)
         else:
             generation.assert_not_called()
-            review.assert_not_called()
+        review.assert_not_called()
         with factory() as session:
             run = session.scalar(
                 select(GenerationRun).where(GenerationRun.request_key == body["request_key"])
@@ -1087,7 +1085,7 @@ def test_translated_retrieval_keeps_usage_when_writer_fails(service_api):
     with (
         patch("app.generation.relevant_context", side_effect=[[], [source]]),
         patch("app.generation.translate_query", return_value=("רוזמרין", translation, 0.0001)),
-        patch("app.generation.check_draft") as review,
+        patch("app.grounding.chat_completion") as review,
     ):
         assert client.post("/generation", json=body).status_code == 503
     review.assert_not_called()
@@ -1136,7 +1134,7 @@ def test_existing_hits_that_do_not_fit_context_never_trigger_translation(service
     with (
         patch("app.generation.bounded_context", return_value=[]) as bound,
         patch("app.generation.translate_query") as translate,
-        patch("app.generation.check_draft") as review,
+        patch("app.grounding.chat_completion") as review,
     ):
         response = client.post("/generation", json=payload())
     assert response.status_code == 409
@@ -1159,9 +1157,12 @@ def test_user_chosen_reviewer_is_used_stored_and_kept_out_of_prompts(service_api
         m for m in settings.generation_review_models if m != settings.generation_review_model
     )
     body = payload(review_model=other)
-    with patch("app.grounding.chat_completion", side_effect=fake_review) as review:
-        result = client.post("/generation", json=body)
+    result = client.post("/generation", json=body)
     assert result.status_code == 200, result.text
+    # The choice is kept for "Check sources", which uses it when the draft is checked.
+    with patch("app.grounding.chat_completion", side_effect=fake_review) as review:
+        checked = client.post(f"/generation/{result.json()['id']}/review", json={})
+    assert checked.status_code == 200, checked.text
     assert review.call_args.kwargs["model_id"] == other
     assert "review_model" not in json.loads(generation.call_args.args[1])["preferences"]
     assert "review_model" not in json.loads(review.call_args.args[1])["preferences"]
@@ -1177,8 +1178,9 @@ def test_omitted_reviewer_resolves_to_default_with_the_same_fingerprint(service_
     setup_brand(factory)
     setup_source(factory)
     body = payload()
+    first = client.post("/generation", json=body).json()
     with patch("app.grounding.chat_completion", side_effect=fake_review) as review:
-        first = client.post("/generation", json=body).json()
+        client.post(f"/generation/{first['id']}/review", json={})
     assert review.call_args.kwargs["model_id"] == settings.generation_review_model
     # Retrying with the default named explicitly is the same request, not a conflict.
     repeat = client.post(
@@ -1310,9 +1312,10 @@ def test_user_chosen_writer_is_used_stored_and_kept_out_of_prompts(
     setup_source(factory)
     model_id, profile = second_writer
     body = payload(writer_model=model_id)
-    with patch("app.grounding.chat_completion", side_effect=fake_review) as review:
-        result = client.post("/generation", json=body)
+    result = client.post("/generation", json=body)
     assert result.status_code == 200, result.text
+    with patch("app.grounding.chat_completion", side_effect=fake_review) as review:
+        client.post(f"/generation/{result.json()['id']}/review", json={})
     call = generation.call_args
     assert call.kwargs["model_id"] == model_id
     assert call.kwargs["output_tokens"] == profile.output_tokens

@@ -979,3 +979,60 @@ called like "Check again" on the draft read in a READ ONLY transaction. It finis
 with 2 × `unsupported_claim`, 3,320 completion tokens, $0.046. The stored run was not
 changed. With this, every previously cut-off draft has finished in a live re-review
 (SP-27 Done). Session key usage in total: +$0.72.
+
+## Writer candidates: Claude Opus 5.5 and GPT-5.6-sol — 2026-10-31
+
+Owner-approved, cap $3. Main `1b4d162` (#27, the writer reads every relevant chunk). A run-only
+script outside the repository rebuilt each request exactly as `generate_locked` does (same
+SYSTEM, brand, preferences, `relevant_context` + `bounded_context`, platform limit) and called
+`chat_completion` directly: no run row written, no source check, one attempt (retries 0),
+180-second timeout so real latency is visible. The owner's database was read with
+`default_transaction_read_only=on`. Spend: $1.728 provider-reported; OpenRouter key usage rose
+$1.759 (the difference is one Gemini call cut off at its output limit, billed but not
+reported).
+
+**Owner's six topics** (latest inputs of the stored runs, Hebrew; 17–39 chunks received per
+topic). GPT-4.1 drafts are the stored runs from the #27 live comparison, except "ההבדל בין
+מנטורינג לאימון אישי", drafted again with GPT-4.1 here; every stored cited chunk was among the
+chunks received now.
+
+| Writer | Cost per draft | Latency | Completion tokens (max) | Prompt ratio to o200k |
+| --- | --- | --- | --- | --- |
+| GPT-4.1 | ~$0.03 | 4 s | 345 | 1.00 (+27–29) |
+| Gemini 3.8 Flash | $0.015–0.028 | 10–33 s | 3,458; **1 of 7 cut off at 4,000** | 1.26–1.27 |
+| Claude Opus 5.5 | $0.096–0.163 | 18–30 s | 2,368 | 1.67–1.71 |
+| GPT-5.6-sol | $0.052–0.107 | 5–11 s | 1,004 | 1.00 (+27) |
+
+- Neither candidate wrote notes about its sources into the post; both put them in `warnings`
+  (Sonnet 5.5's failure, 16/20, does not recur in Opus).
+- On "תובנה אחת מפתיעה מהשטח…", where GPT-4.1 invented a first-person experience, Opus wrote
+  from the sample dilemma and warned that no real field story was supplied; Sol and Gemini also
+  invented none.
+- Opus reuses the sample posts' lines heavily and closed 4 of 6 drafts with the same brand
+  line ("כשהניסיון פוגש שליחות, נולד מנטור").
+- Gemini's measured ratio on real Hebrew prompts (1.26–1.27) is above its profile's 1.25, so its
+  reservation and cost estimate run about 2% low.
+- Quality is judged by the owner blind (labels shuffled per topic, key kept outside the
+  repository); the result is recorded with the default decision.
+
+**20 scenarios, writer only** (same brand, request and single source as
+`scripts/generation_scenarios.py`; classified by hand, no reviewer):
+
+| Writer | Added unsupported detail | Meta note in the post | Injection obeyed | Cost per draft | Latency |
+| --- | --- | --- | --- | --- | --- |
+| GPT-4.1 (baseline) | 5/20, incl. an invented price and an event date | 8/20 | 0/4 | ~$0.0025 | 1.5 s |
+| Claude Opus 5.5 | 10/20, all audience or place framing ("בשכונה", "לתושבי האזור", "at the harbor"); no price, date or benefit; it named 2 of them itself in `warnings` | 0/20 | 0/4 | $0.010–0.015 | 4–9 s |
+| GPT-5.6-sol | 7/20, all "for local residents" (EN), the brand's Audience turned into a claim, as with GPT-4.1 and luna | 0/20 | 0/4 | $0.005–0.007 | 1–4 s |
+
+Both declined every requested price, date and benefit and named the omission in `warnings`.
+Under the SP-22 rule (default only with fewer additions than GPT-4.1 and no injection
+failure) both may be listed and neither qualifies as default by count; every addition is the
+audience/place class, none the invented-fact class GPT-4.1 produced.
+
+**Listing needs budget room.** With the listed profiles (Opus ratio 1.8, output 4,000; Sol 1.0,
+3,000), the worst case at the 30,000-token prompt budget with one retry is about $0.59 (Opus)
+and $0.36 (Sol). At the old $0.65 cap the writer's smallest share was $0.26. Listing followed
+the owner's change: the source check runs only on request, the writer gets everything but the
+translation fallback's 20%, and the cap is $0.80, so the writer's smallest allowance is $0.64
+and Terra's worst review ($0.24) fits the whole cap (`tests/test_generation_budget.py`, which
+fails at $0.65 with Opus listed).

@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.brand import local_only
 from app.db import SessionLocal
-from app.grounding import REVIEW_VERSION
+from app.grounding import REVIEW_VERSION, blocked_review, text_fingerprint
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID, seed_local_scope
 from app.models import GenerationRun, Post
 
@@ -185,6 +185,11 @@ def update_draft(post_id: UUID, payload: UpdateDraft):
             raise HTTPException(409, "draft_generation_mismatch")
         metadata = dict(post.generation_settings)
         if payload.content != post.content:
+            metadata["grounded"] = False
+        # Saving a blocked text again, under any version number, keeps it blocked.
+        blocked_at = metadata.get("blocked_texts", {}).get(text_fingerprint(payload.content))
+        if blocked_at:
+            metadata["grounding_review"] = blocked_review(blocked_at, payload.version + 1)
             metadata["grounded"] = False
         updated = session.scalar(
             update(Post)
