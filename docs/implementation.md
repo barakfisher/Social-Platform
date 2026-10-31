@@ -1479,3 +1479,77 @@ typecheck, format, build and 104 Playwright tests, including the "not checked ye
 on Create Post and HE in History (both fail when the button is hidden), its stale note, and
 free findings kept after a failed check (backend and UI tests, both failing before the fix); screenshots of the
 models tab and the panel at 1280 and 375 px in EN and HE, with no horizontal scroll.
+
+## SP-29: documents are knowledge or sample posts; topic ideas never restate a sample post — 2026-10-31
+
+Problem: after topic-suggestions-v2 the prompt alone kept most ideas new, but not all. Live,
+post 1's opening line came back as a question. A server check against every source line also
+dropped ordinary ideas phrased like a fact in a fact document (three existing tests failed),
+because the server could not tell a finished post from a fact.
+
+Choice (owner-approved, option A of three):
+- `knowledge_documents.kind`: `knowledge` (default; every existing row after the migration)
+  or `sample_posts`, with a check constraint. It is chosen when adding text, a file (`kind`
+  query parameter) or a web page, and changed with `PATCH /knowledge/{id}` (`{"kind": …}`,
+  nothing else). The change is free and immediate at any stage: the kind is read only when
+  ideas are suggested, so nothing is prepared or embedded again. A reloaded web page keeps its
+  kind, because the original row is kept and only its text and chunks change.
+- Topic ideas (`topic-suggestions-v3`): every source reaches the model with its kind, and the
+  prompt says sample posts show what is already written. The server drops an idea that is a
+  `near_duplicate` of any line or sentence of any Ready sample-posts document in the workspace,
+  sampled or not; knowledge documents never drop an idea this way.
+- A kind change keeps `updated_at`: suggestions sample the most recently updated documents,
+  and a kind is not new content (QA: otherwise marking an old document pulled it into the
+  sample and pushed another out).
+- Sample-post lines are read before the paid model call, so a database failure there costs
+  nothing; each distinct line's words are taken once, and `same_idea` skips pairs whose sizes
+  cannot reach either rule (shared words cannot outnumber the smaller set). 20,000 distinct
+  lines against 5 ideas take about 1.3 s.
+- UI: a "Content type" select (with a hint) in the three add forms, and one per listed source
+  named for its source. It is disabled while a change saves, keeps focus, announces "Content
+  type saved", and on failure shows an error while the select keeps the stored kind. A list
+  refresh that left before a change is dropped (QA: a timed refresh answering with the old
+  kind, as the last one when processing ended, left the old kind on screen).
+- Mixed files are split by the owner rather than marked per chunk (owner decision): the
+  sample-posts file became a marketing plan (knowledge, 4 chunks) and the posts (10 chunks).
+
+Rejected alternatives:
+- B, the line check against every source: drops fact-style ideas from knowledge documents.
+- C, prompt only: a restated post still appears in some calls.
+- Marking chunks instead of documents: needs a chunk-level UI, and chunks cut through posts,
+  so one chunk can be half plan, half post.
+
+Verification: backend 899 passed on a disposable migrated database (`social_sp29_test`, not
+the owner's); the restatement tests (2), the read-before-paying test and the stale-refresh UI
+test each fail without their fix; tests cover a sample-posts document outside the sample, one
+not Ready, one in another workspace, a raw insert without `kind`, and a reload by replace and
+by append; ruff, format, `mypy app`, `alembic check`, and the migration up, down and up again.
+Frontend: lint, typecheck, format, production build and Playwright 111/111 (new
+document-kind.spec.ts; a proxy PATCH test in csrf-guard.spec.ts that fails without the route's
+PATCH export; two knowledge.spec.ts request expectations now include `kind=knowledge`), run on
+port 53173 because 53073 serves the main checkout.
+
+Reviews: `bf-security-reviewer` found no vulnerability (ownership, staging copies, validation,
+both write guards, no new injection path); its unbounded-work note and CORS consistency
+(PATCH added to the API's allowed methods) are applied. `bf-qa` found no failed criterion; the
+stale-refresh bug, the `updated_at` side effect, reading after the paid call and the missing
+tests it listed are fixed above.
+Checked in the browser against the worktree's real API at 1280 and 375 px in HE and EN: no
+horizontal scroll, a change saved to the database, the notice shown and focus kept.
+
+Live (paid, GPT-4.1, $0.023 for three Hebrew calls): on a disposable copy of the owner's
+Knowledge Base (2 documents, 14 chunks, brand profile; the owner's database has no `kind`
+column until this is merged and migrated), with the posts document marked. Every call read all
+14 chunks. 9 ideas proposed, 1 dropped ("איך מזהים את מה שאדם לא מצליח לומר אפילו לעצמו?", a
+line of post 7), so the Facebook call returned 2 ideas; none of the 8 kept restates a post.
+
+Limits: a dropped idea is not replaced, so a call may return fewer ideas than asked; "Suggest
+other ideas" asks again. The check catches restated lines, not a post's theme in new words,
+nor a sentence split across two chunks; lines split at every ".", so decimals and URLs break
+into pieces. Adding the same text, file or page again with another kind keeps the stored kind
+(the "already in your Knowledge Base" notice; change it on the list). Sample posts still reach
+the writer as facts (a separate task).
+The "what I learned in 20 years" idea, which needs a real story from the owner, came back in
+all three calls (the open owner decision). After merging, the owner's database needs
+`alembic upgrade head` (the Compose `migrate` service runs it on `docker compose up -d --build`)
+and the posts document marked.

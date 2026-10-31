@@ -302,7 +302,7 @@ test("a PDF upload shows progress, its type and file name, then a processing fai
   ).toBeVisible();
   expect(sent).toEqual({
     type: "application/octet-stream",
-    query: "?filename=garden-guide.pdf&title=Opening+hours",
+    query: "?filename=garden-guide.pdf&title=Opening+hours&kind=knowledge",
     body: pdfBytes.toString(),
   });
   const entry = page.getByRole("listitem").filter({ hasText: "Opening hours" });
@@ -445,7 +445,11 @@ test("a web page is added, shown with its link, and explains a fetch failure", a
       exact: true,
     }),
   ).toBeVisible();
-  expect(sent).toEqual({ url: "https://garden.example/hours", title: "" });
+  expect(sent).toEqual({
+    url: "https://garden.example/hours",
+    title: "",
+    kind: "knowledge",
+  });
   await expect(page.getByLabel("Page address (URL)")).toHaveValue("");
   const entry = page
     .getByRole("listitem")

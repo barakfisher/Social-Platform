@@ -32,6 +32,7 @@ WRITES = [
     ("POST", "/dev/jobs/probe", None),
     ("PUT", "/brand", b"{}"),
     ("DELETE", f"/knowledge/{DOCUMENT}", None),
+    ("PATCH", f"/knowledge/{DOCUMENT}", b'{"kind": "sample_posts"}'),
     ("DELETE", f"/posts/{uuid4()}", None),
 ]
 

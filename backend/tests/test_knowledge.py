@@ -134,6 +134,9 @@ def test_other_workspace_cannot_be_read_retried_or_deleted(api):
     assert client.get(path).status_code == 404
     assert client.post(path + "/retry").status_code == 404
     assert client.delete(path).status_code == 404
+    assert client.patch(path, json={"kind": "sample_posts"}).status_code == 404
+    with factory() as session:
+        assert session.get(KnowledgeDocument, document.id).kind == "knowledge"
     dispatch.assert_not_called()
 
 

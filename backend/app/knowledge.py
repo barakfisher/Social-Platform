@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from starlette.concurrency import run_in_threadpool
 
@@ -35,12 +35,15 @@ from app.web_fetch import FetchError, fallback_title, normalize_url
 from app.worker import process_text
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"], dependencies=[Depends(local_only)])
+# Knowledge is drawn on for facts; sample posts are the owner's finished posts.
+DocumentKind = Literal["knowledge", "sample_posts"]
 
 
 class TextSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     title: str = Field(min_length=1, max_length=300)
     text: str = Field(min_length=1, max_length=100000)
+    kind: DocumentKind = "knowledge"
 
     @field_validator("title")
     @classmethod
@@ -76,6 +79,7 @@ def summary(document, session):
     return {
         "id": str(document.id),
         "title": document.title,
+        "kind": document.kind,
         "source_type": document.source_type,
         "filename": document.source_reference if document.source_type in ("pdf", "txt") else None,
         "url": document.source_reference if document.source_type == "url" else None,
@@ -162,6 +166,7 @@ def submit_text(payload: TextSubmission, request: Request):
                 title=payload.title,
                 source_type="text",
                 source_text=payload.text,
+                kind=payload.kind,
                 checksum=checksum,
                 status="Pending",
             )
@@ -224,6 +229,7 @@ async def submit_file(
     request: Request,
     filename: Annotated[str, Query(min_length=1, max_length=1000)],
     title: Annotated[str | None, Query(max_length=300)] = None,
+    kind: DocumentKind = "knowledge",
 ):
     """Raw file bytes as application/octet-stream (a type that needs a CORS preflight)."""
     name = clean_filename(filename)
@@ -246,7 +252,7 @@ async def submit_file(
     if "\x00" in clean_title:
         raise HTTPException(422, "validation_error")
     return await run_in_threadpool(
-        store_file, request, data, name, clean_title[:300], source_type, text
+        store_file, request, data, name, clean_title[:300], source_type, text, kind
     )
 
 
@@ -261,7 +267,7 @@ def existing_file(session, source_type: str, checksum: str):
     )
 
 
-def store_file(request, data, name, title, source_type, text):
+def store_file(request, data, name, title, source_type, text, kind):
     # Duplicate policy: the same bytes and type in one workspace return the first document.
     checksum = hashlib.sha256(data).hexdigest()
     with SessionLocal() as session:
@@ -284,6 +290,7 @@ def store_file(request, data, name, title, source_type, text):
                     source_type=source_type,
                     source_reference=name,
                     source_text=text,
+                    kind=kind,
                     storage_key=key,
                     checksum=checksum,
                     status="Pending",
@@ -320,6 +327,7 @@ class UrlSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     url: str = Field(min_length=1, max_length=2048)
     title: str = Field(default="", max_length=300)
+    kind: DocumentKind = "knowledge"
 
 
 @router.post("/url", status_code=202)
@@ -342,6 +350,7 @@ def submit_url(payload: UrlSubmission, request: Request):
                 title=title or fallback_title(url),
                 source_type="url",
                 source_reference=url,
+                kind=payload.kind,
                 checksum=checksum,
                 status="Pending",
             )
@@ -439,6 +448,28 @@ def get_document(document_id: UUID):
     with SessionLocal() as session:
         document = owned(document_id, session)
         return {**summary(document, session), "text": document.source_text}
+
+
+class KindChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: DocumentKind
+
+
+@router.patch("/{document_id}")
+def change_kind(document_id: UUID, payload: KindChange):
+    """Free and immediate at any stage: the kind is read when ideas are suggested, never
+    when text is prepared or embedded, so nothing is processed again."""
+    with SessionLocal.begin() as session:
+        owned(document_id, session, lock=True)
+        # updated_at stays: topic ideas sample the most recently updated documents, and a
+        # kind is not new content.
+        session.execute(
+            update(KnowledgeDocument)
+            .where(KnowledgeDocument.id == document_id)
+            .values(kind=payload.kind, updated_at=KnowledgeDocument.updated_at)
+        )
+    with SessionLocal() as session:
+        return summary(owned(document_id, session), session)
 
 
 @router.post("/{document_id}/retry", status_code=202)
