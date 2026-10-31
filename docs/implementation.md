@@ -1301,6 +1301,50 @@ the writer's own elaborations found in no chunk ("אמון, הקשבה", "לגל
 one flagged claim ("אדם בעל ניסיון עשיר") is in a cited chunk, a reviewer miss. Drafts stay
 short (323–811 characters) under the writer's "never pad" instructions, a non-goal here.
 
+## Topic ideas that do not restate the Knowledge Base (topic-suggestions-v2) — 2026-10-31
+
+Problem: with one Ready file (the owner's sample posts: a marketing plan, its recommendations
+and 8 finished posts; 14 chunks, 3,811 o200k tokens) the three ideas restated existing posts:
+post 8's closing question almost word for word, post 3's theme, and posts 7 and 3 together.
+None followed the plan's own recommendations for new content (a first-person series, "course
+versus academy"). Rationales said only "as the sources stress". Measured cause: the sample
+took 3 chunks per document whatever the document count (chunks 0, 6 and 13: the plan, the
+start of post 3 and the end of post 8), so the writer could not see which posts exist; and
+the prompt neither forbade restating a source post nor asked for a concrete rationale.
+
+Choice (owner-approved):
+- The sample is a fixed size, `SAMPLE_CHUNKS` = 8 × 3 = 24 chunks, shared by the documents
+  sampled: each gives at least 3 and up to 24 ÷ documents, spread evenly as before and
+  interleaved. With 8 documents nothing changes; one document of up to 24 chunks is read whole.
+  Each excerpt's share of the budget is unchanged (about 940 tokens).
+- The prompt says sources may include finished posts and forbids restating one (title,
+  opening, closing question, call to action); asks for a new angle, follow-up or next step;
+  prefers content the sources recommend but do not contain; makes each topic one post (one
+  post of a recommended series, once per series); asks the rationale for the post's role
+  (trust, practical value, differentiation, call to sign up) instead of "the sources".
+
+Rejected:
+- Whole Knowledge Base whenever it fits the budget: the same result for this case, but a
+  second sizing rule beside the 8-document limit; the fixed sample covers it.
+- A server check dropping an idea that is a near-duplicate of any source line: it caught the
+  live case below, but it also dropped ordinary ideas phrased like a fact in a fact document
+  ("Why volunteers meet on Thursdays" from "Volunteers meet on Thursdays"), as three existing
+  tests showed. The server cannot tell a finished post from a fact. Left for an owner decision.
+
+Verification: backend 843 passed with PostgreSQL (new: one document of 23 chunks is read whole;
+two documents fill the 24-chunk sample, 12 each; the spreading test now uses 48 chunks); ruff.
+Live (paid, GPT-4.1, owner's Knowledge Base, Hebrew, about $0.04 for four calls): every call
+read all 14 chunks. Facebook, final prompt: "course versus academy", one first-person story
+post, "do you listen or rush to advise?" — three distinct ideas, no restated post. LinkedIn,
+final prompt: "course versus academy" for managers, one post of the "what I learned in 20
+years" series, and post 1's opening line as a question ("למה לא כל מי שהצליח בחיים יודע לעזור
+לאחרים להצליח?"), a restatement the prompt did not prevent. Before the one-post rule, two
+Facebook ideas were the same proposed series.
+
+Open: first-person story ideas rest on the plan's recommendation, not on stories in the
+Knowledge Base; a draft from them has no real story to tell and the source check will flag
+invented ones. The prompt rule against restating posts holds in most but not all calls.
+
 ## Decision: the source check runs only on request; the writer gets its share — 2026-10-31
 
 Problem: every draft paid automatically for a source check that cost more than the writing
