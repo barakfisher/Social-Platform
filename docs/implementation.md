@@ -1137,3 +1137,22 @@ fetch limits as web page sources apply (no public fetch from this sandbox). Know
 paragraph comparison treats an edited paragraph as one removed and one new; only the first
 chunk of a long appended section starts with the dated heading, but every chunk carries
 added_on; conflicts inside one chunk are not resolved by dates.
+
+## SP-27: "בהם" may stay outside claims (source-review-v8) — 2026-10-31
+
+Problem: the live SP-27 re-review (verification/generation-grounding.md) left no review cut
+off, but 2 of 3 reviews of stored draft 49f7579f ended `grounding_review_invalid`. Both failed
+coverage on "קיימים מודלים שונים למנטורינג, בהם מודל מסורתי…": Terra left the listing word
+"בהם" ("among them") outside every claim, and it was not a connective.
+
+Choice (owner-approved):
+- `CONNECTIVES` gains בהם. Like בו and שבו, already listed, it points back to a noun and
+  states no fact on its own. Only the bare word is skippable: forms with a prefix such as
+  ובהם, and related words such as בהן or ביניהם, stay inside claims until a live review
+  shows they are needed.
+- REVIEW_VERSION becomes `source-review-v8`, because the reviewer prompt lists the
+  connectives word for word. As with earlier bumps, stored v7 reviews ask for a new check
+  (`generation_review_required`) on retry, GET and save.
+
+Rejected: keeping v7. Every v7-valid review stays valid, so no re-checks would be forced,
+but one version name would then cover two prompts and later measurements would mix them.

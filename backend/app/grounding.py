@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.config import get_settings
 from app.generation_provider import GenerationError, chat_completion
 
-REVIEW_VERSION = "source-review-v7"
+REVIEW_VERSION = "source-review-v8"
 # Words a sentence may leave outside every claim: joining, relative and discourse words that
 # cannot state a fact on their own. Anything else, including dates, names, origins, negation
 # and time, place or quantity words such as "today" or "there", must sit inside a claim.
@@ -30,7 +30,7 @@ CONNECTIVES = frozenset(
     "and or but also so while as with the a an to of in on for at by is are was were "
     "therefore thus however moreover furthermore additionally "
     "ו ה ב ל מ ש כ גם וגם או אבל כי את של עם על הוא היא הם הן "
-    "כך וכך לכן ולכן בנוסף ובנוסף אולם אך כלומר למשל ובכן בו שבו כולל אשר".split()
+    "כך וכך לכן ולכן בנוסף ובנוסף אולם אך כלומר למשל ובכן בו שבו בהם כולל אשר".split()
 )
 # Alias the reviewer cites for the owner's optional offer details, and its stored chunk ID.
 OFFER_ALIAS = "OWNER"

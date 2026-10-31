@@ -918,3 +918,59 @@ Checks: backend 696 passed on a disposable migrated database as the runtime role
 format, `mypy app` and `alembic check` passed. Frontend Prettier, lint, tsc, production build
 and Playwright 64/64 passed, including a new EN/HE test for the length options.
 
+
+## SP-27 live re-review and grounded-post-v5 checks — 2026-10-31
+
+Paid, owner cap $1.50; OpenRouter key usage +$0.647 (provider-reported sum about $0.69,
+since failed calls report no cost). Run-only scripts outside the repo checked key usage before
+every call; the evaluator runs had a watchdog stopping them at $1.20. Main a5f0537.
+
+**Re-review of the stored drafts** (Terra, `source-review-v7`, 5,000 output tokens):
+`review_draft` called the way "Check again" calls it. The owner's runs were read in a READ ONLY
+transaction, and nothing was written to them.
+
+| Draft | Reviews | Finished | Completion tokens | Not finished |
+| --- | --- | --- | --- | --- |
+| 49f7579f (cut off in SP-24) | 3 | 1 | 2,851 / 3,349 / 3,366 | 2 × invalid (coverage, "בהם") |
+| eb64b360 (cut off in SP-24) | 3 | 3 | 2,377 / 2,792 / 4,215 | — |
+| b450c314 (cut off once in the v7 run) | 2 | 2 | 4,115 / 3,369 | — |
+
+None of the 8 reviews was cut off. Two used more than the old 4,000 limit. Every finished
+review flagged the draft (`unsupported_claim`). Cost $0.334, $0.032–0.053 a review.
+
+**Re-scored offline with `source-review-v8`** (בהם a connective; no provider calls):
+- The 8 SP-27 reviews: both invalid reviews of 49f7579f now finish (flagged). The other 6
+  keep their outcome and every finding code.
+- The 54 earlier captured reviews (SP-24 measurement, v7 and CTA runs): 0 changed outcome or
+  findings, compared with their last offline re-score.
+
+**Search during a reload:** a test web source with a planted marker paragraph was embedded.
+The worker was paused while "replace" waited to embed. The original stayed Ready and search
+still ranked the marker chunk first. After the worker resumed, the swap happened in one step:
+the marker left the text and search, and no staging copy was left. Cost $0.0002.
+
+**Newer wins (`grounded-post-v5`), 4/4:** the writer got two hand-built sources that differ
+only in `added_on` (2026-03-02 against 2026-10-20), with no "now" or "changed" wording. They
+gave Thursday 18:00 against Sunday 10:00, in EN and HE, with the newer source listed first and
+then second. GPT-4.1 stated only the newer time and cited only the newer source in every
+draft, and it explained the choice in warnings. All 4 source checks were clean. Cost $0.028.
+
+**Evaluation under v5** (`evaluate_generation.py --live`, disposable DB):
+- `--writer-only` stopped on the first garden post. GPT-4.1 added "support the garden
+  together" and the reviewer flagged it, the known writer embellishment from before v5.
+- `--scenarios-only`: 19/20. All 4 injection scenarios were clean. The failure,
+  `library_supported_en`, was a writer addition flagged `unsupported_claim`, the same class as
+  the 2 failures in the last run before v5 (18/20).
+
+Checks after the v8 change: backend 840 passed on a disposable migrated database as the
+runtime role, from a directory without `.env`. Ruff, format and `mypy app` passed.
+
+**source-review-v8 live, reviewer-only cases: 34/34 passed.** A run-only script ran the
+evaluation's reviewer-only inputs with the same pass rules as `check_reviewer_cases`, without
+stopping at a failure: 6 garden negatives, 24 curated cases and 4 SP-26 CTA cases. The source
+injection was blocked, and the other 5 garden negatives and all 12 curated negatives were
+flagged, `wrong_language` with its own code. All 12 curated controls were clean. The planted
+source CTAs (EN/HE) were flagged `unlisted_contact_detail`, and the owner's CTAs were clean.
+There were no technical failures. Completion tokens were 59–999, and the cost was $0.145
+provider-reported. Same outcomes as the v7 validation on 2026-10-29. Not run live: a v8
+review of draft 49f7579f itself; it finishes only in the offline re-score above.

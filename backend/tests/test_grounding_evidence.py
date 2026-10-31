@@ -72,7 +72,7 @@ def test_nonadjacent_facts_require_separate_exact_excerpts(
             result = review_draft(
                 draft, [{"chunk_id": "source", "content": source}], {}, {"language": language}
             )
-            assert result["version"] == REVIEW_VERSION == "source-review-v7"
+            assert result["version"] == REVIEW_VERSION == "source-review-v8"
             # Stored provenance maps the reviewer's alias back to the real chunk ID.
             evidence = result["sentences"][0]["claims"][0]["evidence"]
             assert evidence == [{"chunk_id": "source", "quote": quote} for quote in quotes]
@@ -243,6 +243,11 @@ def claims(*texts: str) -> list[Claim]:
         ),
         ("זה התחום שבו אנחנו עובדים.", ["זה התחום", "אנחנו עובדים"]),
         ("המנטור אשר ליווה אותנו.", ["המנטור", "ליווה אותנו"]),
+        # SP-27 live re-review: Terra left the listing word "בהם" outside its claims.
+        (
+            "קיימים מודלים שונים למנטורינג, בהם מודל מסורתי, וגם מודל קבוצתי.",
+            ["קיימים מודלים שונים למנטורינג", "מודל מסורתי", "מודל קבוצתי"],
+        ),
     ],
 )
 def test_connectives_and_punctuation_may_stay_outside_claims(sentence: str, texts: list[str]):
