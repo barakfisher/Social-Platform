@@ -18,9 +18,13 @@ type Changes = {
   added_count: number;
   removed_count: number;
 };
+// Knowledge is drawn on for facts; sample posts are the owner's finished posts (SP-29).
+type DocumentKind = "knowledge" | "sample_posts";
+const KINDS: DocumentKind[] = ["knowledge", "sample_posts"];
 type Document = {
   id: string;
   title: string;
+  kind: DocumentKind;
   source_type: "text" | "txt" | "pdf" | "url";
   filename: string | null;
   url?: string | null;
@@ -69,6 +73,8 @@ const messages = {
         "This page can be loaded again once its text is prepared.",
       refresh_not_awaiting:
         "This choice was already made or the reload ended. The list is updated.",
+      kind_not_saved:
+        "The content type wasn’t changed. It still shows the saved type. Please try again.",
     } as Record<string, string>,
     refresh: "Refresh",
     pending: "Queued",
@@ -79,6 +85,14 @@ const messages = {
     embeddingNote:
       "Text preparation is available now. AI search and generation will become available after embeddings are connected.",
     chunks: "chunks",
+    kindLabel: "Content type",
+    kinds: { knowledge: "Knowledge", sample_posts: "Sample posts" } as Record<
+      DocumentKind,
+      string
+    >,
+    kindHint:
+      "Sample posts are posts you already wrote. Topic ideas won’t suggest what they already say.",
+    kindSaved: "Content type saved.",
     embed: "Enable AI search",
     embedding: "Preparing AI search",
     embeddingFailed: "AI search preparation failed",
@@ -232,6 +246,7 @@ const messages = {
       refresh_not_ready: "אפשר לטעון את הדף מחדש אחרי שהטקסט שלו הוכן.",
       refresh_not_awaiting:
         "הבחירה כבר נעשתה או שהטעינה מחדש הסתיימה. הרשימה עודכנה.",
+      kind_not_saved: "סוג התוכן לא השתנה, ומוצג הסוג השמור. אפשר לנסות שוב.",
     } as Record<string, string>,
     refresh: "רענון",
     pending: "בתור",
@@ -242,6 +257,14 @@ const messages = {
     embeddingNote:
       "אפשר כבר להכין טקסטים. חיפוש ויצירה באמצעות AI יהיו זמינים לאחר חיבור שירות ההטמעות.",
     chunks: "מקטעים",
+    kindLabel: "סוג התוכן",
+    kinds: { knowledge: "ידע", sample_posts: "פוסטים לדוגמה" } as Record<
+      DocumentKind,
+      string
+    >,
+    kindHint:
+      "פוסטים לדוגמה הם פוסטים שכבר כתבת. רעיונות לנושאים לא יציעו את מה שכבר כתוב בהם.",
+    kindSaved: "סוג התוכן נשמר.",
     embed: "הפעלת חיפוש AI",
     embedding: "מכין חיפוש AI",
     embeddingFailed: "הכנת חיפוש AI נכשלה",
@@ -445,6 +468,41 @@ const errorCode = async (response: Response) => {
 };
 const known = (code: string, texts: Record<string, string>) =>
   Object.hasOwn(texts, code) ? code : "generic";
+function KindField({
+  id,
+  value,
+  onChange,
+  t,
+}: {
+  id: string;
+  value: DocumentKind;
+  onChange: (kind: DocumentKind) => void;
+  t: Messages;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="mb-2 block text-sm font-medium">
+        {t.kindLabel}
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value as DocumentKind)}
+        aria-describedby={`${id}-hint`}
+        className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
+      >
+        {KINDS.map((kind) => (
+          <option key={kind} value={kind}>
+            {t.kinds[kind]}
+          </option>
+        ))}
+      </select>
+      <p id={`${id}-hint`} className="mt-2 text-xs text-muted-foreground">
+        {t.kindHint}
+      </p>
+    </div>
+  );
+}
 export function KnowledgeBase({ locale }: { locale: Locale }) {
   const t = messages[locale];
   // null until the configuration answers, so "not connected" never flashes.
@@ -472,6 +530,9 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
   const [linkError, setLinkError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
+  const [textKind, setTextKind] = useState<DocumentKind>("knowledge");
+  const [fileKind, setFileKind] = useState<DocumentKind>("knowledge");
+  const [linkKind, setLinkKind] = useState<DocumentKind>("knowledge");
   const [items, setItems] = useState<Document[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -501,18 +562,24 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     | "uploadDuplicate"
     | "linkAdded"
     | "linkDuplicate"
+    | "kindSaved"
     | null
   >(null);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Document | null>(null);
+  // Bumped when a source changes in place; a list read that began before the change
+  // answers with the old value and is dropped, and the next one shows the new.
+  const listVersion = useRef(0);
   const load = useCallback(
     async (page = offset) => {
+      const version = listVersion.current;
       try {
         const response = await fetch(`/api/knowledge?offset=${page}&limit=20`, {
           cache: "no-store",
         });
         if (!response.ok) throw new Error();
         const data = await response.json();
+        if (version !== listVersion.current) return;
         setItems(data.items);
         setTotal(data.total);
         setListFailed(false);
@@ -611,6 +678,35 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       setFocusTarget([`source-${item.id}`]);
     }
   }
+  async function changeKind(item: Document, kind: DocumentKind) {
+    listVersion.current += 1;
+    setBusy(item.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/knowledge/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind }),
+      });
+      if (!response.ok) throw new Error();
+      const saved: Document = await response.json();
+      // A list read sent while the change was being saved may predate it.
+      listVersion.current += 1;
+      setItems((current) =>
+        current.map((other) =>
+          other.id === item.id ? { ...other, kind: saved.kind } : other,
+        ),
+      );
+      setNotice("kindSaved");
+    } catch {
+      // The select shows the stored kind, which this failure left unchanged.
+      setError("kind_not_saved");
+    } finally {
+      setBusy(null);
+      setFocusTarget([`kind-${item.id}`, `source-${item.id}`]);
+    }
+  }
   const active = items.some(inFlight);
   useEffect(() => {
     if (!active) return;
@@ -631,12 +727,13 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       const response = await fetch("/api/knowledge/text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, text }),
+        body: JSON.stringify({ title, text, kind: textKind }),
       });
       if (!response.ok) throw new Error();
       const result = await response.json();
       setTitle("");
       setText("");
+      setTextKind("knowledge");
       setNotice(result.duplicate ? "duplicate" : "saved");
       setOffset(0);
       await load(0);
@@ -666,7 +763,11 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       const response = await fetch("/api/knowledge/url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: link.trim(), title: linkTitle.trim() }),
+        body: JSON.stringify({
+          url: link.trim(),
+          title: linkTitle.trim(),
+          kind: linkKind,
+        }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -676,6 +777,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       }
       setLink("");
       setLinkTitle("");
+      setLinkKind("knowledge");
       setNotice(result.duplicate ? "linkDuplicate" : "linkAdded");
       setOffset(0);
       await load(0);
@@ -713,6 +815,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     setProgress(0);
     const query = new URLSearchParams({ filename: file.name });
     if (fileTitle.trim()) query.set("title", fileTitle.trim());
+    query.set("kind", fileKind);
     try {
       // XMLHttpRequest reports upload progress; fetch does not.
       const result = await new Promise<{
@@ -746,6 +849,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       form.reset();
       setFile(null);
       setFileTitle("");
+      setFileKind("knowledge");
       setNotice(result.body.duplicate ? "uploadDuplicate" : "uploaded");
       setOffset(0);
       await load(0);
@@ -877,6 +981,12 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                 {t.limit}
               </p>
             </div>
+            <KindField
+              id="source-kind"
+              value={textKind}
+              onChange={setTextKind}
+              t={t}
+            />
           </fieldset>
           <Button type="submit" disabled={busy !== null}>
             {busy === "submit" ? (
@@ -941,6 +1051,12 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                 className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
               />
             </div>
+            <KindField
+              id="file-kind"
+              value={fileKind}
+              onChange={setFileKind}
+              t={t}
+            />
           </fieldset>
           {progress !== null && (
             <div>
@@ -1044,6 +1160,12 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                 className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
               />
             </div>
+            <KindField
+              id="link-kind"
+              value={linkKind}
+              onChange={setLinkKind}
+              t={t}
+            />
           </fieldset>
           {linkError && (
             <p id="link-error" role="alert" className="text-sm text-red-800">
@@ -1210,6 +1332,37 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                     ? ` · ${item.embedded_chunk_count} ${t.embedded}`
                     : ""}
                 </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <label
+                    htmlFor={`kind-${item.id}`}
+                    className="text-muted-foreground"
+                  >
+                    {t.kindLabel}
+                  </label>
+                  <select
+                    id={`kind-${item.id}`}
+                    value={item.kind}
+                    disabled={busy !== null}
+                    aria-label={forSource(t.kindLabel, item)}
+                    onChange={(e) =>
+                      void changeKind(item, e.target.value as DocumentKind)
+                    }
+                    className="h-8 rounded-md border border-border bg-background px-2 text-xs focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-60"
+                  >
+                    {KINDS.map((kind) => (
+                      <option key={kind} value={kind}>
+                        {t.kinds[kind]}
+                      </option>
+                    ))}
+                  </select>
+                  {busy === item.id && (
+                    <LoaderCircle
+                      size={12}
+                      className="animate-spin"
+                      aria-hidden
+                    />
+                  )}
+                </div>
                 {awaitingChoice(item) ? (
                   <div className="mt-3 rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm">
                     <p>

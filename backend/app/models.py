@@ -80,6 +80,9 @@ class KnowledgeDocument(Owned, Base):
     checksum: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), default="Pending", index=True)
     error_code: Mapped[str | None] = mapped_column(String(100))
+    # What the owner says the document is: knowledge to draw facts from, or finished posts
+    # (app/knowledge.py DocumentKind). Topic ideas never restate a sample post.
+    kind: Mapped[str] = mapped_column(String(20), default="knowledge", server_default="knowledge")
     # Set only on a hidden staging copy while a web page is loaded again (app/refresh.py).
     # It never becomes Ready, so retrieval keeps using the original until the swap.
     replaces_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, unique=True)
@@ -137,6 +140,7 @@ class KnowledgeDocument(Owned, Base):
         CheckConstraint(
             "refresh_action IN ('replace', 'append')", name="knowledge_documents_refresh_action"
         ),
+        CheckConstraint("kind IN ('knowledge', 'sample_posts')", name="knowledge_documents_kind"),
     )
 
 

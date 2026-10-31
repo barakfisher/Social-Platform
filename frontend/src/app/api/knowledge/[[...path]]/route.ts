@@ -10,9 +10,11 @@ async function proxy(
   const requestId = crypto.randomUUID();
   const { path = [] } = await context.params;
   const body =
-    request.method === "POST" &&
-    ((path.length === 1 && (path[0] === "text" || path[0] === "url")) ||
-      (path.length === 2 && path[1] === "refresh-decision"));
+    (request.method === "POST" &&
+      ((path.length === 1 && (path[0] === "text" || path[0] === "url")) ||
+        (path.length === 2 && path[1] === "refresh-decision"))) ||
+    // Changing a document's kind (SP-29).
+    (request.method === "PATCH" && path.length === 1);
   // Raw file bytes (SP-9): application/octet-stream needs a CORS preflight, unlike
   // multipart form data, and the backend accepts it only on this route.
   const upload = request.method === "POST" && path.join("/") === "files";
@@ -74,3 +76,4 @@ async function proxy(
 export const GET = proxy;
 export const POST = proxy;
 export const DELETE = proxy;
+export const PATCH = proxy;

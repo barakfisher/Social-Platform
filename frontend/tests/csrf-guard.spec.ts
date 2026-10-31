@@ -157,6 +157,25 @@ test.describe("csrf guard in the browser", () => {
     expect(statuses).toEqual([400, 415]);
   });
 
+  test("a source's type change is a guarded JSON write", async ({ page }) => {
+    // "csrf_probe" is one path segment the proxy refuses after its guard: 400 means
+    // PATCH reached the proxy and passed the guard, 405 would mean it is not routed.
+    await page.goto("/en");
+    const statuses = await page.evaluate(async () => {
+      const send = (type: string) =>
+        fetch("/api/knowledge/csrf_probe", {
+          method: "PATCH",
+          headers: { "Content-Type": type },
+          body: JSON.stringify({ kind: "sample_posts" }),
+        });
+      return [
+        (await send("application/json")).status,
+        (await send("text/plain;application/json")).status,
+      ];
+    });
+    expect(statuses).toEqual([400, 415]);
+  });
+
   test("file uploads must be raw octet-stream bytes", async ({ page }) => {
     // Form data can be sent cross-site without a preflight, so it never reaches the API.
     await page.goto("/en");

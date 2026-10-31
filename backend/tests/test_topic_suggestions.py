@@ -12,13 +12,14 @@ from app.embeddings import profile_key
 from app.generation_provider import GenerationError
 from app.grounding import prompt_tokens
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID, seed_local_scope
-from app.models import KnowledgeChunk, KnowledgeDocument
+from app.models import KnowledgeChunk, KnowledgeDocument, User, Workspace
 from app.topic_suggestions import (
     EXCERPT_OVERHEAD_TOKENS,
     MAX_SUGGESTIONS,
     SAMPLE_CHUNKS,
     SAMPLE_CHUNKS_PER_DOCUMENT,
     SAMPLE_DOCUMENTS,
+    SUGGESTION_VERSION,
     SYSTEM,
     near_duplicate,
 )
@@ -53,7 +54,7 @@ def idea(topic, sources=("S1",), rationale="Grounded in the garden page."):
     return {"topic": topic, "rationale": rationale, "source_ids": list(sources)}
 
 
-def add_document(factory, title, contents, status="Ready", updated_at=None):
+def add_document(factory, title, contents, status="Ready", updated_at=None, kind="knowledge"):
     with factory.begin() as session:
         seed_local_scope(session)
         document = KnowledgeDocument(
@@ -64,6 +65,7 @@ def add_document(factory, title, contents, status="Ready", updated_at=None):
             source_text=" ".join(contents),
             status=status,
             embedding_profile=profile_key(),
+            kind=kind,
         )
         if updated_at is not None:
             document.updated_at = updated_at
@@ -436,3 +438,118 @@ def test_a_full_sample_of_real_size_chunks_is_read_whole_at_the_default_budget(
     sent = sent_sources(complete)
     assert len(sent) == SAMPLE_DOCUMENTS * SAMPLE_CHUNKS_PER_DOCUMENT
     assert all(s["content"].endswith(chunk) for s in sent)
+
+
+POSTS = [
+    "לא כל מי שהצליח בחיים יודע לעזור לאחרים להצליח.\nניסיון חיים הוא נכס. מנטורינג הוא מקצוע."
+]
+RESTATED = "למה לא כל מי שהצליח בחיים יודע לעזור לאחרים להצליח?"
+NEW_ANGLE = "מה ההבדל בין קורס מנטורינג לאקדמיה מקצועית?"
+
+
+def test_an_idea_that_restates_a_sample_post_is_dropped(suggest_api):
+    # Live (SP-29), the model offered a finished post's opening line back as a new topic.
+    client, factory, complete = suggest_api
+    add_document(factory, "Posts", POSTS, kind="sample_posts")
+    complete.return_value = reply(
+        idea(RESTATED, rationale="שבירת תפיסה."), idea(NEW_ANGLE, rationale="בידול מקצועי.")
+    )
+    body = client.post("/generation/topic-suggestions", json={"language": "he"}).json()
+    assert [s["topic"] for s in body["suggestions"]] == [NEW_ANGLE]
+
+
+def test_the_same_line_in_a_knowledge_document_does_not_drop_the_idea(suggest_api):
+    # Only the owner's mark tells a finished post from a fact phrased the same way.
+    client, factory, complete = suggest_api
+    add_document(factory, "Notes", POSTS)
+    complete.return_value = reply(idea(RESTATED, rationale="שבירת תפיסה."))
+    body = client.post("/generation/topic-suggestions", json={"language": "he"}).json()
+    assert [s["topic"] for s in body["suggestions"]] == [RESTATED]
+
+
+def test_a_sample_post_outside_the_sample_still_drops_its_restatement(suggest_api):
+    client, factory, complete = suggest_api
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    # The oldest document, beyond the most recent SAMPLE_DOCUMENTS, is never sampled.
+    add_document(factory, "Old posts", POSTS, updated_at=start, kind="sample_posts")
+    for i in range(SAMPLE_DOCUMENTS):
+        add_document(
+            factory, f"Doc {i}", ["מנטורינג הוא מקצוע."], updated_at=start + timedelta(days=i + 1)
+        )
+    complete.return_value = reply(
+        idea(RESTATED, rationale="שבירת תפיסה."), idea(NEW_ANGLE, rationale="בידול מקצועי.")
+    )
+    body = client.post("/generation/topic-suggestions", json={"language": "he"}).json()
+    assert "Old posts" not in {s["title"] for s in sent_sources(complete)}
+    assert [s["topic"] for s in body["suggestions"]] == [NEW_ANGLE]
+
+
+def test_sample_posts_that_are_not_ready_or_not_ours_drop_nothing(suggest_api):
+    client, factory, complete = suggest_api
+    add_document(factory, "Notes", ["מנטורינג הוא מקצוע."])
+    add_document(factory, "Draft posts", POSTS, status="Processing", kind="sample_posts")
+    with factory.begin() as session:
+        user = User(name="Other")
+        session.add(user)
+        session.flush()
+        workspace = Workspace(name="Other", user_id=user.id)
+        session.add(workspace)
+        session.flush()
+        other = KnowledgeDocument(
+            user_id=user.id,
+            workspace_id=workspace.id,
+            title="Their posts",
+            source_type="text",
+            source_text=POSTS[0],
+            status="Ready",
+            embedding_profile=profile_key(),
+            kind="sample_posts",
+        )
+        session.add(other)
+        session.flush()
+        session.add(
+            KnowledgeChunk(
+                user_id=user.id,
+                workspace_id=workspace.id,
+                document_id=other.id,
+                chunk_order=0,
+                content=POSTS[0],
+                token_count=5,
+                embedding=[1, 0, 0],
+                embedding_dimensions=3,
+                embedding_model=get_settings().embedding_model,
+                embedding_profile=profile_key(),
+                source_location={"char_start": 0, "char_end": len(POSTS[0])},
+            )
+        )
+    complete.return_value = reply(idea(RESTATED, rationale="שבירת תפיסה."))
+    body = client.post("/generation/topic-suggestions", json={"language": "he"}).json()
+    assert [s["topic"] for s in body["suggestions"]] == [RESTATED]
+
+
+def test_the_model_is_told_each_source_kind(suggest_api):
+    client, factory, complete = suggest_api
+    add_document(factory, "Plan", ["Write about the academy."])
+    add_document(factory, "Posts", ["Our finished post."], kind="sample_posts")
+    complete.return_value = reply()
+    client.post("/generation/topic-suggestions", json={"language": "en"})
+    kinds = {s["title"]: s["kind"] for s in sent_sources(complete)}
+    assert kinds == {"Plan": "knowledge", "Posts": "sample_posts"}
+
+
+def test_sample_posts_are_read_before_the_paid_call(suggest_api):
+    # A database failure while reading them must not come after money is spent.
+    client, factory, complete = suggest_api
+    add_document(factory, "Posts", POSTS, kind="sample_posts")
+    with patch("app.topic_suggestions.sample_post_lines", side_effect=RuntimeError("db down")):
+        response = client.post("/generation/topic-suggestions", json={"language": "he"})
+    assert response.status_code == 500
+    complete.assert_not_called()
+
+
+def test_the_reply_names_the_prompt_version(suggest_api):
+    client, factory, complete = suggest_api
+    add_document(factory, "Posts", POSTS, kind="sample_posts")
+    complete.return_value = reply(idea(NEW_ANGLE, rationale="בידול מקצועי."))
+    body = client.post("/generation/topic-suggestions", json={"language": "he"}).json()
+    assert body["metadata"]["version"] == SUGGESTION_VERSION
