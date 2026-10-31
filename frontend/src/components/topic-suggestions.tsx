@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
-import { Lightbulb, LoaderCircle } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Lightbulb, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiRequest } from "@/lib/posts";
 import type { Locale } from "@/lib/i18n";
@@ -23,6 +23,8 @@ const copy = {
     hint: "Ideas from your Knowledge Base. Choosing one fills in the topic.",
     title: "Topic ideas",
     use: "Use this topic",
+    again: "Suggest other ideas",
+    close: "Close",
     basedOn: "Sources it cites",
     empty:
       "No topic could be tied to your sources this time. Try again, or add sources to your Knowledge Base.",
@@ -42,6 +44,8 @@ const copy = {
     hint: "רעיונות ממאגר הידע שלך. בחירה ברעיון ממלאת את הנושא.",
     title: "רעיונות לנושאים",
     use: "לכתוב על זה",
+    again: "להציע רעיונות אחרים",
+    close: "סגירה",
     basedOn: "מקורות שצוינו",
     empty:
       "הפעם לא נמצא נושא שאפשר לקשר למקורות שלך. אפשר לנסות שוב או להוסיף מקורות למאגר הידע.",
@@ -74,16 +78,22 @@ export function TopicSuggestions({
   onChoose: (topic: string) => void;
 }) {
   const t = copy[locale];
+  const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<SuggestionsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Ideas belong to the platform, language, goal and writer they were asked for.
   const { platform, language, goal, writer_model } = request;
+  const signature = JSON.stringify([platform, language, goal, writer_model]);
+  const current = useRef(signature);
   useEffect(() => {
+    current.current = signature;
     setResult(null);
     setError(null);
-  }, [platform, language, goal, writer_model]);
+  }, [signature]);
   async function suggest() {
+    const asked = signature;
     setBusy(true);
     setError(null);
     try {
@@ -93,21 +103,36 @@ export function TopicSuggestions({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            platform: request.platform,
-            language: request.language,
-            goal: request.goal,
+            platform,
+            language,
+            goal,
             count: SUGGESTION_COUNT,
-            writer_model: request.writer_model || null,
+            writer_model: writer_model || null,
           }),
         },
       );
-      setResult(data);
+      // The dialog may have been closed and the form changed while this was in flight.
+      if (current.current === asked) setResult(data);
     } catch (caught) {
-      setResult(null);
-      setError(caught instanceof Error ? caught.message : "api_unavailable");
+      if (current.current === asked) {
+        setResult(null);
+        setError(caught instanceof Error ? caught.message : "api_unavailable");
+      }
     } finally {
       setBusy(false);
     }
+  }
+  // Ideas cost a paid request, so reopening shows the ones already found for the same inputs.
+  function open() {
+    dialog.current?.showModal();
+    if (!busy && !result?.suggestions.length) void suggest();
+  }
+  function close() {
+    dialog.current?.close();
+  }
+  function choose(topic: string) {
+    close();
+    onChoose(topic);
   }
   const message =
     error === "insufficient_context"
@@ -123,77 +148,111 @@ export function TopicSuggestions({
             ? t.writerUnavailable
             : t.error;
   return (
-    <div className="mt-3 space-y-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={disabled || busy}
-          onClick={suggest}
-        >
-          {busy ? (
-            <LoaderCircle className="animate-spin" size={16} />
-          ) : (
-            <Lightbulb size={16} />
+    <div className="mt-3 flex flex-wrap items-center gap-3">
+      <Button
+        type="button"
+        variant="outline"
+        disabled={disabled}
+        aria-haspopup="dialog"
+        onClick={open}
+      >
+        <Lightbulb size={16} />
+        {t.suggest}
+      </Button>
+      <p className="text-xs text-muted-foreground">{t.hint}</p>
+      <dialog
+        ref={dialog}
+        aria-labelledby={titleId}
+        // The dialog box has no padding, so a click on it (not its content) is on the backdrop.
+        onClick={(event) => event.target === event.currentTarget && close()}
+        className="m-auto w-[calc(100%-2rem)] max-w-xl rounded-2xl border border-border bg-card text-foreground shadow-xl backdrop:bg-black/40"
+      >
+        <div className="max-h-[85vh] space-y-4 overflow-y-auto p-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 id={titleId} className="text-lg font-semibold">
+                {t.title}
+              </h2>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {t.hint}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label={t.close}
+              onClick={close}
+            >
+              <X size={18} />
+            </Button>
+          </div>
+          {busy && (
+            <p
+              role="status"
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+            >
+              <LoaderCircle className="animate-spin" size={16} />
+              {t.suggesting}
+            </p>
           )}
-          {busy ? t.suggesting : t.suggest}
-        </Button>
-        <p className="text-xs text-muted-foreground">{t.hint}</p>
-      </div>
-      {error && (
-        <p role="alert" className="text-sm text-red-800">
-          {message}
-        </p>
-      )}
-      {result && result.suggestions.length === 0 && (
-        <p role="status" className="text-sm text-muted-foreground">
-          {t.empty}
-        </p>
-      )}
-      {result && result.suggestions.length > 0 && (
-        <section
-          aria-label={t.title}
-          data-testid="topic-suggestions"
-          className="space-y-2"
-        >
-          <h3 className="text-sm font-medium">{t.title}</h3>
-          <ul className="space-y-2">
-            {result.suggestions.map((suggestion) => (
-              <li
-                key={suggestion.topic}
-                className="rounded-lg border border-border p-3"
-              >
-                <p dir="auto" className="text-sm font-medium leading-6">
-                  {suggestion.topic}
-                </p>
-                <p
-                  dir="auto"
-                  className="mt-1 text-xs leading-5 text-muted-foreground"
+          {!busy && error && (
+            <p role="alert" className="text-sm text-red-800">
+              {message}
+            </p>
+          )}
+          {!busy && result && result.suggestions.length === 0 && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {t.empty}
+            </p>
+          )}
+          {!busy && result && result.suggestions.length > 0 && (
+            <ul data-testid="topic-suggestions" className="space-y-2">
+              {result.suggestions.map((suggestion) => (
+                <li
+                  key={suggestion.topic}
+                  className="rounded-lg border border-border p-3"
                 >
-                  {suggestion.rationale}
-                </p>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  {t.basedOn}:{" "}
-                  <span dir="auto">
-                    {[...new Set(suggestion.sources.map((s) => s.title))].join(
-                      ", ",
-                    )}
-                  </span>
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="mt-2"
-                  onClick={() => onChoose(suggestion.topic)}
-                >
-                  {t.use}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+                  <p dir="auto" className="text-sm font-medium leading-6">
+                    {suggestion.topic}
+                  </p>
+                  <p
+                    dir="auto"
+                    className="mt-1 text-xs leading-5 text-muted-foreground"
+                  >
+                    {suggestion.rationale}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    {t.basedOn}:{" "}
+                    <span dir="auto">
+                      {[
+                        ...new Set(suggestion.sources.map((s) => s.title)),
+                      ].join(", ")}
+                    </span>
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => choose(suggestion.topic)}
+                  >
+                    {t.use}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void suggest()}
+          >
+            <RefreshCw size={16} />
+            {t.again}
+          </Button>
+        </div>
+      </dialog>
     </div>
   );
 }

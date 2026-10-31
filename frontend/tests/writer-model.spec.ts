@@ -94,11 +94,11 @@ async function mockApi(
   });
 }
 
-async function openPreferences(page: Page, locale: "en" | "he" = "en") {
+async function openModels(page: Page, locale: "en" | "he" = "en") {
   await page.goto(`/${locale}/create`);
   await page
-    .getByText(locale === "en" ? "Writing preferences" : "העדפות כתיבה", {
-      exact: true,
+    .getByRole("tab", {
+      name: locale === "en" ? "Models and cost" : "מודלים ועלות",
     })
     .click();
 }
@@ -113,7 +113,7 @@ test("writer select shows costs, the total follows both selects and the choice i
       await route.fulfill({ json: run });
     },
   });
-  await openPreferences(page);
+  await openModels(page);
   const writer = page.getByLabel("Writing model", { exact: true });
   await expect(writer).toHaveValue("openai/gpt-4.1");
   await expect(writer.locator("option")).toHaveText([
@@ -134,6 +134,7 @@ test("writer select shows costs, the total follows both selects and the choice i
     .getByLabel("Source check model", { exact: true })
     .selectOption("openai/gpt-4.1");
   await expect(total).toHaveText("~$0.012 per draft · up to $0.07");
+  await page.getByRole("tab", { name: "Post details" }).click();
   await page
     .getByLabel("What would you like to write about?", { exact: true })
     .fill("Community garden herbs");
@@ -155,11 +156,14 @@ test("while writer options load the select is disabled and the total is hidden",
       await route.fulfill({ json: writerModels });
     },
   });
-  await openPreferences(page);
+  await openModels(page);
   const writer = page.getByLabel("Writing model", { exact: true });
   await expect(writer).toBeDisabled();
   await expect(writer.locator("option")).toHaveText(["Loading models…"]);
   await expect(page.getByTestId("total-draft-cost")).toHaveCount(0);
+  await page.getByRole("tab", { name: "Post details" }).click();
+  // The summary next to Generate waits for the same lists as the models tab total.
+  await expect(page.getByTestId("generate-cost")).toHaveCount(0);
   await page
     .getByLabel("What would you like to write about?", { exact: true })
     .fill("Community garden herbs");
@@ -167,6 +171,8 @@ test("while writer options load the select is disabled and the total is hidden",
     page.getByRole("button", { name: "Generate draft", exact: true }),
   ).toBeEnabled();
   release();
+  await expect(page.getByTestId("generate-cost")).toBeVisible();
+  await page.getByRole("tab", { name: "Models and cost" }).click();
   await expect(writer).toBeEnabled();
   await expect(page.getByTestId("total-draft-cost")).toBeVisible();
 });
@@ -182,7 +188,7 @@ for (const [name, response] of [
     page,
   }) => {
     await mockApi(page, { writers: (route) => route.fulfill(response) });
-    await openPreferences(page, "he");
+    await openModels(page, "he");
     await expect(
       page.getByText(
         "לא הצלחנו לטעון את אפשרויות מודל הכתיבה. ייעשה שימוש במודל הכתיבה המוגדר כברירת מחדל.",
@@ -251,7 +257,7 @@ for (const [code, locale, text] of [
 test("the total cost is visible on a phone", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await mockApi(page);
-  await openPreferences(page, "he");
+  await openModels(page, "he");
   const total = page.getByTestId("total-draft-cost");
   await total.scrollIntoViewIfNeeded();
   await expect(total).toBeInViewport();
