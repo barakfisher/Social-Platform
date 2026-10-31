@@ -16,6 +16,7 @@ from app.models import KnowledgeChunk, KnowledgeDocument
 from app.topic_suggestions import (
     EXCERPT_OVERHEAD_TOKENS,
     MAX_SUGGESTIONS,
+    SAMPLE_CHUNKS,
     SAMPLE_CHUNKS_PER_DOCUMENT,
     SAMPLE_DOCUMENTS,
     SYSTEM,
@@ -202,7 +203,7 @@ def test_sources_are_untrusted_data_in_the_user_message(suggest_api):
 
 def test_sampling_spreads_across_and_within_documents(suggest_api):
     client, factory, complete = suggest_api
-    long = add_document(factory, "Long", [f"Long chunk {i}." for i in range(10)])
+    long = add_document(factory, "Long", [f"Long chunk {i}." for i in range(SAMPLE_CHUNKS * 2)])
     short = add_document(factory, "Short", ["Short chunk 0."])
     complete.return_value = reply()
     client.post("/generation/topic-suggestions", json={"language": "en"})
@@ -210,9 +211,33 @@ def test_sampling_spreads_across_and_within_documents(suggest_api):
     # Every document is represented before any gets a second chunk.
     assert {sent[0], sent[1]} == {"Short chunk 0.", "Long chunk 0."}
     long_sent = [c for c in sent if c.startswith("Long")]
-    assert len(long_sent) == SAMPLE_CHUNKS_PER_DOCUMENT
-    assert long_sent[0] == "Long chunk 0." and long_sent[-1] == "Long chunk 9."
+    # Two documents share the sample, so each may give half of it.
+    assert len(long_sent) == SAMPLE_CHUNKS // 2
+    assert long_sent[0] == "Long chunk 0."
+    assert long_sent[-1] == f"Long chunk {SAMPLE_CHUNKS * 2 - 1}."
     assert long != short
+
+
+def test_a_single_document_that_fits_the_sample_is_read_whole(suggest_api):
+    # A Knowledge Base of one file of finished posts: three excerpts hid which posts already
+    # exist, so the ideas restated them.
+    client, factory, complete = suggest_api
+    chunks = [f"Post part {i}." for i in range(SAMPLE_CHUNKS - 1)]
+    add_document(factory, "Sample posts", chunks)
+    complete.return_value = reply()
+    client.post("/generation/topic-suggestions", json={"language": "en"})
+    assert [s["content"] for s in sent_sources(complete)] == chunks
+
+
+def test_a_few_documents_fill_the_whole_sample(suggest_api):
+    client, factory, complete = suggest_api
+    for i in range(2):
+        add_document(factory, f"Doc {i}", [f"Doc {i} part {n}." for n in range(SAMPLE_CHUNKS)])
+    complete.return_value = reply()
+    client.post("/generation/topic-suggestions", json={"language": "en"})
+    sent = sent_sources(complete)
+    assert len(sent) == SAMPLE_CHUNKS
+    assert [s["title"] for s in sent].count("Doc 0") == SAMPLE_CHUNKS // 2
 
 
 def test_at_most_the_most_recent_documents_are_sampled(suggest_api):
