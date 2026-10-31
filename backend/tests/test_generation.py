@@ -316,7 +316,7 @@ def test_context_budget_and_prompt_injection_are_isolated_as_data():
 
 
 def context_source(content: str, title: str = "Source") -> dict:
-    # Same keys search_context returns; every one of them counts toward the budget.
+    # Same keys relevant_context returns; every one of them counts toward the budget.
     return {
         "chunk_id": str(uuid4()),
         "document_id": str(uuid4()),
@@ -334,7 +334,9 @@ def context_tokens(sources: list[dict]) -> int:
 def test_context_budget_boundary_keeps_exact_fit_and_truncates_one_token_less():
     source = context_source("Rosemary grows in the community garden. " * 40)
     full = context_tokens([source])
-    assert bounded_context([source], full) == [source]
+    whole = bounded_context([source], full)
+    assert whole == [source]
+    assert whole[0]["source_location"] is not source["source_location"]
     cut = bounded_context([source], full - 1)
     assert len(cut) == 1 and context_tokens(cut) <= full - 1
     assert source["content"].startswith(cut[0]["content"])
@@ -975,14 +977,13 @@ def test_translation_fallback_is_bounded_owned_and_not_replayed(service_api, set
     )
     translation = {"usage": {"cost_usd": 0.00003}, "cost_usd": 0.00003}
     with factory() as session:
-        from app.generation import search_context
+        from app.generation import relevant_context
 
-        sources = search_context(
+        sources = relevant_context(
             session,
             [1.0, 0.0, 0.0],
             user_id=LOCAL_USER_ID,
             workspace_id=LOCAL_WORKSPACE_ID,
-            limit=settings.generation_retrieval_count,
             max_distance=settings.generation_max_distance,
         )
     assert sources
@@ -990,7 +991,7 @@ def test_translation_fallback_is_bounded_owned_and_not_replayed(service_api, set
     translated_result = ("רוזמרין בגינה", translation, translation_reservation)
     with (
         patch(
-            "app.generation.search_context",
+            "app.generation.relevant_context",
             side_effect=[[], sources if outcome == "success" else []],
         ) as search,
         patch("app.generation.translate_query", return_value=translated_result) as translate,
@@ -1084,7 +1085,7 @@ def test_translated_retrieval_keeps_usage_when_writer_fails(service_api):
         "generation_invalid_response", {"usage": {"cost_usd": 0.00002}}
     )
     with (
-        patch("app.generation.search_context", side_effect=[[], [source]]),
+        patch("app.generation.relevant_context", side_effect=[[], [source]]),
         patch("app.generation.translate_query", return_value=("רוזמרין", translation, 0.0001)),
         patch("app.generation.check_draft") as review,
     ):

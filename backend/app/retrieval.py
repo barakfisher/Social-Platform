@@ -3,7 +3,7 @@ from typing import cast as typed_cast
 from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import cast, func, select
+from sqlalchemy import cast, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -11,28 +11,41 @@ from app.embeddings import profile_key
 from app.models import KnowledgeChunk, KnowledgeDocument
 
 
-def spread_across_documents(capped: list[dict], nearest: list[dict], count: int) -> list[dict]:
-    """Up to count chunks: the capped selection, filled up from the nearest overall, with
-    each document's best chunk first.
+def documents_first(chunks: list[dict]) -> list[dict]:
+    """Each document's best chunk first, then the rest, each by distance.
 
-    capped holds the nearest chunks with at most the per-document cap from any document;
-    nearest holds the nearest chunks with no cap. Filling from nearest only happens when
-    capped runs short, which means no other document has a chunk within the limit, so a
-    Knowledge Base with one relevant document still gets count chunks. Putting each
-    document's best chunk first means a tight context budget trims a document's extra chunks
-    before it drops another document entirely.
+    A context budget then trims a document's extra chunks before it drops another document
+    entirely, however many nearer chunks one long document has (SP-25).
     """
-    chosen = list(capped)
-    taken = {candidate["chunk_id"] for candidate in chosen}
-    chosen += [c for c in nearest if c["chunk_id"] not in taken][: count - len(chosen)]
-    chosen.sort(key=lambda candidate: candidate["distance"])
-    seen: set[str] = set()
     leads: list[dict] = []
     rest: list[dict] = []
-    for candidate in chosen:
-        (rest if candidate["document_id"] in seen else leads).append(candidate)
-        seen.add(candidate["document_id"])
+    seen: set[str] = set()
+    for chunk in sorted(chunks, key=lambda chunk: chunk["distance"]):
+        (rest if chunk["document_id"] in seen else leads).append(chunk)
+        seen.add(chunk["document_id"])
     return leads + rest
+
+
+def relevant_context(
+    session: Session,
+    vector: list[float],
+    *,
+    user_id: UUID,
+    workspace_id: UUID,
+    max_distance: float,
+) -> list[dict]:
+    """Every chunk within max_distance, each document's best first: relevance alone decides
+    what the writer reads; the context budget only caps it (docs/implementation.md)."""
+    return documents_first(
+        search_context(
+            session,
+            vector,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            limit=None,
+            max_distance=max_distance,
+        )
+    )
 
 
 def search_context(
@@ -41,12 +54,10 @@ def search_context(
     *,
     user_id: UUID,
     workspace_id: UUID,
-    limit: int = 5,
+    limit: int | None = 5,
     max_distance: float | None = None,
-    per_document: int | None = None,
 ) -> list[dict]:
-    """The nearest chunks within max_distance, or, with per_document, at most that many from
-    one document while other documents still have chunks within the limit (SP-25)."""
+    """The nearest chunks within max_distance, nearest first; limit None returns them all."""
     settings = get_settings()
     distance = cast(
         KnowledgeChunk.embedding, Vector(settings.embedding_dimensions)
@@ -71,31 +82,7 @@ def search_context(
         .where(*filters)
         .order_by(distance, KnowledgeChunk.id)
     )
-    found = rows(session.execute(nearest.limit(limit)).all())
-    if per_document is None:
-        return found
-    # Each chunk's rank within its own document, so the cap applies however many nearer
-    # chunks one long document has.
-    ranked = (
-        select(
-            KnowledgeChunk.id.label("id"),
-            distance.label("distance"),
-            func.row_number()
-            .over(partition_by=KnowledgeChunk.document_id, order_by=(distance, KnowledgeChunk.id))
-            .label("rank"),
-        )
-        .join(KnowledgeDocument, KnowledgeDocument.id == KnowledgeChunk.document_id)
-        .where(*filters)
-        .subquery()
-    )
-    capped_ids = (
-        select(ranked.c.id)
-        .where(ranked.c.rank <= per_document)
-        .order_by(ranked.c.distance, ranked.c.id)
-        .limit(limit)
-    )
-    capped = rows(session.execute(nearest.where(KnowledgeChunk.id.in_(capped_ids))).all())
-    return spread_across_documents(capped, found, limit)
+    return rows(session.execute(nearest if limit is None else nearest.limit(limit)).all())
 
 
 def rows(result) -> list[dict]:

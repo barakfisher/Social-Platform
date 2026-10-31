@@ -22,7 +22,7 @@ from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID
 from app.models import BrandDNA, GenerationRun, KnowledgeDocument
 from app.post_presets import CTAS, OTHER, TONES, CtaId, ToneId
 from app.query_translation import translate_query
-from app.retrieval import search_context
+from app.retrieval import relevant_context
 from app.review_models import review_model_options
 from app.writer_models import (
     provider_tokens,
@@ -35,6 +35,8 @@ router = APIRouter(prefix="/generation", tags=["generation"], dependencies=[Depe
 PROMPT_VERSION = "grounded-post-v5"
 # Share of GENERATION_MAX_REQUEST_USD the cross-language query fallback may reserve.
 TRANSLATION_BUDGET_SHARE = 0.2
+# Far more citations than a real draft makes; a longer list is malformed output.
+MAX_CITED_SOURCES = 200
 SYSTEM = """
 Write a social post using only the provided brand profile and cited knowledge for factual
 claims.
@@ -126,7 +128,9 @@ class GenerateInput(BaseModel):
 class Completion(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     content: str = Field(min_length=1, max_length=5000)
-    source_ids: list[str] = Field(max_length=10)
+    # The writer may cite every source it received; each ID is checked against them. The
+    # bound only rejects malformed output.
+    source_ids: list[str] = Field(max_length=MAX_CITED_SOURCES)
     warnings: list[str] = Field(max_length=5)
 
 
@@ -134,6 +138,11 @@ def bounded_context(sources: list[dict], budget: int) -> list[dict]:
     selected: list[dict] = []
     for source in sources:
         candidate = dict(source)
+        if generation_tokens(json.dumps([*selected, candidate], ensure_ascii=False)) <= budget:
+            # A whole source that fits needs no search, so a large budget stays fast.
+            candidate["source_location"] = dict(source["source_location"])
+            selected.append(candidate)
+            continue
         # Bound JSON including source metadata, while preserving Unicode character boundaries.
         low, high, best = 1, len(source["content"]), 0
         while low <= high:
@@ -313,14 +322,12 @@ def generate_locked(payload: GenerateInput):
             raise GenerationError("generation_topic_too_long")
         vector = embed_texts([payload.topic])[0]
         with SessionLocal() as session:
-            sources = search_context(
+            sources = relevant_context(
                 session,
                 vector,
                 user_id=LOCAL_USER_ID,
                 workspace_id=LOCAL_WORKSPACE_ID,
-                limit=settings.generation_retrieval_count,
                 max_distance=settings.generation_max_distance,
-                per_document=settings.generation_chunks_per_document,
             )
         stage_budget = settings.generation_max_request_usd / 2
         if not sources:
@@ -333,14 +340,12 @@ def generate_locked(payload: GenerateInput):
                 stage_budget = (settings.generation_max_request_usd - translation_reservation) / 2
                 vector = embed_texts([query])[0]
                 with SessionLocal() as session:
-                    sources = search_context(
+                    sources = relevant_context(
                         session,
                         vector,
                         user_id=LOCAL_USER_ID,
                         workspace_id=LOCAL_WORKSPACE_ID,
-                        limit=settings.generation_retrieval_count,
                         max_distance=settings.generation_max_distance,
-                        per_document=settings.generation_chunks_per_document,
                     )
         sources = bounded_context(sources, settings.generation_context_budget)
         if not sources:

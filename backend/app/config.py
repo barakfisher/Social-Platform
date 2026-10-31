@@ -38,14 +38,16 @@ class Settings(BaseSettings):
     # Claim-level reviews repeat every claim and its quotes, and reasoning reviewers spend
     # part of this limit thinking; see docs/implementation.md.
     generation_review_max_output_tokens: int = Field(default=5000, ge=100, le=5000)
-    generation_prompt_budget: int = Field(default=6000, ge=1000, le=16000)
-    generation_context_budget: int = Field(default=2800, ge=100, le=6000)
-    generation_retrieval_count: int = Field(default=5, ge=1, le=10)
-    # At most this many retrieved chunks from one document while other documents still have
-    # chunks within the distance limit, so one document cannot crowd out the rest (SP-25).
-    generation_chunks_per_document: int = Field(default=3, ge=1, le=10)
+    # Room for a full context plus each stage's instructions, brand, preferences and, for the
+    # reviewer, the draft twice.
+    generation_prompt_budget: int = Field(default=30000, ge=1000, le=64000)
+    # The writer reads every chunk within generation_max_distance; this only caps it
+    # (docs/implementation.md, "The writer reads everything relevant").
+    generation_context_budget: int = Field(default=24000, ge=100, le=48000)
     generation_max_distance: float = Field(default=0.65, ge=0, le=2)
-    generation_max_request_usd: float = Field(default=0.37, gt=0, le=1)
+    # A reservation ceiling, not spend: it must afford the largest admitted prompt for every
+    # writer and reviewer (tests/test_generation_budget.py).
+    generation_max_request_usd: float = Field(default=0.65, gt=0, le=1)
     # Private uploaded source files (SP-9). Opaque keys only; never served directly.
     source_storage_dir: str = "var/sources"
     upload_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)

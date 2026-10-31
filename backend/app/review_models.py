@@ -9,9 +9,11 @@ from app.generation_provider import GenerationError, attempt_estimate_usd, model
 # GPT-5.6-terra: median of 16 reviews of the owner's medium Hebrew drafts (5 at
 # source-review-v7 provider-reported, 11 at v6 estimated from cost; 1,593-3,882 completion
 # tokens, 2026-10-29, SP-24). The earlier figure from one 505-character draft understated
-# the cost of real drafts by about 40%.
+# the cost of real drafts by about 40%. Re-measured 2026-10-31 after the writer began reading
+# every relevant chunk and citing more of them: median of 5 checked reviews (2,720-3,536
+# prompt / 1,778-3,601 completion).
 TYPICAL_REVIEW_TOKENS = {
-    "openai/gpt-5.6-terra": (2650, 2950),
+    "openai/gpt-5.6-terra": (3423, 3053),
     "openai/gpt-4.1": (2021, 501),
 }
 
