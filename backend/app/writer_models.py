@@ -35,16 +35,19 @@ class WriterProfile:
 
 
 # Only measured writers have a profile; a listed writer without one cannot be chosen.
-# GPT-4.1: o200k counts match within a constant 29 tokens; typical tokens from a stored
-# Hebrew LinkedIn run (2,447 prompt / 251 completion, 2026-10-27).
+# GPT-4.1: o200k counts match within a constant 29 tokens; typical tokens are the medians of
+# six live Hebrew drafts on the owner's Knowledge Base after the writer began reading every
+# relevant chunk (5,593-19,043 prompt / 202-345 completion, 2026-10-31).
 # Gemini 3.8 Flash: ratio measured on long EN/HE text (up to 1.2, rounded up); typical tokens
 # from a realistic Hebrew LinkedIn prompt (2,585 / 1,007 incl. 775 reasoning, 2026-10-28). It
 # reasons before writing: up to 1,055 completion tokens on synthetic sources, but a live Hebrew
 # draft from Wikipedia sources used all of 2,000 and was cut off (2026-10-28), so 4,000.
+# Typical tokens re-measured on a live Hebrew medium draft reading every relevant chunk
+# (18,236 / 3,271, 2026-10-31).
 WRITER_PROFILES = {
-    "openai/gpt-4.1": WriterProfile(token_ratio=Decimal("1.0"), typical_tokens=(2447, 251)),
+    "openai/gpt-4.1": WriterProfile(token_ratio=Decimal("1.0"), typical_tokens=(13886, 311)),
     "google/gemini-3.8-flash": WriterProfile(
-        token_ratio=Decimal("1.25"), typical_tokens=(2585, 1007), output_tokens=4000
+        token_ratio=Decimal("1.25"), typical_tokens=(18236, 3271), output_tokens=4000
     ),
 }
 

@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.chunking import chunk_text
 from app.config import get_settings
 from app.embeddings import profile_key
 from app.generation_provider import GenerationError
@@ -389,3 +390,24 @@ def chunk_ids(factory, document_id: str) -> list[str]:
                 .order_by(KnowledgeChunk.chunk_order)
             )
         ]
+
+
+def test_a_full_sample_of_real_size_chunks_is_read_whole_at_the_default_budget(
+    suggest_api,
+    settings,  # noqa: F811
+):
+    # Owner decision 2026-10-31: suggestions share GENERATION_CONTEXT_BUDGET with the writer,
+    # so at the code defaults every sampled chunk of the chunker's own size is read whole.
+    client, factory, complete = suggest_api
+    for field in ("generation_context_budget", "generation_prompt_budget"):
+        setattr(settings, field, type(settings).model_fields[field].default)
+    text = "מנטורינג הוא תהליך שבו אדם מנוסה מלווה אדם אחר בדרכו המקצועית. " * 400
+    chunk = chunk_text(text)[0]["content"]
+    for i in range(SAMPLE_DOCUMENTS):
+        add_document(factory, f"Doc {i}", [f"{i}.{n} {chunk}" for n in range(3)])
+    complete.return_value = reply()
+    response = client.post("/generation/topic-suggestions", json={"language": "he"})
+    assert response.status_code == 200, response.text
+    sent = sent_sources(complete)
+    assert len(sent) == SAMPLE_DOCUMENTS * SAMPLE_CHUNKS_PER_DOCUMENT
+    assert all(s["content"].endswith(chunk) for s in sent)

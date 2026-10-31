@@ -882,7 +882,8 @@ Choice:
 - Representative sampling, no clustering: the 8 most recently updated Ready documents of the
   workspace, up to 3 chunks spread evenly through each (start, middle, end), interleaved so
   every document is represented before any gets a second chunk. Each excerpt gets an equal
-  share of the 2,800-token context budget (cut at a word), so long English chunks cannot
+  share of the context budget, cut at a word (2,800 tokens at SP-6; 24,000 since 2026-10-31,
+  see "The writer reads everything relevant"), so long English chunks cannot
   crowd later documents out: QA measured that whole 800-token chunks let only 4 of 8 English
   documents through. No embedding call.
 - One call to the chosen writer (default GPT-4.1) with a strict JSON schema. Sources go in
@@ -927,7 +928,8 @@ language, goal or writer change) and generic "try again" text for errors a retry
 (now specific EN/HE messages).
 
 Limits: ideas come from at most 8 documents, each excerpt a share of the budget (about 100
-tokens with 8 documents × 3 chunks), so a large Knowledge Base is sampled, not covered. The rationale
+tokens with 8 documents × 3 chunks at SP-6; about 940 since the 24,000-token budget of
+2026-10-31, enough for whole chunks), so a large Knowledge Base is sampled, not covered. The rationale
 is the model's own short text; it is shown as an idea, never as a fact about the brand.
 
 ## SP-27: room for the source check on medium Hebrew drafts — 2026-10-30
@@ -1195,3 +1197,106 @@ tests in topic-suggestions.spec.ts). The run used port 53173 with APP_HOSTS set 
 because the main checkout's server held 53073; csrf-guard tests only pass when APP_HOSTS
 names the served host. Visually checked in the browser pane in HE and EN at 375px and
 1280px, with suggestion replies stubbed in the page (no paid call).
+
+## The writer reads everything relevant (relevance decides, 24K-token safety cap) — 2026-10-31
+
+Problem: drafts were thin. On the owner's Knowledge Base (5 Ready documents, 59 chunks,
+about 22,000 o200k tokens), the material within the 0.65 distance limit for the six topics
+already drafted was 11–39 chunks and 3,163–10,610 tokens per topic, but the writer received at
+most 5 chunks inside a 2,800-token context. For "ההבדל בין מנטורינג לאימון אישי" it received
+only coaching chunks and said in its warning that it had nothing on mentoring, although the
+mentoring article's best chunk was within the limit (0.58). The owner's direction: the budget
+must not decide writing quality; the writer should read enough to know what to write.
+
+Acceptance criteria:
+1. The writer receives every chunk within GENERATION_MAX_DISTANCE, with no count limit, each
+   document's best chunk first and then the rest, each by distance.
+2. GENERATION_CONTEXT_BUDGET (default 24,000 o200k tokens) is the only ceiling. Beyond it the
+   lowest-ranked material is cut; a lower-ranked chunk never displaces a higher-ranked one,
+   and a document's extra chunks are trimmed before another document is dropped.
+3. The translated fallback query follows the same rule.
+4. Nothing within the limit is still 409 `insufficient_context` with no writer call.
+5. GENERATION_PROMPT_BUDGET admits a full context plus the writer's and the reviewer's own
+   instructions, draft, brand and preferences; the spending preflight affords the largest
+   admitted prompt for every writer and reviewer a user may choose (the code-defaults guard
+   in tests/test_generation_budget.py).
+6. The writer may cite every source it received; citations are still checked against them.
+7. Hermetic tests cover 1–6 (no network, no `.env`).
+8. A paid live comparison on the owner's six topics against their stored runs: sources
+   received and cited, draft length, cost, time, and no spending-limit, prompt-limit,
+   timeout or review failure.
+9. `.env.example`, the typical-token cost estimates and this log are updated.
+
+Non-goals: the writer's instructions (length, "never pad"), sample posts as style, how topic
+suggestions sample, cross-language retrieval and an LLM relevance judge.
+
+Topic suggestions (owner decision after QA, 2026-10-31): they keep sharing
+GENERATION_CONTEXT_BUDGET, so each sampled excerpt's share grows from about 100 tokens to about
+940 (8 documents × 3 chunks), enough to read real chunks whole; the 8-document, 3-chunk
+sampling is unchanged. Rejected: a separate suggestion budget at the old size, which keeps
+ideas built from about 5% of the owner's Knowledge Base. Pinned by
+`test_a_full_sample_of_real_size_chunks_is_read_whole_at_the_default_budget` (code-default
+budgets; it fails at 2,800). Live, one Hebrew LinkedIn call on the owner's Knowledge Base
+(GPT-4.1): 15 whole excerpts from 5 documents, 5,441 context tokens, 6,312 prompt tokens,
+$0.0150, 3.6 s, three ideas (SP-6 measured $0.0078). All three cited only the sample-posts
+document: what the sample picks, not the budget, now limits suggestions, and sample posts
+are still treated as facts (the style follow-up above).
+
+Choice (owner-approved, option A of three):
+- `relevant_context` (`app/retrieval.py`) returns every chunk within GENERATION_MAX_DISTANCE,
+  ordered by `documents_first`: each document's best chunk, then the rest, each by distance.
+  The writer and the translated fallback query both use it. The Knowledge Base search
+  endpoint keeps `search_context` with its own limit.
+- GENERATION_RETRIEVAL_COUNT and GENERATION_CHUNKS_PER_DOCUMENT are gone (an old `.env`
+  value is ignored). A `.env` copied from the old `.env.example` still sets the old prompt,
+  context and request-cap values and keeps the 2,800-token context: remove those lines.
+  GENERATION_CONTEXT_BUDGET 2,800 → 24,000 (bound 48,000),
+  GENERATION_PROMPT_BUDGET 6,000 → 30,000 (bound 64,000): room above a full context for each
+  stage's instructions, brand, preferences and, for the reviewer, the longest draft twice.
+- GENERATION_MAX_REQUEST_USD 0.37 → 0.65. It is a reservation ceiling, not spend: the
+  code-defaults guard showed Terra's worst case for a 30,000-token review with one retry is
+  $0.2405, above the $0.148 smallest stage allowance at 0.37.
+- The writer may cite up to MAX_CITED_SOURCES (200, a malformed-output bound) instead of 10;
+  every cited ID must still be one it received.
+- `bounded_context` takes a whole source that fits without its prefix search, so a large
+  budget stays fast. Its cut of the last source to a prefix is unchanged.
+- Typical-token cost estimates re-measured from the live runs below (GPT-4.1, Gemini 3.8
+  Flash, Terra).
+
+Rejected alternatives:
+- Send the whole Knowledge Base while it fits: every post would read unrelated documents
+  (the leadership article for a coaching post), and it must switch to relevance anyway once
+  the Knowledge Base outgrows the cap.
+- A larger fixed count (15 chunks / 12,000 tokens): still an arbitrary number that decides
+  how much the writer reads.
+- An LLM judge over every chunk (owner's question): a paid call per draft that grows with the
+  Knowledge Base, and the writer already filters what it receives. Worth reconsidering only
+  for what embeddings miss (the cross-language gap), on a wider candidate band.
+- This reverses SP-25's rejection of "raising the count or the distance limit": the count is
+  gone and the limit is unchanged, so no weaker chunks enter; one long document can no longer
+  crowd out others, because every document within the limit is included and `documents_first`
+  puts its best chunk ahead of any document's extras.
+
+Verification: backend 840 passed with PostgreSQL (retrieval tests rewritten for the new rule:
+every chunk within the limit reaches the writer beyond the old count, a second document behind
+40 nearer chunks, a full budget is the only ceiling and cuts nearest-last, the writer and
+reviewer prompt guards admit a full context with the longest draft and every source cited —
+this test fails at a 26,500-token prompt budget, where only the review is over — both retrieval calls use the limit, nothing
+within the limit is still `insufficient_context`); the spending guard failed at $0.37 before
+the cap was raised; ruff, `mypy app`, `alembic check`.
+
+Live (paid, owner's Knowledge Base, the latest inputs of all 7 drafted topics, about $0.49):
+the writer received 11–44 chunks from 3–4 documents (4,795–18,246 context tokens, recorded by
+the run script at the writer call; stored runs keep only cited sources; before at most 5
+chunks in 2,800) and cited 3–6 of them from 1–3 documents. Writer prompts 5,593–19,043 tokens;
+total cost $0.050–0.086 per draft (before $0.019–0.052); 28–63 s per draft. No spending-limit, prompt-limit or timeout failure;
+the Gemini writer ran with an 18,236-token prompt. "ההבדל בין מנטורינג לאימון אישי" now cites
+the coaching, mentoring and sample-post documents and contrasts them, with no warning (before:
+coaching only, and a warning that nothing on mentoring was supplied).
+
+Not solved here, measured: 2 of 7 source checks ended unchecked (Terra coverage/evidence
+validity, the pre-existing SP-24/SP-27 failure; 6 of 8 earlier stored runs were unchecked).
+Checked drafts carry more points to check (2–14, before 0–1): the flagged sentences are mostly
+the writer's own elaborations found in no chunk ("אמון, הקשבה", "לגלות בעצמו"), and at least
+one flagged claim ("אדם בעל ניסיון עשיר") is in a cited chunk, a reviewer miss. Drafts stay
+short (323–811 characters) under the writer's "never pad" instructions, a non-goal here.

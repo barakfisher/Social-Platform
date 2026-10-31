@@ -1,162 +1,136 @@
-# Social Platform continuation handoff — 2026-10-31 (after PR #23, SP-27 Done)
+# Social Platform continuation handoff — 2026-10-31 (writer reads everything relevant)
 
 ## Startup
 
 Read AGENTS.md, this file, docs/implementation.md (decision entries at the end) and
 verification/generation-grounding.md (latest sections at the end). Inspect git status/log and
-confirm the last delivery is on `main` by content:
-`git grep -n 'REVIEW_VERSION = "source-review-v8"' origin/main -- backend/app/grounding.py`.
+the state of the PR for branch `claude/writer-context-relevance`. Confirm whether it reached
+`main` by content, not by the badge:
+`git grep -n 'def relevant_context' origin/main -- backend/app/retrieval.py`.
 Then give a short next-step summary and wait. Do not start engineering, paid calls, pushes or
 PRs on startup. Linear works through the Linear MCP (project Social Platform).
 
 Never print, overwrite or stage ignored backend/.env. It holds only `EMBEDDING_*` values;
 generation has no key of its own and falls back to the embedding key on OpenRouter
 (`app.generation_provider.generation_key()`), so a run-only script must use that function,
-not `settings.generation_api_key`. Preserve the owner's Brand DNA, the four Ready Knowledge
-Base documents, the 19 generation runs and the saved post. **Paid model calls need a dollar
-cap each time.** Every grant from earlier sessions (the $1.50 cap, "merge" for #23) covered
-that work only and has ended.
+not `settings.generation_api_key`. Preserve the owner's Brand DNA, the five Ready Knowledge
+Base documents (59 chunks), the generation runs (29 on 2026-10-31) and the saved post.
+**Paid model calls need a dollar cap each time.** Every grant from earlier sessions has ended.
 
-## Deliveries since the last handoff (PRs #20–#23)
+## Deliveries since the last handoff
 
-- **#20:** the previous handoff.
-- **#21 (SP-27 limit, SP-17 file slice):** review output limit 4,000 → 5,000 and
-  `GENERATION_MAX_REQUEST_USD` $0.31 → $0.37 (option 1, owner-approved). PDF/TXT/MD uploads:
-  raw `application/octet-stream` (multipart stays refused by the write guard and proxy),
-  signature vs extension, strict UTF-8, per-workspace checksum dedupe, private files on a
-  Compose volume (`source_files` at `/app/var/sources`, random keys, 0600), pypdf extraction
-  outside the row lock with `page_start`/`page_end` on chunks.
-- **#22 (SP-8/9/10 web slice):** web pages through trafilatura (Markdown, favor_precision),
-  SSRF checks on every redirect hop with the request pinned to the resolved IP; "Load again
-  from the site" with a staging copy (`replaces_id`), paragraph diff, and replace / append
-  (dated `## Added YYYY-MM-DD / נוסף YYYY-MM-DD` heading) / keep; chunks carry
-  `source_location.added_on`; writer prompt `grounded-post-v5` says newer wins on conflicts.
-- **#23 (SP-27 Done): `source-review-v8`.** `CONNECTIVES` gains the bare word בהם; version
-  bumped because the reviewer prompt lists connectives verbatim (owner chose the bump over
-  keeping v7, so one version name never covers two prompts). Stored v7 reviews now ask for a
-  new check.
+- **#24:** the previous handoff. **#25 (SP-10):** Knowledge Base focus, names, live
+  announcements, upload stages and error messages. **#26:** Create Post split into "Post
+  details" / "Models and cost" tabs; topic ideas open in a native `<dialog>`.
+- **This branch, `claude/writer-context-relevance` (PR pending owner merge):** the writer
+  reads every chunk within GENERATION_MAX_DISTANCE (0.65), each document's best chunk first
+  (`relevant_context`, `documents_first` in app/retrieval.py). GENERATION_CONTEXT_BUDGET
+  2,800 → 24,000 is only a safety cap; GENERATION_PROMPT_BUDGET 6,000 → 30,000;
+  GENERATION_MAX_REQUEST_USD 0.37 → 0.65 (reservation ceiling: Terra's worst-case review at
+  30,000 tokens is $0.2405 with one retry). GENERATION_RETRIEVAL_COUNT and
+  GENERATION_CHUNKS_PER_DOCUMENT are removed. The writer may cite every source it received.
+  Topic suggestions keep sharing the context budget (owner decision), so sampled chunks are
+  read whole. Decision, criteria, rejected options and evidence: the last section of
+  docs/implementation.md.
 
-All of #21–#23 were verified live on 2026-10-30/31 (details in
-verification/generation-grounding.md and the comments on SP-8, SP-9, SP-10, SP-27).
+## Decisions taken with the owner this session (why, not what)
+
+- **Relevance decides how much the writer reads, not a count or a token budget.** Measured:
+  the material within 0.65 for the owner's seven topics was 11–39 chunks / 3,163–10,610
+  tokens; the writer used to get at most 5 chunks in 2,800, and for "mentoring vs coaching"
+  got only coaching chunks. Rejected: the whole Knowledge Base every time (unrelated
+  documents in every post, and it stops scaling), and a larger fixed count (still arbitrary).
+- **No LLM relevance judge for now.** The owner asked; it adds a paid call per draft that
+  grows with the Knowledge Base, and the writer already filters what it gets. Reconsider only
+  for what embeddings miss (the cross-language gap), on a wider candidate band.
+- **Topic suggestions share the larger budget** rather than keeping a separate 2,800 one.
 
 ## Lessons (do not re-learn)
 
-- **Never run the backend tests against the owner's database.** The conftest `api` fixture
-  deletes every Knowledge Base document in the local workspace (inside a transaction it rolls
-  back, but one crash away from real loss). Create a disposable DB (`CREATE DATABASE
-  social_test`, grant the runtime role usage and default privileges, `alembic upgrade head`
-  as admin), run pytest from the repo root (no `.env` there) with
-  `TEST_DATABASE_URL=…/social_test` and `env -u OPENROUTER_API_KEY`, then drop it.
-- **"Check again" writes.** `POST /generation/{id}/review` stores the new review on the run,
-  and on `draft_blocked` it marks the run Failed and drops its content. For measurement, call
-  `app.grounding.review_draft` directly on drafts read in a `SET TRANSACTION READ ONLY`
-  session (scratchpad `sp27.py` pattern).
-- **To observe a reload's in-between state, pause the worker** (`docker compose pause
-  worker`): the choice is taken, the embedding job waits in Redis, and search and status can
-  be checked before `unpause`. To simulate "the site changed", edit `source_text` (and a
-  chunk) of a test source in the DB; no public page changes on demand.
-- **Linear auto-closed SP-27 on merge again,** minutes before its last criterion was
-  verified. After every merge naming an issue, check its status and criteria.
-- **Merging into `main`:** the ruleset requires one approving review, linear history and
-  resolved threads, and requests a Copilot review on push. The owner merges with an admin
-  bypass (`gh pr merge N --squash --admin`) only when they say so; squash or rebase, never a
-  merge commit.
-- **Verify a reviewer change offline before paying.** Raw reviews from every paid run are
-  kept outside the repo; a rule change is re-scored on them for free (v8: 8 SP-27 reviews and
-  54 older ones). Keep doing this.
-- **Key usage lags; failed reviews report no cost.** Check `GET /api/v1/key` before every
-  paid call with a margin (0.15 used), and wrap uncapped scripts such as
-  `evaluate_generation.py` in a watchdog that stops at a lower threshold.
-- **The full live evaluation cannot pass with GPT-4.1 as writer:** it stops at the first
-  garden post ("support the garden together", correctly flagged). Use
-  `--scenarios-only` (19/20 under v5; the failure is the same writer habit) and the
-  reviewer-only cases (34/34 under v8) as the real signals.
-- **Shell traps on this Mac:** zsh treats `===` as an expansion and aborts the whole
-  command (two doc appends silently did not run); there is no `timeout`; a background
-  `… | grep` buffers its output, so read the script's own output file instead.
-- **External test targets:** httpbin.dev works for redirect tests (httpbin.org and
-  postman-echo return 403); Wikipedia `Special:Random` hits 429 on the second hop; gov.il
-  returns 403 to bots (shows as `url_http_error`).
-- Earlier lessons still hold: measure the failing check before fixing a reviewer; a broken
-  `sitecustomize.py` fails open; never name helper scripts after stdlib modules; three
-  separate OpenRouter limits (credits, key limit, workspace budget); CI runs `mypy app`;
-  reasoning tokens count against output limits; `next dev` on 53073 serves whatever is
-  checked out, while the API container needs a rebuild.
+- **This session ran the backend tests against the owner's database** (`TEST_DATABASE_URL`
+  → `social`), following README.md, which still says to do so. The rollback held and the data
+  matched afterwards (5 documents, 59 chunks, 1 brand, 1 post), but the earlier lesson stands:
+  use a disposable `social_test` database (create, grant, `alembic upgrade head` as admin, run
+  from the repo root with `env -u OPENROUTER_API_KEY`, drop). **README.md should be fixed**
+  so it stops pointing at the owner's database.
+- **Paid calls this session ran without a stated dollar cap.** The owner approved the live
+  comparison as an acceptance criterion and asked for the suggestion call, but no cap was
+  named. Ask for one before the call. Key usage went from $5.777 (last handoff) to $6.419,
+  which includes the owner's own app drafts; this session's calls were about $0.51 (7 drafts
+  $0.486, one suggestion $0.015, embeddings negligible). $3.58 of the $10 key limit remains.
+- **Stored runs keep only cited sources.** To know what the writer *received*, record it at
+  the writer call (scratchpad pattern: wrap `app.generation.chat_completion`).
+- **Replaying stored inputs:** runs before the preset IDs store `tone: "Brand voice"` and
+  `cta: ""`; map them to `brand_voice` / `none` or validation fails.
+- **Token counts differ by tokenizer:** the owner's Knowledge Base is ~41,000 cl100k tokens
+  (chunker) but ~22,000 o200k tokens (budgets). Budgets are o200k.
+- **The settings test fixture reads `.env`** (`get_settings()`), so a GENERATION_* value
+  there silently changes what tests check; only tests/test_generation_budget.py builds
+  settings from code defaults. A `.env` copied from the old `.env.example` keeps the 2,800
+  budget: remove those lines.
+- Earlier lessons still hold: "Check again" writes; pause the worker to observe a reload;
+  Linear auto-closes issues on merge (check status and criteria after every merge); merging
+  needs one approving review and linear history (owner merges with `--admin` only when they
+  say so; squash, never a merge commit); verify reviewer changes offline on saved reviews
+  before paying; key usage lags and failed reviews report no cost; GPT-4.1 cannot pass the
+  full live evaluation (use `--scenarios-only` and reviewer-only cases); zsh `===` trap, no
+  `timeout`, buffered background greps; httpbin.dev for redirects; never name scripts after
+  stdlib modules; `next dev` on 53073 serves whatever is checked out, the API needs a rebuild.
 
 ## Open risks and debt
 
-- **SP-8, extraction (found live, criterion "headings and paragraphs" unchecked):**
-  - Hebrew PDFs with mixed Hebrew/Latin lines come out in visual order: words reordered,
-    full stops at line starts. Any Hebrew PDF with English terms, numbers or punctuation is
-    affected, so citations and the source check see garbled text.
-  - Table-layout pages (paulgraham.com) become one 66,785-character paragraph, so a reload
-    treats any edit as the whole page removed and added.
-  - Minor: PDF trailing-space padding inflates token counts; Wikipedia footnotes stay as
-    raw `<sup>` markup.
-  - A fix likely needs a new dependency or library change (bidi handling, or PyMuPDF instead
-    of pypdf): an owner decision under the working agreement.
-- **SP-10, interface (criterion "keyboard navigation and accessible error announcements"
-  unchecked):** focus drops to `<body>` after delete, URL submit and a reload choice; the URL
-  field's error has no `aria-invalid`/`aria-describedby`; focus is not moved into the delete
-  confirmation; every row's buttons share one name with no source title. Also: Hebrew URLs
-  shown percent-encoded; "try again" offered for scanned/encrypted PDFs, where it cannot
-  succeed; `upload_conflict` and `refresh_*` codes have no specific message. Still untested:
-  upload progress vs processing, polling stopping at a terminal state, empty/loading states.
-- **SP-9** has every box checked; response-size, timeout, storage-failure and
-  dispatch-failure limits are verified by tests only. It stays In Progress until the owner
-  closes it.
-- **Source check (v8):** only the bare בהם is a connective (ובהם, בהן, ביניהם still must sit in
-  a claim, until a live review shows otherwise). Medium Hebrew reviews peaked at 4,215 of
-  5,000 tokens; long drafts (2,400 characters) can still end `grounding_review_truncated`
-  (retryable). Earlier v7 limits in docs/implementation.md still apply.
-- **Newer wins** was tested with hand-built sources (4/4), not with retrieval of a real
-  reloaded page. Conflicts inside one chunk are not resolved by dates; an edited paragraph
-  counts as one removed and one new.
-- **Not run this session:** `npm run build`. It would overwrite the `.next` folder the owner's
-  running dev server uses. CI builds the frontend; the frontend did not change after #22.
-- **Carried over:** the 403 workspace-budget error is labelled an authentication failure
-  (app/generation_provider.py, app/embeddings.py; no issue); cross-language retrieval only
-  translates when nothing is found; topic suggestions sample at most 8 documents and show no
-  cost first; SP-5 Done with its media criterion unchecked (belongs to SP-3); stale remote
-  branches, now including `claude/sp-27-review-v8`, which should not be deleted without the
-  owner.
-- **Private files outside git:** `backups/before-sp8-live-check-2026-10-30.dump` (a full
-  dump of the owner's DB, ignored). The owner may delete it. A `social_restore_check`
-  database exists in Postgres from an earlier restore drill; leave it.
+- **Draft quality is still the owner's main complaint.** With full context, checked drafts
+  carry more points to check (2–14, before 0–1): mostly the writer's own elaborations found in
+  no chunk ("אמון, הקשבה"), plus at least one reviewer miss on a supported claim. Drafts stay
+  short (323–811 characters) because the writer prompt says "never pad" and "prefer shorter".
+  2 of 7 reviews ended unchecked (Terra coverage/evidence; same rate as before or better).
+- **Sample posts are treated as facts.** "קובץ פוסטים לדוגמא" is a Knowledge Base source: the
+  writer copies from it, and the live suggestion call cited only it for all three ideas.
+- **Cross-language gap:** the English "Mentorship — Wikipedia" is at 0.77–0.87 from every
+  Hebrew topic and never reaches the writer; translation runs only when nothing is found.
+- **Scaling:** `relevant_context` has no row limit and loads whole chunk rows including the
+  1,536-number embedding, then discards it (fine at 59 chunks). Context budget is not
+  validated to stay below the prompt budget. A Hebrew brand over ~8,000 characters plus a
+  full 24K context makes reviews unchecked (~13,000 makes the writer 409); not a regression.
+- **Not checked in the UI:** the longer cited-source list and the higher "up to" cost labels
+  in Create Post (`frontend/src/components/create-post.tsx`).
+- **SP-8 extraction** (carried over): Hebrew PDFs with mixed Hebrew/Latin lines in visual
+  order; table-layout pages become one huge paragraph; a fix needs a library decision.
+- **Carried over:** 403 workspace-budget error labelled as authentication failure; SP-5's
+  media criterion belongs to SP-3; stale remote branches (do not delete without the owner);
+  `backups/before-sp8-live-check-2026-10-30.dump` and the `social_restore_check` database
+  stay until the owner decides.
 
 ## Verification at delivery
 
-Backend 840 passed on a disposable migrated DB as the runtime role from the repo root (no
-`.env`), DB dropped; ruff, format and `mypy app` passed. Playwright 73/73 and frontend
-Prettier, lint and tsc passed on `a5f0537` (no frontend change since). Hosted CI 6/6 on #23;
-merged with the owner's admin bypass on their instruction and verified on `main` by content.
-
-Live on 2026-10-30/31 (local Docker, `a5f0537` then `21c1dcf`): files, web pages, SSRF
-blocking (including redirects and DNS tricks), reload (unchanged, keep, append, replace,
-search during preparation), the v5 newer-wins case, v5 scenarios, v8 reviewer-only cases
-34/34, and the SP-27 re-reviews (no cut-off; draft 49f7579f finished under v8). Test sources
-and test databases were deleted; the owner's data matches the baseline (4 documents, 45
-chunks, 9 jobs, 19 runs, 1 post, 1 brand; volume empty).
-
-Paid spend this session: OpenRouter key usage +$0.72 (from $5.057 to $5.777), against the
-owner's $1.50 cap. About $4.22 of the $10 workspace budget remains.
+Backend 841 passed (on the owner's DB, see Lessons), ruff, format, `mypy app`, `alembic
+check`; frontend `npm run typecheck` after merging main. Playwright, lint and build were not
+run in this session (the only frontend changes came from #26, verified there). Independent
+QA (`bf-qa`) found two blockers, both resolved: the "admit a full context" test could not
+catch an over-budget review (now asserts the review is `checked`; fails at a 26,500 prompt
+budget), and the topic-suggestion change was unrecorded (owner kept it; pinned by
+`test_a_full_sample_of_real_size_chunks_is_read_whole_at_the_default_budget`, which fails at
+2,800). Live evidence: docs/implementation.md, last section.
 
 ## Runtime
 
-API, worker and scheduler rebuilt from `main` (`21c1dcf`) on 2026-10-31; readiness passed and
-the API reports `source-review-v8`. Migrations at head `b3e8d5f1c260`. The Next server on
-53073 is `next dev` from this checkout (started 2026-10-27). Postgres 55473, Redis 56373, API
-127.0.0.1:58073. Ports 3000 and 8000 belong to other projects; never stop them.
+The API, worker and scheduler containers do **not** include this branch: rebuild them after
+the merge (`docker compose up -d --build api worker scheduler`) before testing in the app.
+Migrations unchanged (head `b3e8d5f1c260`). Next on 53073 is `next dev` from this checkout.
+Postgres 55473, Redis 56373, API 127.0.0.1:58073. Ports 3000 and 8000 belong to other
+projects; never stop them.
 
 ## Linear and next task
 
-- SP-16 In Progress: every child Done except SP-21 (Backlog, deferred web search). Whether
-  to close SP-16 with SP-21 deferred is the owner's call.
-- SP-17 In Progress: SP-7, SP-20 Done; SP-8, SP-9, SP-10 In Progress (gaps above).
-- SP-15 In Progress: SP-1, SP-2 In Progress; SP-3 Backlog.
-- SP-18 In Progress: SP-11, SP-13 In Progress.
+- No Linear issue covers this work: SP-4 and SP-25 are Done. Creating one under SP-16 with the
+  evidence above waits for the owner's approval.
+- SP-10: #25 merged; check its status and unchecked criteria in Linear before assuming Done.
+- SP-16 In Progress (SP-21 deferred web search in Backlog); SP-17 (SP-8, SP-9, SP-10),
+  SP-15 (SP-1, SP-2, SP-3) and SP-18 (SP-11, SP-13) as in the previous handoff.
 
-**Recommended next: the SP-10 accessibility gaps** (four concrete fixes plus the untested
-states listed above). They were found live, need no paid calls and no owner decision, and
-they are the main thing between SP-17 and Done. Then SP-8's Hebrew PDF and table-layout
-extraction, which needs a library decision first. Then SP-15, post history (SP-1/SP-2).
+**Recommended next, after this PR merges:** the writer's instructions (length and "never
+pad", keeping the no-invented-facts rule) together with a quality measure on the owner's
+seven topics, because short, thin drafts are the owner's stated problem and the context fix
+alone did not lengthen them. Then sample posts as style examples (a Brand DNA field, sent as
+style, not as citable sources), which helps drafts and topic ideas. Then cross-language
+retrieval. None of these is in the backlog yet; each needs the owner's go-ahead.
