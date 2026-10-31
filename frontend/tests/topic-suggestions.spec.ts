@@ -80,7 +80,8 @@ test("a suggested topic fills the topic field and the request matches the form",
   await page.getByLabel("Platform").selectOption("facebook");
   await page.getByLabel("Goal").fill("Invite volunteers");
   await page.getByRole("button", { name: "Suggest topics" }).click();
-  const list = page.getByTestId("topic-suggestions");
+  const dialog = page.getByRole("dialog", { name: "Topic ideas" });
+  const list = dialog.getByTestId("topic-suggestions");
   await expect(list.getByRole("listitem")).toHaveCount(2);
   await expect(list).toContainText(
     "Sources it cites: Garden page, Volunteer guide",
@@ -90,9 +91,13 @@ test("a suggested topic fills the topic field and the request matches the form",
     .nth(1)
     .getByRole("button", { name: "Use this topic" })
     .click();
-  await expect(
-    page.getByLabel("What would you like to write about?"),
-  ).toHaveValue("Why volunteers meet on Thursdays");
+  await expect(dialog).toBeHidden();
+  const topic = page.getByLabel("What would you like to write about?");
+  await expect(topic).toHaveValue("Why volunteers meet on Thursdays");
+  await expect(topic).toBeFocused();
+  // The rest of the form is untouched.
+  await expect(page.getByLabel("Platform")).toHaveValue("facebook");
+  await expect(page.getByLabel("Goal")).toHaveValue("Invite volunteers");
   expect(sent).toEqual([
     {
       platform: "facebook",
@@ -169,7 +174,7 @@ test("suggestions fit a phone screen in Hebrew", async ({ page }) => {
   ).toBeTruthy();
 });
 
-test("the button shows progress while ideas load and the chosen writer is sent", async ({
+test("the dialog shows progress while ideas load and the chosen writer is sent", async ({
   page,
 }) => {
   let release: () => void = () => {};
@@ -206,15 +211,19 @@ test("the button shows progress while ideas load and the chosen writer is sent",
     await route.fulfill({ json: suggestions });
   });
   await page.goto("/en/create");
-  await page.getByText("Writing preferences", { exact: true }).click();
+  await page.getByRole("tab", { name: "Models and cost" }).click();
   await page
     .getByLabel("Writing model")
     .selectOption("google/gemini-3.8-flash");
+  await page.getByRole("tab", { name: "Post details" }).click();
   await page.getByRole("button", { name: "Suggest topics" }).click();
-  const busy = page.getByRole("button", {
-    name: "Finding topics in your sources…",
-  });
-  await expect(busy).toBeDisabled();
+  const dialog = page.getByRole("dialog", { name: "Topic ideas" });
+  await expect(dialog.getByRole("status")).toHaveText(
+    "Finding topics in your sources…",
+  );
+  await expect(
+    dialog.getByRole("button", { name: "Suggest other ideas" }),
+  ).toBeDisabled();
   release();
   await expect(
     page.getByTestId("topic-suggestions").getByRole("listitem"),
@@ -222,13 +231,80 @@ test("the button shows progress while ideas load and the chosen writer is sent",
   expect(sent[0]).toMatchObject({ writer_model: "google/gemini-3.8-flash" });
 });
 
-test("ideas are cleared when the post language changes", async ({ page }) => {
-  await mockApi(page);
+test("reopening keeps the ideas without another paid request", async ({
+  page,
+}) => {
+  const sent = await mockApi(page);
   await page.goto("/en/create");
-  await page.getByRole("button", { name: "Suggest topics" }).click();
-  await expect(page.getByTestId("topic-suggestions")).toBeVisible();
+  const open = page.getByRole("button", { name: "Suggest topics" });
+  const dialog = page.getByRole("dialog", { name: "Topic ideas" });
+  await open.click();
+  await expect(dialog.getByRole("listitem")).toHaveCount(2);
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(open).toBeFocused();
+  await open.click();
+  await expect(dialog.getByRole("listitem")).toHaveCount(2);
+  expect(sent).toHaveLength(1);
+  await dialog.getByRole("button", { name: "Suggest other ideas" }).click();
+  await expect.poll(() => sent.length).toBe(2);
+});
+
+test("Escape closes the dialog and leaves the topic as it was", async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto("/he/create");
+  const topic = page.getByLabel("על מה נכתוב?");
+  await topic.fill("הרעיון שלי");
+  await page.getByRole("button", { name: "הצעת נושאים" }).click();
+  const dialog = page.getByRole("dialog", { name: "רעיונות לנושאים" });
+  await expect(dialog.getByRole("listitem")).toHaveCount(2);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(topic).toHaveValue("הרעיון שלי");
+});
+
+test("ideas are cleared when the post language changes", async ({ page }) => {
+  const sent = await mockApi(page);
+  await page.goto("/en/create");
+  const open = page.getByRole("button", { name: "Suggest topics" });
+  const dialog = page.getByRole("dialog", { name: "Topic ideas" });
+  await open.click();
+  await expect(dialog.getByTestId("topic-suggestions")).toBeVisible();
+  await page.keyboard.press("Escape");
   await page.getByLabel("Post language").selectOption("he");
-  await expect(page.getByTestId("topic-suggestions")).toHaveCount(0);
+  await open.click();
+  await expect(dialog.getByTestId("topic-suggestions")).toBeVisible();
+  expect(sent.map((body) => body.language)).toEqual(["en", "he"]);
+});
+
+test("ideas that arrive after the form changed are not shown", async ({
+  page,
+}) => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let calls = 0;
+  const sent = await mockApi(page);
+  await page.route("**/api/generation/topic-suggestions", async (route) => {
+    sent.push(route.request().postDataJSON());
+    // Only the first request is held, so it lands after the language changed.
+    if (calls++ === 0) await held;
+    await route.fulfill({ json: suggestions });
+  });
+  await page.goto("/en/create");
+  const open = page.getByRole("button", { name: "Suggest topics" });
+  const dialog = page.getByRole("dialog", { name: "Topic ideas" });
+  await open.click();
+  await expect(dialog.getByRole("status")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByLabel("Post language").selectOption("he");
+  const late = page.waitForResponse("**/api/generation/topic-suggestions");
+  release();
+  await late;
+  await open.click();
+  await expect(dialog.getByTestId("topic-suggestions")).toBeVisible();
+  expect(sent.map((body) => body.language)).toEqual(["en", "he"]);
 });
 
 test("no grounded topic shows the English empty state", async ({ page }) => {

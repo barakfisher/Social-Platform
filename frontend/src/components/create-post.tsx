@@ -1,8 +1,10 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { LoaderCircle, PenLine, Save, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TabList, tabIds } from "@/components/ui/tabs";
 import { ReviewFindings } from "@/components/review-findings";
 import { TopicSuggestions } from "@/components/topic-suggestions";
 import {
@@ -27,6 +29,11 @@ const copy = {
     length: "Post length",
     cta: "Call to action",
     advanced: "Writing preferences",
+    sections: "Draft settings",
+    detailsTab: "Post details",
+    modelsTab: "Models and cost",
+    estimated: "Estimated cost",
+    changeModels: "Change models",
     generate: "Generate draft",
     generating: "Writing your draft…",
     save: "Save Draft",
@@ -140,6 +147,11 @@ const copy = {
     length: "אורך הפוסט",
     cta: "הנעה לפעולה",
     advanced: "העדפות כתיבה",
+    sections: "הגדרות הטיוטה",
+    detailsTab: "פרטי הפוסט",
+    modelsTab: "מודלים ועלות",
+    estimated: "עלות משוערת",
+    changeModels: "שינוי מודלים",
     generate: "יצירת טיוטה",
     generating: "כותב את הטיוטה…",
     save: "שמירת טיוטה",
@@ -312,6 +324,9 @@ export function CreatePost({ locale }: { locale: Locale }) {
   const [error, setError] = useState<string | null>(null);
   const request = useRef<{ signature: string; key: string } | null>(null);
   const saveKey = useRef<string>("");
+  const [tab, setTab] = useState<"details" | "models">("details");
+  const formRef = useRef<HTMLFormElement>(null);
+  const topicRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     apiRequest<Capability>("/api/generation/configuration")
       .then(setCapability)
@@ -542,227 +557,264 @@ export function CreatePost({ locale }: { locale: Locale }) {
             </div>
           )
         )}
-        <form onSubmit={generate} className="mt-7 space-y-5">
-          <fieldset disabled={busy !== null} className="space-y-5">
-            <div className="grid gap-5 sm:grid-cols-2">
-              <div>
-                <label
-                  className="mb-2 block text-sm font-medium"
-                  htmlFor="post-platform"
-                >
-                  {t.platform}
-                </label>
-                <select
-                  id="post-platform"
-                  className={inputClass}
-                  value={form.platform}
-                  onChange={(e) =>
-                    setForm({ ...form, platform: e.target.value })
-                  }
-                >
-                  <option value="linkedin">LinkedIn</option>
-                  <option value="facebook">Facebook</option>
-                </select>
-              </div>
-              <div>
-                <label
-                  className="mb-2 block text-sm font-medium"
-                  htmlFor="post-language"
-                >
-                  {t.language}
-                </label>
-                <select
-                  id="post-language"
-                  className={inputClass}
-                  value={form.language}
-                  onChange={(e) =>
-                    setForm({ ...form, language: e.target.value as Locale })
-                  }
-                >
-                  <option value="en">English</option>
-                  <option value="he">עברית</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label
-                htmlFor="post-topic"
-                className="mb-2 block text-sm font-medium"
-              >
-                {t.topic}
-              </label>
-              <textarea
-                id="post-topic"
-                className={inputClass}
-                rows={4}
-                required
-                maxLength={2000}
-                dir={form.topic ? "auto" : locale === "he" ? "rtl" : "ltr"}
-                placeholder={t.topicHint}
-                value={form.topic}
-                onChange={(e) => setForm({ ...form, topic: e.target.value })}
-              />
-              {capability?.topic_suggestions && (
-                <TopicSuggestions
-                  locale={locale}
-                  request={form}
-                  disabled={!allowed}
-                  onChoose={(topic) =>
-                    setForm((current) => ({ ...current, topic }))
-                  }
-                />
-              )}
-            </div>
-            <div>
-              <label
-                htmlFor="post-goal"
-                className="mb-2 block text-sm font-medium"
-              >
-                {t.goal}
-              </label>
-              <input
-                id="post-goal"
-                className={inputClass}
-                maxLength={300}
-                dir="auto"
-                value={form.goal}
-                onChange={(e) => setForm({ ...form, goal: e.target.value })}
-              />
-            </div>
-            <details className="rounded-lg border border-border p-4">
-              <summary className="cursor-pointer text-sm font-medium">
-                {t.advanced}
-              </summary>
-              <p className="mt-3 text-xs text-muted-foreground">{t.defaults}</p>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <form ref={formRef} onSubmit={generate} className="mt-7 space-y-5">
+          <TabList
+            label={t.sections}
+            idPrefix="post"
+            tabs={[
+              { id: "details", label: t.detailsTab },
+              { id: "models", label: t.modelsTab },
+            ]}
+            value={tab}
+            onChange={setTab}
+          />
+          <fieldset disabled={busy !== null}>
+            <div
+              role="tabpanel"
+              id={tabIds("post", "details").panel}
+              aria-labelledby={tabIds("post", "details").tab}
+              hidden={tab !== "details"}
+              className="space-y-5"
+            >
+              <div className="grid gap-5 sm:grid-cols-2">
                 <div>
-                  <label htmlFor="post-tone" className="mb-2 block text-sm">
-                    {t.tone}
+                  <label
+                    className="mb-2 block text-sm font-medium"
+                    htmlFor="post-platform"
+                  >
+                    {t.platform}
                   </label>
                   <select
-                    id="post-tone"
+                    id="post-platform"
                     className={inputClass}
-                    value={form.tone}
-                    onChange={(e) => setForm({ ...form, tone: e.target.value })}
+                    value={form.platform}
+                    onChange={(e) =>
+                      setForm({ ...form, platform: e.target.value })
+                    }
                   >
-                    {Object.entries(t.tones).map(([key, label]) => (
-                      <option key={key} value={key}>
-                        {label}
-                      </option>
-                    ))}
-                    <option value="other">{t.other}</option>
+                    <option value="linkedin">LinkedIn</option>
+                    <option value="facebook">Facebook</option>
                   </select>
-                  {form.tone === "other" && (
-                    <input
-                      aria-label={t.otherTone}
-                      placeholder={t.otherTone}
-                      className={inputClass + " mt-2"}
-                      required
-                      maxLength={200}
-                      dir="auto"
-                      value={form.tone_other}
-                      onChange={(e) =>
-                        setForm({ ...form, tone_other: e.target.value })
-                      }
-                    />
-                  )}
                 </div>
                 <div>
-                  <label htmlFor="post-hook" className="mb-2 block text-sm">
-                    {t.hook}
+                  <label
+                    className="mb-2 block text-sm font-medium"
+                    htmlFor="post-language"
+                  >
+                    {t.language}
                   </label>
                   <select
-                    id="post-hook"
+                    id="post-language"
                     className={inputClass}
-                    value={form.hook}
-                    onChange={(e) => setForm({ ...form, hook: e.target.value })}
+                    value={form.language}
+                    onChange={(e) =>
+                      setForm({ ...form, language: e.target.value as Locale })
+                    }
                   >
-                    {(["auto", "question", "insight", "story"] as const).map(
-                      (key) => (
+                    <option value="en">English</option>
+                    <option value="he">עברית</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label
+                  htmlFor="post-topic"
+                  className="mb-2 block text-sm font-medium"
+                >
+                  {t.topic}
+                </label>
+                <textarea
+                  ref={topicRef}
+                  id="post-topic"
+                  className={inputClass}
+                  rows={4}
+                  required
+                  maxLength={2000}
+                  dir={form.topic ? "auto" : locale === "he" ? "rtl" : "ltr"}
+                  placeholder={t.topicHint}
+                  value={form.topic}
+                  onChange={(e) => setForm({ ...form, topic: e.target.value })}
+                />
+                {capability?.topic_suggestions && (
+                  <TopicSuggestions
+                    locale={locale}
+                    request={form}
+                    disabled={!allowed}
+                    onChoose={(topic) => {
+                      setForm((current) => ({ ...current, topic }));
+                      topicRef.current?.focus();
+                    }}
+                  />
+                )}
+              </div>
+              <div>
+                <label
+                  htmlFor="post-goal"
+                  className="mb-2 block text-sm font-medium"
+                >
+                  {t.goal}
+                </label>
+                <input
+                  id="post-goal"
+                  className={inputClass}
+                  maxLength={300}
+                  dir="auto"
+                  value={form.goal}
+                  onChange={(e) => setForm({ ...form, goal: e.target.value })}
+                />
+              </div>
+              <details className="rounded-lg border border-border p-4">
+                <summary className="cursor-pointer text-sm font-medium">
+                  {t.advanced}
+                </summary>
+                <p className="mt-3 text-xs text-muted-foreground">
+                  {t.defaults}
+                </p>
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="post-tone" className="mb-2 block text-sm">
+                      {t.tone}
+                    </label>
+                    <select
+                      id="post-tone"
+                      className={inputClass}
+                      value={form.tone}
+                      onChange={(e) =>
+                        setForm({ ...form, tone: e.target.value })
+                      }
+                    >
+                      {Object.entries(t.tones).map(([key, label]) => (
+                        <option key={key} value={key}>
+                          {label}
+                        </option>
+                      ))}
+                      <option value="other">{t.other}</option>
+                    </select>
+                    {form.tone === "other" && (
+                      <input
+                        aria-label={t.otherTone}
+                        placeholder={t.otherTone}
+                        className={inputClass + " mt-2"}
+                        required
+                        maxLength={200}
+                        dir="auto"
+                        value={form.tone_other}
+                        onChange={(e) =>
+                          setForm({ ...form, tone_other: e.target.value })
+                        }
+                      />
+                    )}
+                  </div>
+                  <div>
+                    <label htmlFor="post-hook" className="mb-2 block text-sm">
+                      {t.hook}
+                    </label>
+                    <select
+                      id="post-hook"
+                      className={inputClass}
+                      value={form.hook}
+                      onChange={(e) =>
+                        setForm({ ...form, hook: e.target.value })
+                      }
+                    >
+                      {(["auto", "question", "insight", "story"] as const).map(
+                        (key) => (
+                          <option key={key} value={key}>
+                            {t[key]}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="post-length" className="mb-2 block text-sm">
+                      {t.length}
+                    </label>
+                    <select
+                      id="post-length"
+                      className={inputClass}
+                      value={form.length}
+                      onChange={(e) =>
+                        setForm({ ...form, length: e.target.value })
+                      }
+                    >
+                      {(["short", "medium", "long"] as const).map((key) => (
                         <option key={key} value={key}>
                           {t[key]}
                         </option>
-                      ),
-                    )}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="post-length" className="mb-2 block text-sm">
-                    {t.length}
-                  </label>
-                  <select
-                    id="post-length"
-                    className={inputClass}
-                    value={form.length}
-                    onChange={(e) =>
-                      setForm({ ...form, length: e.target.value })
-                    }
-                  >
-                    {(["short", "medium", "long"] as const).map((key) => (
-                      <option key={key} value={key}>
-                        {t[key]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="post-cta" className="mb-2 block text-sm">
-                    {t.cta}
-                  </label>
-                  <select
-                    id="post-cta"
-                    className={inputClass}
-                    value={form.cta}
-                    onChange={(e) => setForm({ ...form, cta: e.target.value })}
-                  >
-                    {Object.entries(t.ctas).map(([key, label]) => (
-                      <option key={key} value={key}>
-                        {label}
-                      </option>
-                    ))}
-                    <option value="other">{t.other}</option>
-                  </select>
-                  {form.cta === "other" && (
-                    <input
-                      aria-label={t.otherCta}
-                      placeholder={t.otherCta}
-                      className={inputClass + " mt-2"}
-                      required
-                      maxLength={300}
-                      dir="auto"
-                      value={form.cta_other}
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="post-cta" className="mb-2 block text-sm">
+                      {t.cta}
+                    </label>
+                    <select
+                      id="post-cta"
+                      className={inputClass}
+                      value={form.cta}
                       onChange={(e) =>
-                        setForm({ ...form, cta_other: e.target.value })
+                        setForm({ ...form, cta: e.target.value })
+                      }
+                    >
+                      {Object.entries(t.ctas).map(([key, label]) => (
+                        <option key={key} value={key}>
+                          {label}
+                        </option>
+                      ))}
+                      <option value="other">{t.other}</option>
+                    </select>
+                    {form.cta === "other" && (
+                      <input
+                        aria-label={t.otherCta}
+                        placeholder={t.otherCta}
+                        className={inputClass + " mt-2"}
+                        required
+                        maxLength={300}
+                        dir="auto"
+                        value={form.cta_other}
+                        onChange={(e) =>
+                          setForm({ ...form, cta_other: e.target.value })
+                        }
+                      />
+                    )}
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label htmlFor="post-offer" className="mb-2 block text-sm">
+                      {t.offer}
+                    </label>
+                    <textarea
+                      id="post-offer"
+                      className={inputClass}
+                      rows={2}
+                      maxLength={1000}
+                      dir="auto"
+                      aria-describedby="post-offer-hint"
+                      value={form.offer_details}
+                      onChange={(e) =>
+                        setForm({ ...form, offer_details: e.target.value })
                       }
                     />
-                  )}
+                    <p
+                      id="post-offer-hint"
+                      className="mt-2 text-xs text-muted-foreground"
+                    >
+                      {["read_more", "signup"].includes(form.cta) &&
+                      !form.offer_details.trim()
+                        ? t.offerNeeded
+                        : t.offerHint}
+                    </p>
+                  </div>
                 </div>
-                <div className="sm:col-span-2">
-                  <label htmlFor="post-offer" className="mb-2 block text-sm">
-                    {t.offer}
-                  </label>
-                  <textarea
-                    id="post-offer"
-                    className={inputClass}
-                    rows={2}
-                    maxLength={1000}
-                    dir="auto"
-                    aria-describedby="post-offer-hint"
-                    value={form.offer_details}
-                    onChange={(e) =>
-                      setForm({ ...form, offer_details: e.target.value })
-                    }
-                  />
-                  <p
-                    id="post-offer-hint"
-                    className="mt-2 text-xs text-muted-foreground"
-                  >
-                    {["read_more", "signup"].includes(form.cta) &&
-                    !form.offer_details.trim()
-                      ? t.offerNeeded
-                      : t.offerHint}
-                  </p>
-                </div>
+              </details>
+            </div>
+            <div
+              role="tabpanel"
+              id={tabIds("post", "models").panel}
+              aria-labelledby={tabIds("post", "models").tab}
+              hidden={tab !== "models"}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
                   <label
                     htmlFor={
@@ -882,16 +934,50 @@ export function CreatePost({ locale }: { locale: Locale }) {
                   </div>
                 )}
               </div>
-            </details>
+            </div>
           </fieldset>
-          <Button disabled={!allowed || busy !== null} type="submit">
-            {busy === "generate" ? (
-              <LoaderCircle className="animate-spin" size={16} />
-            ) : (
-              <Sparkles size={16} />
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <Button
+              disabled={!allowed || busy !== null}
+              type="submit"
+              aria-describedby={totalCost !== null ? "post-cost" : undefined}
+              onClick={(event) => {
+                // A hidden panel's invalid field can't take focus, so show its tab first.
+                const form = formRef.current;
+                if (tab === "details" || !form || form.checkValidity()) return;
+                event.preventDefault();
+                flushSync(() => setTab("details"));
+                form.reportValidity();
+              }}
+            >
+              {busy === "generate" ? (
+                <LoaderCircle className="animate-spin" size={16} />
+              ) : (
+                <Sparkles size={16} />
+              )}
+              {busy === "generate" ? t.generating : t.generate}
+            </Button>
+            {totalCost !== null && (
+              <p id="post-cost" className="text-sm text-muted-foreground">
+                {t.estimated}:{" "}
+                <span data-testid="generate-cost">{totalCost}</span>
+              </p>
             )}
-            {busy === "generate" ? t.generating : t.generate}
-          </Button>
+            {tab === "details" && (
+              <button
+                type="button"
+                className="text-sm text-primary underline underline-offset-4"
+                onClick={() => {
+                  setTab("models");
+                  document
+                    .getElementById(tabIds("post", "models").tab)
+                    ?.focus();
+                }}
+              >
+                {t.changeModels}
+              </button>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground">{t.media}</p>
         </form>
       </div>

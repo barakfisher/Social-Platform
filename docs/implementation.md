@@ -1159,6 +1159,45 @@ Choice (owner-approved):
 Rejected: keeping v7. Every v7-valid review stays valid, so no re-checks would be forced,
 but one version name would then cover two prompts and later measurements would mix them.
 
+## Create Post: models tab and topic-ideas dialog — 2026-10-31
+
+Problem: the Create Post form had become long. Both model selects, their costs and the total
+sat inside "Writing preferences" with tone, hook, length, CTA and offer details, and topic
+ideas expanded inline under the topic field.
+
+Choices (owner-approved):
+- The form has two tabs, "Post details" and "Models and cost". The model choice stays per
+  draft, as before; nothing is stored and the server is unchanged. The estimated total stays
+  next to "Generate draft" on both tabs (and describes the button for screen readers), with
+  "Change models" opening the models tab, so the cost is seen before spending.
+- Tabs follow the WAI-ARIA pattern with automatic activation; arrow keys follow the reading
+  direction, so ArrowLeft moves forward in Hebrew. Panels stay mounted (`hidden`), so values
+  survive switching. A hidden required field cannot take focus, so submitting from the models
+  tab with the form invalid shows the details tab first, then reports the field.
+- "Suggest topics" opens a modal dialog (native `<dialog>`: Escape, focus containment and
+  focus return without a new package). Choosing an idea closes it, fills in only the topic
+  and focuses the topic field. Ideas are kept while platform, language, goal and writer are
+  unchanged, so reopening costs nothing; "Suggest other ideas" asks again. A reply that
+  arrives after those inputs changed is dropped.
+
+Rejected:
+- A separate settings page for models: the choice would become a stored default, which needs
+  persistence (server or browser) and a decision on precedence, for a choice that is per
+  draft today.
+- Tabs for every advanced setting: a bigger reshuffle for no reported problem with tone, CTA
+  or offer details.
+- A separate page for topic ideas: the form's state would have to travel through the URL or
+  storage and back, and leaving the page would lose paid ideas unless cached.
+- Ideas that also fill the goal, hook or tone: the server returns only topic, rationale and
+  sources; that is a prompt and response change of its own.
+- A Radix or other dialog package: the native element covers what this dialog needs.
+
+Verification: Prettier, ESLint, tsc, production build and Playwright 82/82 (new create-tabs.spec.ts; dialog
+tests in topic-suggestions.spec.ts). The run used port 53173 with APP_HOSTS set to it,
+because the main checkout's server held 53073; csrf-guard tests only pass when APP_HOSTS
+names the served host. Visually checked in the browser pane in HE and EN at 375px and
+1280px, with suggestion replies stubbed in the page (no paid call).
+
 ## The writer reads everything relevant (relevance decides, 24K-token safety cap) — 2026-10-31
 
 Problem: drafts were thin. On the owner's Knowledge Base (5 Ready documents, 59 chunks,

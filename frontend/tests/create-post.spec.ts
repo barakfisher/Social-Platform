@@ -335,7 +335,7 @@ test("source check model shows estimated costs and the choice is sent", async ({
     });
   });
   await page.goto("/en/create");
-  await page.getByText("Writing preferences", { exact: true }).click();
+  await page.getByRole("tab", { name: "Models and cost" }).click();
   const select = page.getByLabel("Source check model", { exact: true });
   await expect(select).toHaveValue("openai/gpt-5.6-terra");
   await expect(select.locator("option")).toHaveText([
@@ -348,6 +348,7 @@ test("source check model shows estimated costs and the choice is sent", async ({
   await expect(cost).toHaveText("~$0.016 per draft · up to $0.063");
   await select.selectOption("openai/gpt-4.1");
   await expect(cost).toHaveText("~$0.008 per draft · up to $0.05");
+  await page.getByRole("tab", { name: "Post details" }).click();
   await page
     .getByLabel("What would you like to write about?", { exact: true })
     .fill("Community garden herbs");
@@ -410,7 +411,7 @@ test("unavailable model options fall back to the default source check", async ({
     }),
   );
   await page.goto("/he/create");
-  await page.getByText("העדפות כתיבה", { exact: true }).click();
+  await page.getByRole("tab", { name: "מודלים ועלות" }).click();
   await expect(
     page.getByText(
       "לא הצלחנו לטעון את אפשרויות המודל. תתבצע בדיקת המקורות המוגדרת כברירת מחדל.",
