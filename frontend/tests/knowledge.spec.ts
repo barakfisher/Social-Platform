@@ -72,11 +72,15 @@ test("pasted text prepares, survives reload, previews and deletes in Hebrew", as
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBeTruthy();
-  await page.getByRole("button", { name: "מחיקה", exact: true }).click();
+  await page
+    .getByRole("button", { name: "מחיקה: מקור לדוגמה", exact: true })
+    .click();
   await expect(
     page.getByText("למחוק את המקור ואת המקטעים שהוכנו ממנו?"),
   ).toBeVisible();
-  await page.getByRole("button", { name: "מחיקת המקור", exact: true }).click();
+  await page
+    .getByRole("button", { name: "מחיקת המקור: מקור לדוגמה", exact: true })
+    .click();
   await expect(page.getByText("המקור נמחק.", { exact: true })).toBeVisible();
   await expect(
     page.getByText(sourceDocument.title, { exact: true }),
@@ -144,7 +148,7 @@ test("failed submission keeps text and failed preparation can be retried", async
     page.getByText("Preparation failed", { exact: true }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "Process again", exact: true })
+    .getByRole("button", { name: "Process again: מקור לדוגמה", exact: true })
     .click();
   await expect(page.getByText("Text prepared", { exact: true })).toBeVisible();
 });
@@ -177,7 +181,10 @@ test("AI search stays unavailable without a provider key", async ({ page }) => {
     ),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Enable AI search", exact: true }),
+    page.getByRole("button", {
+      name: "Enable AI search: מקור לדוגמה",
+      exact: true,
+    }),
   ).toBeDisabled();
 });
 
@@ -220,18 +227,21 @@ test("AI search preparation reaches Ready and shows a retryable provider failure
   });
   await page.goto("/en/knowledge");
   await page
-    .getByRole("button", { name: "Enable AI search", exact: true })
+    .getByRole("button", { name: "Enable AI search: מקור לדוגמה", exact: true })
     .click();
   await expect(
     page.getByText("AI search preparation failed", { exact: true }),
   ).toBeVisible();
   fail = false;
   await page
-    .getByRole("button", { name: "Enable AI search", exact: true })
+    .getByRole("button", { name: "Enable AI search: מקור לדוגמה", exact: true })
     .click();
   await expect(page.getByText("Ready", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Enable AI search", exact: true }),
+    page.getByRole("button", {
+      name: "Enable AI search: מקור לדוגמה",
+      exact: true,
+    }),
   ).toHaveCount(0);
 });
 
@@ -312,9 +322,10 @@ test("a PDF upload shows progress, its type and file name, then a processing fai
   await expect(entry).toContainText(
     "This PDF has no text layer (it looks scanned). Run text recognition (OCR) and upload it again.",
   );
+  // Processing the same scanned file again cannot succeed, so it is not offered.
   await expect(
-    entry.getByRole("button", { name: "Process again", exact: true }),
-  ).toBeVisible();
+    entry.getByRole("button", { name: /^Process again/ }),
+  ).toHaveCount(0);
 });
 
 test("unsupported and oversized files are refused before upload", async ({
@@ -453,7 +464,10 @@ test("a web page is added, shown with its link, and explains a fetch failure", a
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(entry).toContainText("No readable text was found on this page.");
   await expect(
-    entry.getByRole("button", { name: "Process again", exact: true }),
+    entry.getByRole("button", {
+      name: "Process again: garden.example/hours",
+      exact: true,
+    }),
   ).toBeVisible();
 });
 
@@ -560,7 +574,10 @@ test("a changed web page shows its changes and the owner chooses to add them", a
     webPage.fetched_at,
   );
   await entry
-    .getByRole("button", { name: "Load again from the site", exact: true })
+    .getByRole("button", {
+      name: "Load again from the site: Garden hours",
+      exact: true,
+    })
     .click();
   await expect(entry).toContainText("Loading again…");
   await expect(entry.getByText("Ready", { exact: true })).toBeVisible();
@@ -582,7 +599,7 @@ test("a changed web page shows its changes and the owner chooses to add them", a
     entry.getByRole("button", { name: "Load again from the site" }),
   ).toHaveCount(0);
   await entry
-    .getByRole("button", { name: "Show changes", exact: true })
+    .getByRole("button", { name: "Show changes: Garden hours", exact: true })
     .click();
   await expect(
     entry.getByText("New on the site", { exact: true }),
@@ -591,7 +608,10 @@ test("a changed web page shows its changes and the owner chooses to add them", a
   await expect(entry).toContainText("Open until seven.");
   await expect(entry).toContainText("…and 2 more");
   await entry
-    .getByRole("button", { name: "Add the new paragraphs", exact: true })
+    .getByRole("button", {
+      name: "Add the new paragraphs: Garden hours",
+      exact: true,
+    })
     .click();
   await expect(entry).toContainText("New paragraphs from the site were added.");
   expect(decisions).toEqual([{ action: "append" }]);
@@ -631,10 +651,16 @@ test("the Hebrew choice panel offers replace, add and keep", async ({
     "הדף השתנה: 0 פסקאות חדשות, 2 שכבר לא באתר.",
   );
   await expect(
-    entry.getByRole("button", { name: "הוספת הפסקאות החדשות", exact: true }),
+    entry.getByRole("button", {
+      name: "הוספת הפסקאות החדשות: Garden hours",
+      exact: true,
+    }),
   ).toBeDisabled();
   await expect(
-    entry.getByRole("button", { name: "החלפה בגרסה החדשה", exact: true }),
+    entry.getByRole("button", {
+      name: "החלפה בגרסה החדשה: Garden hours",
+      exact: true,
+    }),
   ).toBeEnabled();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(
@@ -643,7 +669,10 @@ test("the Hebrew choice panel offers replace, add and keep", async ({
     ),
   ).toBeTruthy();
   await entry
-    .getByRole("button", { name: "השארת הגרסה הנוכחית", exact: true })
+    .getByRole("button", {
+      name: "השארת הגרסה הנוכחית: Garden hours",
+      exact: true,
+    })
     .click();
   await expect(entry).toContainText("הגרסה הנוכחית נשמרה.");
   expect(decisions).toEqual([{ action: "keep" }]);
@@ -676,6 +705,9 @@ test("a failed reload in Hebrew says the previous version is still used", async 
   );
   await expect(entry).toContainText("נטען לאחרונה");
   await expect(
-    entry.getByRole("button", { name: "טעינה מחדש מהאתר", exact: true }),
+    entry.getByRole("button", {
+      name: "טעינה מחדש מהאתר: Garden hours",
+      exact: true,
+    }),
   ).toBeVisible();
 });
