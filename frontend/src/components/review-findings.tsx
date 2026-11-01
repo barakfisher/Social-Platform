@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Locale } from "@/lib/i18n";
-import type { Review } from "@/lib/posts";
+import type { KnowledgeShare, Review } from "@/lib/posts";
 
 type Copy = {
   title: string;
@@ -24,6 +24,8 @@ type Copy = {
   recheck: string;
   rechecking: string;
   saveFirst: string;
+  share: (percent: number) => string;
+  generalSentences: (count: number) => string;
   findings: Record<string, [problem: string, action: string]>;
   unknownFinding: [string, string];
   reasons: Record<string, string>;
@@ -46,6 +48,11 @@ const copy: Record<Locale, Copy> = {
     recheck: "Check again",
     rechecking: "Checking…",
     saveFirst: "Save your edits to check them.",
+    share: (percent) => `${percent}% from your Knowledge Base`,
+    generalSentences: (count) =>
+      count === 1
+        ? "1 general-knowledge sentence"
+        : `${count} general-knowledge sentences`,
     findings: {
       unsupported_claim: [
         "No source supports this claim.",
@@ -124,6 +131,9 @@ const copy: Record<Locale, Copy> = {
     recheck: "בדוק שוב",
     rechecking: "בודק…",
     saveFirst: "יש לשמור את העריכות כדי לבדוק אותן.",
+    share: (percent) => `${percent}% מבסיס הידע שלך`,
+    generalSentences: (count) =>
+      count === 1 ? "משפט אחד של ידע כללי" : `${count} משפטים של ידע כללי`,
     findings: {
       unsupported_claim: [
         "אין מקור שתומך בטענה הזו.",
@@ -246,13 +256,16 @@ export function ReviewFindings({
     );
   if (!unchecked && !blocked && review.findings.length === 0 && !stale)
     return (
-      <p
-        data-testid="review-clean"
-        className="mt-4 flex items-center gap-2 text-sm text-primary"
-      >
-        <CheckCircle2 size={16} aria-hidden className="shrink-0" />
-        {t.clean}
-      </p>
+      <>
+        <p
+          data-testid="review-clean"
+          className="mt-4 flex items-center gap-2 text-sm text-primary"
+        >
+          <CheckCircle2 size={16} aria-hidden className="shrink-0" />
+          {t.clean}
+        </p>
+        <ShareLine t={t} share={review.knowledge_share} />
+      </>
     );
   return (
     <section
@@ -286,7 +299,11 @@ export function ReviewFindings({
           )}
         </>
       ) : (
-        <FindingList t={t} findings={review.findings} />
+        <>
+          {/* The share describes the checked text, not the edited one. */}
+          {!stale && <ShareLine t={t} share={review.knowledge_share} />}
+          <FindingList t={t} findings={review.findings} />
+        </>
       )}
       {offerRecheck && (
         <RecheckAction
@@ -300,6 +317,18 @@ export function ReviewFindings({
         />
       )}
     </section>
+  );
+}
+
+// How much of a checked draft its sources support; checks before source-review-v9 have none.
+function ShareLine({ t, share }: { t: Copy; share?: KnowledgeShare }) {
+  if (!share || share.percent === null) return null;
+  return (
+    <p data-testid="knowledge-share" className="mt-2 text-xs">
+      {t.share(share.percent)}
+      {share.general_sentences > 0 &&
+        ` · ${t.generalSentences(share.general_sentences)}`}
+    </p>
   );
 }
 

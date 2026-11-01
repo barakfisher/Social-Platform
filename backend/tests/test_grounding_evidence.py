@@ -73,7 +73,7 @@ def test_nonadjacent_facts_require_separate_exact_excerpts(
             result = review_draft(
                 draft, [{"chunk_id": "source", "content": source}], {}, {"language": language}
             )
-            assert result["version"] == REVIEW_VERSION == "source-review-v8"
+            assert result["version"] == REVIEW_VERSION == "source-review-v9"
             # Stored provenance maps the reviewer's alias back to the real chunk ID.
             evidence = result["sentences"][0]["claims"][0]["evidence"]
             assert evidence == [{"chunk_id": "source", "quote": quote} for quote in quotes]

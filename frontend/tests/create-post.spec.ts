@@ -358,7 +358,7 @@ test("source check model shows estimated costs and the choice is sent", async ({
   await expect.poll(() => sent?.review_model).toBe("openai/gpt-4.1");
 });
 
-test("post length options show the character limit and about how many words", async ({
+test("post length options show the range or the limit and about how many words", async ({
   page,
 }) => {
   await page.route("**/api/generation**", async (route) => {
@@ -366,11 +366,17 @@ test("post length options show the character limit and about how many words", as
       json: { configured: true, brand_ready: true, ready_documents: 1 },
     });
   });
-  for (const [locale, preferences, label, options] of [
+  for (const [locale, preferences, label, level, ranges, limits] of [
     [
       "en",
       "Writing preferences",
       "Post length",
+      "Knowledge level",
+      [
+        "Short — 400–600 characters (~70–100 words)",
+        "Medium — 800–1,200 characters (~130–200 words)",
+        "Long — 1,600–2,400 characters (~270–400 words)",
+      ],
       [
         "Short — up to 600 characters (~100 words)",
         "Medium — up to 1,200 characters (~200 words)",
@@ -381,6 +387,12 @@ test("post length options show the character limit and about how many words", as
       "he",
       "העדפות כתיבה",
       "אורך הפוסט",
+      "רמת ידע",
+      [
+        "קצר — 400–600 תווים (כ־70–100 מילים)",
+        "בינוני — 800–1,200 תווים (כ־130–200 מילים)",
+        "ארוך — 1,600–2,400 תווים (כ־270–400 מילים)",
+      ],
       [
         "קצר — עד 600 תווים (כ־100 מילים)",
         "בינוני — עד 1,200 תווים (כ־200 מילים)",
@@ -391,8 +403,13 @@ test("post length options show the character limit and about how many words", as
     await page.goto(`/${locale}/create`);
     await page.getByText(preferences, { exact: true }).click();
     const select = page.getByLabel(label, { exact: true });
-    await expect(select.locator("option")).toHaveText([...options]);
+    // General knowledge aims for a range; the Knowledge Base alone keeps a maximum.
+    await expect(select.locator("option")).toHaveText([...ranges]);
     await expect(select).toHaveValue("medium");
+    await page
+      .getByLabel(level, { exact: true })
+      .selectOption("knowledge_base");
+    await expect(select.locator("option")).toHaveText([...limits]);
   }
 });
 
