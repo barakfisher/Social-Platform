@@ -21,10 +21,11 @@ from app.generation_provider import GenerationError, chat_completion, generation
 from app.grounding import prompt_tokens, without_prefix
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID
 from app.models import BrandDNA, KnowledgeChunk, KnowledgeDocument
+from app.platform_profiles import IDEA_ROLES, POST_STYLES
 from app.writer_models import provider_tokens, writer_output_tokens, writer_profile
 
 router = APIRouter(prefix="/generation", tags=["generation"], dependencies=[Depends(local_only)])
-SUGGESTION_VERSION = "topic-suggestions-v3"
+SUGGESTION_VERSION = "topic-suggestions-v4"
 # Representative sampling (MVP, no clustering): the most recently updated Ready documents,
 # chunks spread evenly through each, interleaved so every document is represented before any
 # gets a second chunk. Each excerpt gets an equal share of the context budget, so long English
@@ -61,9 +62,8 @@ owner's finished posts, which show what is already written.
 Each suggestion has:
 - topic: one sentence in the requested language that a writer could turn into a post.
 - rationale: one short sentence, in the requested language, on the role the post plays
-  for the goal (for example trust, practical value, differentiation or a call to sign up)
-  and why it suits the platform and the brand. Name the reason itself; do not cite "the
-  sources" as the reason.
+  for the goal and why it suits the platform and the brand. Name the reason itself; do not
+  cite "the sources" as the reason.
 - source_ids: the chunk_id of every source the topic rests on (at least one).
 Every topic must be answerable from its sources alone: no outside facts, statistics,
 promises, prices, dates or contact details that the sources do not state.
@@ -72,6 +72,10 @@ call to action in other words. Propose a new angle, a follow-up or a next step i
 the sources recommend content they do not contain yet (a series, an angle, a message to
 test), prefer those topics. Each topic is one post: for a recommended series, propose one
 post of it, never the series, and only one per series.
+preferences.platform_style describes the platform's readers and what posts there do.
+preferences.roles lists the roles a post may play, the ones this platform favours first.
+Give each suggestion a different role, preferring the earlier ones. When the sources assign
+roles or posts to channels, follow the sources over this list.
 Topics must differ in substance, not only in wording. Return at most preferences.count
 suggestions; return fewer when the sources support fewer distinct topics.
 """
@@ -288,6 +292,8 @@ def suggest_topics(payload: SuggestInput):
                 "brand": brand_values,
                 "preferences": {
                     "platform": payload.platform,
+                    "platform_style": POST_STYLES[payload.platform],
+                    "roles": IDEA_ROLES[payload.platform],
                     "language": payload.language,
                     "goal": payload.goal,
                     "count": payload.count,
