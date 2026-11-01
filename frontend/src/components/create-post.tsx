@@ -85,10 +85,27 @@ const copy = {
     setupKnowledge: "At least one source must be Ready for AI search.",
     setupKey: "The writing service is not connected yet.",
     checking: "Checking your workspace…",
-    // Maximums the server enforces (app/generation.py); words assume about 6 characters each.
+    // Maximums the server enforces and the general level's targets (app/generation.py,
+    // LENGTH_LIMITS and LENGTH_TARGET_MINIMUMS); words assume about 6 characters each.
     short: "Short — up to 600 characters (~100 words)",
     medium: "Medium — up to 1,200 characters (~200 words)",
     long: "Long — up to 2,400 characters (~400 words)",
+    ranges: {
+      short: "Short — 400–600 characters (~70–100 words)",
+      medium: "Medium — 800–1,200 characters (~130–200 words)",
+      long: "Long — 1,600–2,400 characters (~270–400 words)",
+    },
+    knowledgeLevel: "Knowledge level",
+    knowledgeLevels: {
+      general: "Knowledge Base + general professional knowledge",
+      knowledge_base: "Knowledge Base only",
+    },
+    knowledgeHints: {
+      general:
+        "Numbers, names, studies, stories and anything about your brand or offer still come only from your sources. General professional knowledge may explain them, and the post aims for the length you choose.",
+      knowledge_base:
+        "Every fact comes from your sources, so the post may be shorter than the length you choose.",
+    },
     auto: "Automatic",
     question: "Question",
     insight: "Insight",
@@ -207,6 +224,22 @@ const copy = {
     short: "קצר — עד 600 תווים (כ־100 מילים)",
     medium: "בינוני — עד 1,200 תווים (כ־200 מילים)",
     long: "ארוך — עד 2,400 תווים (כ־400 מילים)",
+    ranges: {
+      short: "קצר — 400–600 תווים (כ־70–100 מילים)",
+      medium: "בינוני — 800–1,200 תווים (כ־130–200 מילים)",
+      long: "ארוך — 1,600–2,400 תווים (כ־270–400 מילים)",
+    },
+    knowledgeLevel: "רמת ידע",
+    knowledgeLevels: {
+      general: "בסיס הידע + ידע מקצועי כללי",
+      knowledge_base: "מבסיס הידע בלבד",
+    },
+    knowledgeHints: {
+      general:
+        "מספרים, שמות, מחקרים, סיפורים וכל מה שנוגע למותג או להצעה שלך מגיעים רק מהמקורות שלך. ידע מקצועי כללי יכול להסביר אותם, והפוסט ישאף לאורך שבחרת.",
+      knowledge_base:
+        "כל עובדה מגיעה מהמקורות שלך, ולכן הפוסט עשוי להיות קצר מהאורך שבחרת.",
+    },
     auto: "אוטומטית",
     question: "שאלה",
     insight: "תובנה",
@@ -306,6 +339,8 @@ export function CreatePost({ locale }: { locale: Locale }) {
     tone_other: "",
     hook: "auto",
     length: "medium",
+    // The writer's freedom beyond the sources; the server's default is "general".
+    knowledge_level: "general" as "general" | "knowledge_base",
     cta: "none",
     cta_other: "",
     offer_details: "",
@@ -667,6 +702,39 @@ export function CreatePost({ locale }: { locale: Locale }) {
                   onChange={(e) => setForm({ ...form, goal: e.target.value })}
                 />
               </div>
+              <div>
+                <label
+                  htmlFor="post-knowledge-level"
+                  className="mb-2 block text-sm font-medium"
+                >
+                  {t.knowledgeLevel}
+                </label>
+                <select
+                  id="post-knowledge-level"
+                  className={inputClass}
+                  aria-describedby="post-knowledge-level-hint"
+                  value={form.knowledge_level}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      knowledge_level: e.target
+                        .value as typeof form.knowledge_level,
+                    })
+                  }
+                >
+                  {(["general", "knowledge_base"] as const).map((key) => (
+                    <option key={key} value={key}>
+                      {t.knowledgeLevels[key]}
+                    </option>
+                  ))}
+                </select>
+                <p
+                  id="post-knowledge-level-hint"
+                  className="mt-2 text-xs text-muted-foreground"
+                >
+                  {t.knowledgeHints[form.knowledge_level]}
+                </p>
+              </div>
               <details className="rounded-lg border border-border p-4">
                 <summary className="cursor-pointer text-sm font-medium">
                   {t.advanced}
@@ -744,7 +812,9 @@ export function CreatePost({ locale }: { locale: Locale }) {
                     >
                       {(["short", "medium", "long"] as const).map((key) => (
                         <option key={key} value={key}>
-                          {t[key]}
+                          {form.knowledge_level === "general"
+                            ? t.ranges[key]
+                            : t[key]}
                         </option>
                       ))}
                     </select>

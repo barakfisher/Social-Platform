@@ -11,7 +11,7 @@ import json
 import re
 import unicodedata
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 import tiktoken
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.config import get_settings
 from app.generation_provider import GenerationError, chat_completion
 
-REVIEW_VERSION = "source-review-v8"
+REVIEW_VERSION = "source-review-v9"
 # Words a sentence may leave outside every claim: joining, relative and discourse words that
 # cannot state a fact on their own. Anything else, including dates, names, origins, negation
 # and time, place or quantity words such as "today" or "there", must sit inside a claim.
@@ -52,16 +52,23 @@ Every other word belongs inside a claim, even a short one such as "there", "toda
 Give every claim a kind:
 - factual: states something about the world, the brand, people, events, numbers, dates,
   names, origins, qualifiers, benefits or outcomes, including implied ones.
+- general: a widely accepted statement of professional knowledge about how things usually
+  work in the field, with no number, date, study, quote, named person, organisation, model
+  or event, nothing about the brand, its people, offer, clients or results, and no
+  first-person experience.
 - creative: humor, metaphor, a rhetorical question, an opinion framed as the author's view,
   an invitation or call to action, or a greeting, that states no fact.
 A clause that mixes a joke with a fact is factual. "Mentoring is like a GPS for your career"
-is creative; "mentoring doubles promotions" is factual. When unsure, use factual.
+is creative; "a mentor shortens the learning curve" is general; "our mentees are promoted
+faster" and "research shows mentoring doubles promotions" are factual. A general statement
+that a supplied source states is factual and supported. When unsure, use factual.
 The call to action the user chose (preferences.cta) is the owner's intent. An invitation
 to it is creative. Any detail about the offer (a name, date, price, place, link) is factual.
 Factual claims: supported means directly stated in a cited source or a faithful
 translation. A source mentioning rosemary and sage does NOT establish aroma, cooking uses,
 health, biodiversity, passionate volunteers, a schedule beyond what it says, or outcomes.
-A fact you know to be true but that no supplied source states is unsupported.
+A specific fact you know to be true but that no supplied source states is a factual claim,
+and it is unsupported.
 Set contradicted=true when a supplied source states something incompatible with the claim.
 For every supported factual claim give exact verbatim excerpts with their chunk IDs.
 The source with chunk_id OWNER is offer details written by the brand owner; it is valid
@@ -72,7 +79,7 @@ or alter punctuation or whitespace. When a claim relies on nonadjacent passages,
 separate evidence entry for each passage, even when they share a chunk ID.
 Use the shortest exact excerpts that establish the claim. Do not stretch an excerpt to
 support embellishments. Excerpts supporting one claim never support another.
-Unsupported or creative claims have empty evidence.
+Unsupported, general or creative claims have empty evidence.
 Report whole-draft problems in issues, using only these codes: wrong_language (not in the
 requested language), brand_style (violates brand voice or guidelines, or uses hashtags the
 brand avoids), prohibited_claim (makes a claim the brand prohibits, even if a source
@@ -98,7 +105,7 @@ class Evidence(BaseModel):
 class Claim(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     text: str = Field(min_length=1, max_length=2000)
-    kind: Literal["factual", "creative"]
+    kind: Literal["factual", "general", "creative"]
     supported: bool
     contradicted: bool
     evidence: list[Evidence] = Field(max_length=10)
@@ -509,6 +516,48 @@ def evidence_failure(review: Review, matched: dict[int, str | None]) -> dict | N
     return None
 
 
+def states_specifics(text: str, brand_name: str) -> bool:
+    """Draft text with a number, a fact sign or the brand's name: never general knowledge,
+    whatever the reviewer called it."""
+    if any(
+        re.fullmatch(NUMBER, token) or (not is_word(token) and is_fact_sign(token))
+        for token, _, _ in split_tokens(text)
+    ):
+        return True
+    name = " ".join(unicodedata.normalize("NFKC", brand_name).casefold().split())
+    return bool(name) and name in " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def accepted_general(claim: Claim, text: str, preferences: dict, brand: dict) -> bool:
+    """A general-knowledge claim the draft may make without a source: only at the general
+    knowledge level, only when it states no specifics, and never against a source (the
+    Knowledge Base wins). Any other "general" claim is judged as a factual one."""
+    return (
+        claim.kind == "general"
+        and not claim.contradicted
+        and preferences.get("knowledge_level") == "general"
+        and not states_specifics(text, str(brand.get("name") or ""))
+    )
+
+
+def knowledge_share(claims: list[dict]) -> dict:
+    """How much of a checked draft's non-creative content its sources support."""
+    sourced = sum(
+        c["kind"] == "factual" and c["supported"] and not c["contradicted"] for c in claims
+    )
+    general = sum(c["kind"] == "general" for c in claims)
+    unsupported = sum(
+        c["kind"] == "factual" and (c["contradicted"] or not c["supported"]) for c in claims
+    )
+    total = sourced + general + unsupported
+    return {
+        "sourced_claims": sourced,
+        "general_claims": general,
+        "unsupported_claims": unsupported,
+        "percent": round(100 * sourced / total) if total else None,
+    }
+
+
 def prompt_tokens(text: str) -> int:
     # Explicit tokenizer setting supports other configurable models without guessing aliases.
     return len(
@@ -620,17 +669,47 @@ def review_draft(
             strict=True,
         )
     }
+    stored_ids = {alias: source["chunk_id"] for alias, source in aliases.items()}
+    # Stored provenance names real chunk IDs; aliases mean nothing outside this review. A
+    # "general" claim the draft may not make is stored as the unsupported factual claim it is.
+    stored: list[dict[str, Any]] = [
+        {
+            "index": sentence.index,
+            "claims": [
+                {
+                    **claim.model_dump(),
+                    "text": covered[id(claim)],
+                    **(
+                        {}
+                        if claim.kind != "general"
+                        or accepted_general(claim, covered[id(claim)], preferences, brand)
+                        else {"kind": "factual", "supported": False}
+                    ),
+                    # Only verified quotes are kept, as the source text they matched;
+                    # evidence on any other claim is unverified model text and is dropped.
+                    "evidence": [
+                        {"chunk_id": stored_ids[e.chunk_id], "quote": matched[id(e)]}
+                        for e in claim.evidence
+                    ]
+                    if claim in supported
+                    else [],
+                }
+                for claim in sentence.claims
+            ],
+        }
+        for sentence in review.sentences
+    ]
     # Findings carry only codes and text copied from the draft itself; model-written prose
     # is never stored or shown.
     findings: list[dict] = [
         {
-            "code": "contradicted_claim" if claim.contradicted else "unsupported_claim",
-            "sentence": sentences[sentence.index],
-            "claim": covered[id(claim)],
+            "code": "contradicted_claim" if claim["contradicted"] else "unsupported_claim",
+            "sentence": sentences[sentence["index"]],
+            "claim": claim["text"],
         }
-        for sentence in review.sentences
-        for claim in sentence.claims
-        if claim.kind == "factual" and (claim.contradicted or not claim.supported)
+        for sentence in stored
+        for claim in sentence["claims"]
+        if claim["kind"] == "factual" and (claim["contradicted"] or not claim["supported"])
     ]
     findings += unlisted_contact_findings(
         sentences, owner_given_text(offer_details, preferences, brand)
@@ -639,34 +718,20 @@ def review_draft(
     findings += [
         {"code": issue, "sentence": None, "claim": None} for issue in dict.fromkeys(issues)
     ]
-    stored_ids = {alias: source["chunk_id"] for alias, source in aliases.items()}
+    claims = [claim for sentence in stored for claim in sentence["claims"]]
     return {
         **metadata,
         "version": REVIEW_VERSION,
         "status": "checked",
         "findings": findings,
-        # Stored provenance names real chunk IDs; aliases mean nothing outside this review.
-        "sentences": [
-            {
-                "index": sentence.index,
-                "claims": [
-                    {
-                        **claim.model_dump(),
-                        "text": covered[id(claim)],
-                        # Only verified quotes are kept, as the source text they matched;
-                        # evidence on any other claim is unverified model text and is dropped.
-                        "evidence": [
-                            {"chunk_id": stored_ids[e.chunk_id], "quote": matched[id(e)]}
-                            for e in claim.evidence
-                        ]
-                        if claim in supported
-                        else [],
-                    }
-                    for claim in sentence.claims
-                ],
-            }
-            for sentence in review.sentences
-        ],
+        "sentences": stored,
+        "knowledge_share": {
+            **knowledge_share(claims),
+            "general_sentences": sum(
+                any(claim["kind"] == "general" for claim in sentence["claims"])
+                for sentence in stored
+            ),
+        },
         "prompt_tokens_estimate": tokens,
     }
 

@@ -323,11 +323,11 @@ def test_every_new_chunk_carries_the_date_it_was_added(api, private_dir):
 
 
 def test_writer_is_told_newer_sources_win():
-    from app.generation import PROMPT_VERSION, SYSTEM
+    from app.generation import WRITER_SYSTEMS
 
-    assert PROMPT_VERSION == "grounded-post-v6"
-    assert "source_location.added_on" in " ".join(SYSTEM.split())
-    assert "most recently added version" in " ".join(SYSTEM.split())
+    for system in WRITER_SYSTEMS.values():
+        assert "source_location.added_on" in " ".join(system.split())
+        assert "most recently added version" in " ".join(system.split())
 
 
 def test_chunks_from_before_dates_existed_use_their_document_date():

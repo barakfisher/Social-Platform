@@ -1591,3 +1591,154 @@ afterwards); new tests: each platform's style reaches the writer and the source 
 other's does not, ideas get the chosen platform's style and roles, both platforms favour a
 different first role. Ruff, format, `mypy app`, `alembic check`. Not measured live: whether
 drafts and ideas actually differ by platform; the owner chose to measure later.
+
+## General professional knowledge in drafts (grounded-post-v7, source-review-v9) — 2026-11-01
+
+Problem: drafts are thin (323–811 characters measured) next to a generic Gemini post on
+"mentoring and the value of guidance". Three writer rules cause it: "Never add outside/world
+knowledge", every factual statement must paraphrase a source, and "Never pad / prefer a
+shorter faithful post". Most of the Gemini post's richness is general professional
+explanation and structure, not specific facts.
+
+Decisions (owner-approved, one question at a time):
+1. The line (option A of three). Allowed without a source: general, widely accepted
+   professional knowledge about how things usually work in the field, with no number, no
+   attribution and no name ("a mentor shortens the learning curve", "an outside view helps
+   see the whole picture"). Only from the Knowledge Base, Brand DNA or offer details:
+   numbers and percentages, studies ("research shows"), quotes and named people, events and
+   dates, anything about the brand, its people, offer, clients or results, and any
+   first-person story or experience. Anchor rule: the post's main message and angle come
+   from the Knowledge Base; general knowledge only explains, illustrates and connects; the
+   writer uses every relevant Knowledge Base point first; where they conflict the Knowledge
+   Base wins.
+   Rejected: B, general knowledge as framing only (one or two sentences): the Gemini
+   richness is in the body, so drafts would stay thin. C, also named models and frameworks
+   ("70-20-10"): names, attributions and details of named models are where models invent.
+2. A per-draft "Knowledge level" select with two levels: "Knowledge Base only" (today's
+   behaviour) and "Knowledge Base + general professional knowledge" (default). As the
+   Knowledge Base grows the owner can choose "only" more often.
+   Rejected: three levels (a framing-only middle the model would not reliably keep apart
+   from the others); a range of five or more levels (indistinguishable to a model, and each
+   level is another prompt to test and measure).
+3. The source check (option A of three): a third claim kind, `general`, defined by the line
+   above. A general claim is not a finding; it is shown separately. A deterministic server
+   guard turns a `general` claim containing a digit, a fact sign (FACT_SIGNS, currency) or
+   the brand name into an unsupported claim, so the reviewer cannot pass an invented fact by
+   calling it general. At "Knowledge Base only" every general claim is unsupported. The
+   check stores the Knowledge Base share: supported factual claims over all non-creative
+   claims, shown as "X% from the Knowledge Base · N general-knowledge sentences".
+   Rejected: B, general as `creative` (no count or share, and `creative` becomes a bin for
+   anything uncertain); C, the writer labels its own general sentences (free, but the check
+   would still flag them, and a writer vouching for itself is not evidence). A free share
+   estimate from the writer was also declined, so no unreliable number is shown.
+4. Length (option A of three): at the general-knowledge level the length is a target range
+   (short 400–600, medium 800–1200, long 1600–2400 characters) and "never pad" / "prefer
+   shorter" are dropped: reach the range with Knowledge Base points and general knowledge
+   that explains them, never with an invented fact; if that is impossible, write shorter
+   and say so in warnings. "Knowledge Base only" keeps today's maximum-only rules. No
+   server enforcement. Rejected: B, maximum only (models without a target write short); C,
+   a server minimum with a rewrite (a second paid call and more latency, the cost the
+   two-call flow was rejected for, and pressure to lengthen invites invention).
+
+Earlier rejection, kept: the owner's two-call flow (write freely, then edit to fit the
+Knowledge Base). The edit step must find invented facts, the hardest task for the source
+check (15 false alarms in 33 flags, plus misses); the free draft would set the message
+instead of the Knowledge Base; it doubles cost and latency (drafts already take 28–63 s).
+
+Scope:
+- `GenerateInput` gains the knowledge level; it reaches the writer, the run's inputs and
+  fingerprint, the stored metadata and the source check's preferences.
+- Writer `grounded-post-v7`: two server-owned system prompts, one per level, selected by
+  the level. Implementation choice: the relaxation of a grounding rule belongs in the
+  system instructions, not in `preferences`, which the prompt declares untrusted data
+  (unlike `platform_style`, which only shapes form). "Knowledge Base only" is today's
+  `SYSTEM` word for word.
+- Source check `source-review-v9`: claim kind `general`, the server guard, the share.
+- Create Post: the select on the Post details tab; History shows each draft's level; the
+  review panels show the share.
+
+Non-goals: the two-call flow; web search for the writer; adding drafts or fetched pages to
+the Knowledge Base (a draft now holds general knowledge and writer elaboration, so storing
+it would turn unsourced text into "sources" the check then approves; published posts may
+still be added by hand as sample posts); saving every draft to History automatically (a
+separate proposed task); highlighting general sentences inside the text; enforcing length
+on the server; changing the default writer; sample posts as style.
+
+Acceptance criteria:
+1. The select works in HE and EN at 1280 and 375 px with no horizontal scroll; the default
+   is general knowledge; History shows the level a draft was written at.
+2. Each level sends its own system prompt; "Knowledge Base only" equals the current prompt
+   word for word (a test pins it).
+3. A repeated request with another level is a request conflict, not a reuse; stored v6
+   runs get the existing old-version behaviour (`generation_review_required`).
+4. The reviewer schema accepts `general` with empty evidence and coverage counts it; a
+   general claim with a digit, a fact sign or the brand name becomes unsupported; at
+   "Knowledge Base only" every general claim is a finding.
+5. The share is computed from the stored claims and shown; with no non-creative claims it
+   is not shown; stored v8 reviews ask for a new check, as with earlier bumps.
+6. The prompt budget and the code-defaults spending guard cover the longer of the two
+   writer prompts and the v9 reviewer prompt.
+7. Hermetic tests (no network, no `.env`, a disposable migrated database, never `social`),
+   each failing before its change and asserting constants; `bf-qa` against these criteria.
+8. A paid live comparison, run only after a separate owner approval: the owner's 7 drafted
+   topics plus "mentoring and the value of guidance", at both levels (16 drafts), with a
+   source check on the 8 general-knowledge drafts; estimated $1.5–2 at measured prices.
+   Measured: length, share, sources cited, cost, time, and invented specific facts counted
+   by reading (target 0). The owner then reads the drafts beside the Gemini post.
+9. `.env.example` (if anything changes), the typical-token cost estimates and this log are
+   updated.
+
+States: loading and errors as today; the select always holds a value; access stays
+`local_only`.
+
+Open for a later task: when web search for the writer is built, whether its fetched pages
+should be offered for the Knowledge Base.
+
+### Implementation (branch claude/general-knowledge-drafts)
+
+- `GenerateInput.knowledge_level` (`knowledge_base` | `general`, default `general`) is part of
+  the stored inputs and fingerprint and reaches the writer and the check as
+  `preferences.knowledge_level`. `WRITER_SYSTEMS` maps each level to its prompt;
+  `KNOWLEDGE_BASE_SYSTEM` is v6's prompt (a test pins its SHA-256). `LENGTH_LIMITS` and
+  `LENGTH_TARGET_MINIMUMS` replace the inline length numbers. The general prompt also keeps
+  v6's "Do not add persuasive product descriptions" (QA noticed it had been dropped).
+- Re-checks of runs and saved drafts whose stored inputs predate the field are judged at
+  `knowledge_base` (`STORED_KNOWLEDGE_LEVEL`, app/recheck.py), the rules they were written
+  under. History shows each generated draft's level the same way.
+- `source-review-v9`: claim kind `general`. `accepted_general` (app/grounding.py) keeps a
+  general claim only at the general level, when it is not contradicted (QA found a
+  contradicted general claim passing silently at the general level; the Knowledge Base
+  wins) and when `states_specifics` finds no number, fact sign or brand name. Every other
+  general claim is stored as factual and unsupported (or contradicted). The review stores
+  `knowledge_share` (sourced, general, unsupported claims, percent, general sentences).
+  The UI shows it on checked reviews, and hides it once the text has been edited.
+
+Known limits, accepted:
+- The specifics guard catches digits, fact signs and the brand name only. Spelled-out
+  numbers ("doubles"), "research shows", named organisations and first-person stories as
+  general claims rest on the reviewer's judgement; the live comparison should count them.
+- The brand-name test is a substring match (so Hebrew prefixes are caught); a short or common
+  brand name gives false alarms inside other words.
+- Replaying a stored v6 run's request key answers 409 `generation_request_conflict` rather
+  than `generation_review_required`: the fingerprint now includes the level, which v6 inputs
+  lack. Both are 409 and nothing is reused; the client makes a new key per form state. The
+  same happened when earlier fields were added.
+- The Create Post length labels repeat the target numbers as text.
+
+Owner decision: general health or wellbeing effects ("exercise reduces stress") may appear as
+general knowledge, like any widely accepted professional statement; v6 had listed health
+effects among what needs a source. Rejected: adding them to the sourced-only list. The rest
+of the line still applies, so a number, a study or a claim about the brand's own offer stays
+sourced, and the reviewer still flags health claims about the brand's products.
+
+Verification: backend 934 passed on a disposable migrated database (`social_gk_test`, never
+`social`), without `.env`; ruff, format, `mypy app`. New tests in
+`tests/test_knowledge_level.py`; removing the level check, the specifics guard, the stored
+default, the per-level prompt or the contradiction rule each makes them fail. Frontend: lint,
+typecheck, format, build, Playwright 117/117 (new `knowledge-level.spec.ts`; the length-label
+test now covers both levels). Screenshots of Create Post and the review panel in HE and EN
+at 375 and 1280 px, no horizontal scroll. `bf-qa`: criteria 2, 4, 5, 6 pass; its High
+defect and test gaps are fixed above.
+
+Not done yet: criterion 8 (the paid live comparison, after the owner's approval) and the
+typical-token cost estimates, which that comparison will measure.

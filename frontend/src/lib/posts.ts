@@ -10,6 +10,21 @@ export type Finding = {
   sentence: string | null;
   claim: string | null;
 };
+export type KnowledgeLevel = "general" | "knowledge_base";
+// Inputs stored before the knowledge level existed were written from the Knowledge Base only.
+export function knowledgeLevel(preferences?: {
+  knowledge_level?: KnowledgeLevel;
+}): KnowledgeLevel {
+  return preferences?.knowledge_level ?? "knowledge_base";
+}
+export type KnowledgeShare = {
+  sourced_claims: number;
+  general_claims: number;
+  unsupported_claims: number;
+  // Sourced claims out of all non-creative ones; null when there are none.
+  percent: number | null;
+  general_sentences: number;
+};
 export type Review = {
   // "not_requested": a new draft before "Check sources"; findings hold only the free
   // checks (unlisted contact details, wrong language). "blocked": saved drafts only; the
@@ -22,6 +37,8 @@ export type Review = {
   checked_at?: string;
   // Saved drafts only: the draft version the review applies to; null means an edited copy.
   checked_version?: number | null;
+  // Checked reviews from source-review-v9 on.
+  knowledge_share?: KnowledgeShare;
 };
 export type GeneratedPost = {
   id: string;
@@ -37,7 +54,7 @@ export type GeneratedPost = {
     brand_version: number;
     prompt_version: string;
     grounding_review: Review;
-    preferences: { review_model: string };
+    preferences: { review_model: string; knowledge_level?: KnowledgeLevel };
   };
 };
 export type SavedPost = {
@@ -51,7 +68,7 @@ export type SavedPost = {
   generation_run_id: string | null;
   generation_settings: {
     grounding_review?: Review;
-    preferences?: { review_model?: string };
+    preferences?: { review_model?: string; knowledge_level?: KnowledgeLevel };
   };
   created_at: string;
 };

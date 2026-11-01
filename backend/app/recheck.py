@@ -14,7 +14,12 @@ from sqlalchemy import select, update
 from app.brand import local_only
 from app.config import get_settings
 from app.db import SessionLocal
-from app.generation import GenerateInput, brand_constraints, generation_lock
+from app.generation import (
+    STORED_KNOWLEDGE_LEVEL,
+    GenerateInput,
+    brand_constraints,
+    generation_lock,
+)
 from app.generation_provider import GenerationError
 from app.grounding import blocked_review, check_draft, text_fingerprint
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID
@@ -37,7 +42,11 @@ class RecheckDraftInput(RecheckInput):
 
 def generation_inputs(inputs: dict, request_key: UUID) -> GenerateInput:
     try:
-        return GenerateInput.model_validate({**inputs, "request_key": request_key})
+        # Drafts stored before the knowledge level existed were written from the Knowledge
+        # Base only, so they are checked that way.
+        return GenerateInput.model_validate(
+            {"knowledge_level": STORED_KNOWLEDGE_LEVEL, **inputs, "request_key": request_key}
+        )
     except ValidationError:
         # Inputs stored before tone/CTA presets cannot be rebuilt into writer preferences.
         raise HTTPException(409, "review_unavailable") from None

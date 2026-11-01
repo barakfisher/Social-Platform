@@ -3,7 +3,12 @@ import { useCallback, useEffect, useState } from "react";
 import { History as HistoryIcon, RefreshCw, Save, Trash2 } from "lucide-react";
 import { ReviewFindings } from "@/components/review-findings";
 import { Button } from "@/components/ui/button";
-import { apiRequest, inputClass, type SavedPost } from "@/lib/posts";
+import {
+  apiRequest,
+  inputClass,
+  knowledgeLevel,
+  type SavedPost,
+} from "@/lib/posts";
 import type { Locale } from "@/lib/i18n";
 const copy = {
   en: {
@@ -36,6 +41,11 @@ const copy = {
     reviewUnavailable:
       "This draft was not generated with the current source check, so it cannot be checked again.",
     perCheck: "per check",
+    knowledgeLevel: "Knowledge level",
+    knowledgeLevels: {
+      general: "Knowledge Base + general professional knowledge",
+      knowledge_base: "Knowledge Base only",
+    },
   },
   he: {
     title: "כל הטיוטות במקום אחד",
@@ -67,6 +77,11 @@ const copy = {
     reviewUnavailable:
       "הטיוטה לא נוצרה עם בדיקת המקורות הנוכחית, ולכן אי אפשר לבדוק אותה שוב.",
     perCheck: "לבדיקה",
+    knowledgeLevel: "רמת ידע",
+    knowledgeLevels: {
+      general: "בסיס הידע + ידע מקצועי כללי",
+      knowledge_base: "מבסיס הידע בלבד",
+    },
   },
 };
 export function History({ locale }: { locale: Locale }) {
@@ -290,6 +305,20 @@ export function History({ locale }: { locale: Locale }) {
             {t.edit} ·{" "}
             {selected.platform === "linkedin" ? "LinkedIn" : "Facebook"}
           </h3>
+          {/* Only generated drafts carry the preferences they were written with. */}
+          {selected.generation_settings.preferences && (
+            <p
+              data-testid="draft-knowledge-level"
+              className="-mt-2 mb-4 text-xs text-muted-foreground"
+            >
+              {t.knowledgeLevel}:{" "}
+              {
+                t.knowledgeLevels[
+                  knowledgeLevel(selected.generation_settings.preferences)
+                ]
+              }
+            </p>
+          )}
           <label htmlFor="draft-content" className="sr-only">
             {t.content}
           </label>

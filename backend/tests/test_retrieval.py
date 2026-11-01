@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from app.config import get_settings
 from app.embeddings import profile_key
-from app.generation import SYSTEM
+from app.generation import GENERAL_SYSTEM, LENGTH_LIMITS
 from app.grounding import prompt_tokens
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID, seed_local_scope
 from app.models import KnowledgeChunk, KnowledgeDocument
@@ -174,11 +174,11 @@ def test_writer_and_reviewer_prompts_admit_a_full_context_and_the_longest_draft(
     limit = settings.generation_max_distance
     count = settings.generation_context_budget // prompt_tokens(HEBREW_CHUNK) + 3
     add_document(factory, "Long", spread(limit, count), HEBREW_CHUNK)
-    longest = {"short": 600, "medium": 1200, "long": 2400}["long"]
+    longest = LENGTH_LIMITS["long"]
     draft = ("טיוטה שמבוססת על המקורות שנשלחו לכותב. " * 100)[:longest].strip()
 
     def cite_everything(system, user, tokens, **kwargs):
-        assert system == SYSTEM
+        assert system == GENERAL_SYSTEM
         ids = [s["chunk_id"] for s in json.loads(user)["sources"]]
         return json.dumps({"content": draft, "source_ids": ids, "warnings": []}), {
             "model": "test/model",
