@@ -22,6 +22,7 @@ from app.models import (
     User,
     Workspace,
 )
+from app.platform_profiles import POST_STYLES
 
 RealClient = httpx.Client
 
@@ -1510,3 +1511,25 @@ def test_writer_profile_output_limits_fit_the_provider_ceiling():
     )
     for model_id, profile in WRITER_PROFILES.items():
         assert profile.output_tokens is None or profile.output_tokens <= ceiling, model_id
+
+
+@pytest.mark.parametrize("platform", list(POST_STYLES))
+def test_writer_and_reviewer_get_the_chosen_platform_style_only(service_api, platform):
+    client, factory, _, generation = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    result = client.post("/generation", json=payload(platform=platform))
+    assert result.status_code == 200, result.text
+    sent = json.loads(generation.call_args.args[1])["preferences"]
+    assert sent["platform_style"] == POST_STYLES[platform]
+    others = [style for name, style in POST_STYLES.items() if name != platform]
+    assert all(style not in generation.call_args.args[1] for style in others)
+    # The source check judges platform_fit against the same description.
+    with patch("app.grounding.chat_completion", side_effect=fake_review) as review:
+        checked = client.post(f"/generation/{result.json()['id']}/review", json={})
+    assert checked.status_code == 200, checked.text
+    assert (
+        json.loads(review.call_args.args[1])["preferences"]["platform_style"]
+        == (POST_STYLES[platform])
+    )
+    assert "preferences.platform_style" in SYSTEM

@@ -325,7 +325,7 @@ def test_every_new_chunk_carries_the_date_it_was_added(api, private_dir):
 def test_writer_is_told_newer_sources_win():
     from app.generation import PROMPT_VERSION, SYSTEM
 
-    assert PROMPT_VERSION == "grounded-post-v5"
+    assert PROMPT_VERSION == "grounded-post-v6"
     assert "source_location.added_on" in " ".join(SYSTEM.split())
     assert "most recently added version" in " ".join(SYSTEM.split())
 

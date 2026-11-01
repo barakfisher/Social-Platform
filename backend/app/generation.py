@@ -20,6 +20,7 @@ from app.grounding import REVIEW_VERSION, unrequested_review
 from app.grounding import prompt_tokens as generation_tokens
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID
 from app.models import BrandDNA, GenerationRun, KnowledgeDocument
+from app.platform_profiles import POST_STYLES
 from app.post_presets import CTAS, OTHER, TONES, CtaId, ToneId
 from app.query_translation import translate_query
 from app.retrieval import relevant_context
@@ -32,7 +33,7 @@ from app.writer_models import (
 )
 
 router = APIRouter(prefix="/generation", tags=["generation"], dependencies=[Depends(local_only)])
-PROMPT_VERSION = "grounded-post-v5"
+PROMPT_VERSION = "grounded-post-v6"
 # Share of GENERATION_MAX_REQUEST_USD the cross-language query fallback may reserve.
 TRANSLATION_BUDGET_SHARE = 0.2
 # Far more citations than a real draft makes; a longer list is malformed output.
@@ -50,8 +51,9 @@ constraints; prohibited claims must be avoided. Do not invent statistics, promis
 prices,
 credentials, or facts not supported by sources. If sources are inadequate, say so in warnings.
 Write exclusively in the requested language, with natural paragraph breaks and plain text.
-For LinkedIn: professional, specific, readable paragraphs. For Facebook: conversational and
-accessible.
+preferences.platform_style describes how a post fits the platform: its readers, opening,
+structure, register and ending. Follow it; preferences.tone, the brand voice and guidelines
+take precedence where they differ.
 Return the required JSON object: content, source_ids (only chunk IDs actually used), warnings.
 Do not place source IDs inside the post content. No markdown fences or HTML. Never publish or
 schedule.
@@ -114,6 +116,7 @@ class GenerateInput(BaseModel):
         """Preferences as the writer and reviewer see them: presets resolved to instructions."""
         return {
             "platform": self.platform,
+            "platform_style": POST_STYLES[self.platform],
             "language": self.language,
             "topic": self.topic,
             "goal": self.goal,

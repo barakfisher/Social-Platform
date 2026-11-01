@@ -1553,3 +1553,41 @@ The "what I learned in 20 years" idea, which needs a real story from the owner, 
 all three calls (the open owner decision). After merging, the owner's database needs
 `alembic upgrade head` (the Compose `migrate` service runs it on `docker compose up -d --build`)
 and the posts document marked.
+
+## Topic ideas after marking sample posts, and platform profiles — 2026-11-01
+
+Measured on the owner's Knowledge Base (GPT-4.1, Hebrew, paid, about $0.05 in all). Before,
+the posts document was still `knowledge` (SP-29's after-merge step had not been done): 4 of 6
+ideas restated a post in new words, 2 asked for a first-person story the Knowledge Base does
+not contain. The posts document is now `sample_posts`. In 4 calls after that, "course versus
+academy" came back in 3, one idea was new ("recognising the moment a person is ready for
+change"), one restatement remained ("presence… seeing the person beyond the role", 2 of 4
+calls), and the "20 years" story idea came back in all 4. Running the server's line check
+locally on all ten ideas dropped none: it compares words within one line, and the remaining
+restatement joins two adjacent lines of a post. LinkedIn and Facebook ideas were nearly the same.
+
+Owner decisions: no exclusion of ideas already shown, no "needs your story" label and no
+richer idea fields for now. Wanted: a duplicate check by meaning (embeddings) against
+sample posts (not built yet) and platform profiles for both platforms (below), measured later.
+
+Platform profiles (`app/platform_profiles.py`, `grounded-post-v6`, `topic-suggestions-v4`):
+- `POST_STYLES` describes each platform's readers, opening, structure, register and ending.
+  It reaches the writer and the source check as `preferences.platform_style`, replacing the
+  writer's one line per platform, so platform_fit is judged against the same text. Tone, brand
+  voice and guidelines take precedence where they differ.
+- `IDEA_ROLES` lists the roles a post may play, the platform's favoured ones first. Topic
+  ideas get both; each idea takes a different role. When the sources assign roles or posts to
+  channels (the owner's marketing plan does), the sources win.
+- The profiles are general to every brand; what one brand does on each channel stays in its
+  Knowledge Base and Brand DNA.
+
+Rejected: platform text in the system prompts (every `system == SYSTEM` guard and the prompt
+budget would change per platform, unlike the tone and CTA presets this follows); a `role`
+field in each idea (a response and UI change, not needed to ask for different roles);
+server-enforced distinct roles (would drop ideas the owner may still want).
+
+Verification: backend 904 passed on a disposable migrated database (`social_pp_test`, dropped
+afterwards); new tests: each platform's style reaches the writer and the source check and the
+other's does not, ideas get the chosen platform's style and roles, both platforms favour a
+different first role. Ruff, format, `mypy app`, `alembic check`. Not measured live: whether
+drafts and ideas actually differ by platform; the owner chose to measure later.

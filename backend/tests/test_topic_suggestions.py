@@ -13,6 +13,7 @@ from app.generation_provider import GenerationError
 from app.grounding import prompt_tokens
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID, seed_local_scope
 from app.models import KnowledgeChunk, KnowledgeDocument, User, Workspace
+from app.platform_profiles import IDEA_ROLES, POST_STYLES
 from app.topic_suggestions import (
     EXCERPT_OVERHEAD_TOKENS,
     MAX_SUGGESTIONS,
@@ -136,6 +137,8 @@ def test_suggestions_cite_real_sources_and_are_shaped(suggest_api):
     preferences = json.loads(complete.call_args.args[1])["preferences"]
     assert preferences == {
         "platform": "facebook",
+        "platform_style": POST_STYLES["facebook"],
+        "roles": IDEA_ROLES["facebook"],
         "language": "en",
         "goal": "Invite volunteers",
         "count": 2,
@@ -553,3 +556,23 @@ def test_the_reply_names_the_prompt_version(suggest_api):
     complete.return_value = reply(idea(NEW_ANGLE, rationale="בידול מקצועי."))
     body = client.post("/generation/topic-suggestions", json={"language": "he"}).json()
     assert body["metadata"]["version"] == SUGGESTION_VERSION
+
+
+@pytest.mark.parametrize("platform", list(IDEA_ROLES))
+def test_ideas_get_the_chosen_platforms_style_and_roles(suggest_api, platform):
+    client, factory, complete = suggest_api
+    add_document(factory, "Garden", ["Cedar Garden grows sage."])
+    complete.return_value = reply()
+    client.post("/generation/topic-suggestions", json={"language": "en", "platform": platform})
+    system, user = complete.call_args.args[:2]
+    preferences = json.loads(user)["preferences"]
+    assert preferences["platform_style"] == POST_STYLES[platform]
+    assert preferences["roles"] == IDEA_ROLES[platform]
+    others = [style for name, style in POST_STYLES.items() if name != platform]
+    assert all(style not in user for style in others)
+    assert "preferences.roles" in system and "different role" in system
+
+
+def test_both_platforms_favour_different_roles_first():
+    assert set(IDEA_ROLES) == set(POST_STYLES)
+    assert len({roles[0] for roles in IDEA_ROLES.values()}) == len(IDEA_ROLES)
