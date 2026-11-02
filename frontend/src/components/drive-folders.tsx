@@ -327,10 +327,8 @@ export function DriveFolders({
           {t.loading}
         </p>
       ) : loadFailed && listing === null ? (
-        <div
-          role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
-        >
+        // Not an alert: nothing the owner did failed, and the page's own alerts stay alone.
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
           {t.loadError}
           <Button
             variant="outline"
