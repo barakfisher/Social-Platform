@@ -1894,7 +1894,8 @@ How it works (`app/drive.py`, `app/drive_sync.py`, `app/drive_folders.py`; migra
 - One sync per folder at a time (advisory lock). The beat checks hourly and syncs folders
   last attempted 23 hours ago or more, so a day does not drift later. A sync still marked
   running after an hour shows as interrupted and may be refreshed.
-- New files arrive as prepared text, like an upload; the owner enables AI search for them.
+- New files arrive as prepared text, like an upload, and AI search starts on its own when
+  a key is set (see "New sources start AI search on their own" below).
 - Disconnecting deletes the folder's sources and their stored files; nothing changes in
   Drive. Deleting a single Drive source works, but it comes back at the next sync while the
   file is in the folder (the delete confirmation says so).
@@ -1934,3 +1935,35 @@ downloaded nothing; Hebrew desktop and 375 px views checked with no horizontal s
 Not verified live: the source reaching Ready (needs "Enable AI search", a paid embedding
 call); an edited file and a removed file against real Drive (the service account cannot
 edit Drive; the owner edits a document, then presses Refresh); a scheduled daily run.
+
+## New sources start AI search on their own — 2026-11-02
+
+Owner decision: once a source's text is prepared, the worker queues its embedding job in the
+same transaction when an embedding key is configured. The source goes from `text_prepared`
+to `embedding_pending` without a click; pasted text, uploads, web pages and Drive files all
+take this path. Without a key it rests at `text_prepared` as before.
+
+- **Automatic, not a separate "Enable AI search" step.** Rejected: keeping the button as the
+  only way in. It made every new source a two-step task, and a source the owner forgot to
+  enable was silently missing from drafts and topic ideas (they read Ready sources only).
+  Rejected: a per-workspace "embed automatically" switch, a setting nobody would turn off
+  for one owner. Cost: one `text-embedding-3-small` call per new or changed source, a
+  fraction of a cent for a typical document; a Drive folder's unchanged files cost nothing.
+- **The button stays for two cases**: sources prepared before a key was set (or before this
+  change, or after a profile change returned them to `text_prepared`), labelled "Enable AI
+  search"; and a failed attempt (`embedding_failed`), labelled "Retry AI search". It no
+  longer shows while embedding is pending or running, where it offered to start work that
+  was already under way.
+- `queue_embedding` in `app/worker.py` is the one place that marks a document for
+  embedding; `POST /knowledge/{id}/embed` and the worker both call it, so the job reuse and
+  the profile recorded are the same either way. The job is dispatched after commit; a lost
+  dispatch is queued again by the minute reconcile check.
+- Tests are hermetic about keys: an autouse fixture clears both provider keys, and only
+  tests that use the fake provider set a dummy one. A test that meant "a merely prepared
+  source" would otherwise depend on whether the developer's `.env` holds a key.
+
+Verification: backend suite (including the two new tests: a key queues and dispatches the
+job; no key leaves the source at `text_prepared` with no job), ruff, mypy; Playwright suite
+including a pending-embedding source showing no start button and the failed state offering
+"Retry AI search". Not verified live: a new source reaching Ready without a click, which
+needs a paid embedding call.

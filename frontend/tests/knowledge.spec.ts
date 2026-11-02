@@ -234,7 +234,7 @@ test("AI search preparation reaches Ready and shows a retryable provider failure
   ).toBeVisible();
   fail = false;
   await page
-    .getByRole("button", { name: "Enable AI search: מקור לדוגמה", exact: true })
+    .getByRole("button", { name: "Retry AI search: מקור לדוגמה", exact: true })
     .click();
   await expect(page.getByText("Ready", { exact: true })).toBeVisible();
   await expect(
@@ -243,6 +243,41 @@ test("AI search preparation reaches Ready and shows a retryable provider failure
       exact: true,
     }),
   ).toHaveCount(0);
+});
+
+test("a source preparing AI search on its own offers no button to start it", async ({
+  page,
+}) => {
+  await page.route("**/api/knowledge**", async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/configuration")) {
+      await route.fulfill({ json: { configured: true } });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            ...sourceDocument,
+            status: "Processing",
+            stage: "embedding_pending",
+            chunk_count: 1,
+            embedded_chunk_count: 0,
+          },
+        ],
+        total: 1,
+      },
+    });
+  });
+  await page.goto("/en/knowledge");
+  await expect(
+    page.getByText("Preparing AI search", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "AI search is connected. New sources are prepared for it automatically.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /AI search:/ })).toHaveCount(0);
 });
 
 const pdfBytes = Buffer.from("%PDF-1.4\n% test file\n");

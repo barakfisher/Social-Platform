@@ -29,7 +29,7 @@ const copy = {
     empty:
       "No topic could be tied to your sources this time. Try again, or add sources to your Knowledge Base.",
     insufficient:
-      "Your Knowledge Base has no ready sources yet. Add a source and enable AI search first.",
+      "Your Knowledge Base has no ready sources yet. Add a source and wait until it’s Ready.",
     spendingLimit:
       "Suggesting topics would exceed the per-request AI cost limit set on the server.",
     promptLimit:
@@ -50,7 +50,7 @@ const copy = {
     empty:
       "הפעם לא נמצא נושא שאפשר לקשר למקורות שלך. אפשר לנסות שוב או להוסיף מקורות למאגר הידע.",
     insufficient:
-      "אין עדיין מקורות מוכנים במאגר הידע. יש להוסיף מקור ולהפעיל עבורו חיפוש AI.",
+      "אין עדיין מקורות מוכנים במאגר הידע. יש להוסיף מקור ולהמתין עד שיהיה מוכן.",
     spendingLimit: "הצעת נושאים תחרוג ממגבלת העלות של AI לבקשה שהוגדרה בשרת.",
     promptLimit:
       "זהות המותג ארוכה מדי להצעת נושאים. אפשר לקצר את ההנחיות ולנסות שוב.",

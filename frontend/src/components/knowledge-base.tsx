@@ -95,11 +95,13 @@ const messages = {
       "Sample posts are posts you already wrote. Topic ideas won’t suggest what they already say.",
     kindSaved: "Content type saved.",
     embed: "Enable AI search",
+    embedRetry: "Retry AI search",
     embedding: "Preparing AI search",
     embeddingFailed: "AI search preparation failed",
     connectionMissing:
       "AI search is not connected yet. Your saved text will remain available.",
-    connectionReady: "AI search can now be enabled for prepared sources.",
+    connectionReady:
+      "AI search is connected. New sources are prepared for it automatically.",
     embeddingError:
       "AI search preparation did not finish. Please retry or check the provider connection.",
     embedded: "prepared for AI search",
@@ -279,10 +281,11 @@ const messages = {
       "פוסטים לדוגמה הם פוסטים שכבר כתבת. רעיונות לנושאים לא יציעו את מה שכבר כתוב בהם.",
     kindSaved: "סוג התוכן נשמר.",
     embed: "הפעלת חיפוש AI",
+    embedRetry: "ניסיון חוזר לחיפוש AI",
     embedding: "מכין חיפוש AI",
     embeddingFailed: "הכנת חיפוש AI נכשלה",
     connectionMissing: "חיפוש AI עדיין לא מחובר. הטקסטים שנשמרו יישארו זמינים.",
-    connectionReady: "אפשר כעת להפעיל חיפוש AI למקורות שהוכנו.",
+    connectionReady: "חיפוש AI מחובר. מקורות חדשים מוכנים עבורו אוטומטית.",
     embeddingError:
       "הכנת חיפוש AI לא הסתיימה. אפשר לנסות שוב או לבדוק את החיבור לספק.",
     embedded: "מוכנים לחיפוש AI",
@@ -449,6 +452,8 @@ const inFlight = (item: Document) =>
   refreshing(item) ||
   (item.stage !== "text_prepared" &&
     ["Pending", "Processing"].includes(item.status));
+const embedLabel = (item: Document, t: Messages) =>
+  item.stage === "embedding_failed" ? t.embedRetry : t.embed;
 const statusLabel = (item: Document, t: Messages) =>
   item.stage === "embedding_failed"
     ? t.embeddingFailed
@@ -1586,18 +1591,22 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                         {t.refreshPage}
                       </Button>
                     )}
+                  {/* New sources start AI search on their own once a key is set; the
+                      button covers sources prepared before that and failed attempts. */}
                   {item.chunk_count > 0 &&
-                    item.status !== "Ready" &&
+                    ["text_prepared", "embedding_failed"].includes(
+                      item.stage,
+                    ) &&
                     !refreshing(item) && (
                       <Button
                         id={`embed-${item.id}`}
                         variant="outline"
                         size="sm"
                         disabled={busy !== null || !connected}
-                        aria-label={forSource(t.embed, item)}
+                        aria-label={forSource(embedLabel(item, t), item)}
                         onClick={() => void action(item, "embed")}
                       >
-                        {t.embed}
+                        {embedLabel(item, t)}
                       </Button>
                     )}
                   <Button

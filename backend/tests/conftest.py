@@ -3,12 +3,27 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import create_engine, delete
 from sqlalchemy.orm import sessionmaker
 
+from app.config import get_settings
 from app.local_scope import LOCAL_WORKSPACE_ID
 from app.main import app
 from app.models import KnowledgeDocument
+
+
+@pytest.fixture(autouse=True)
+def hermetic_settings():
+    """Every test starts without provider keys, whatever backend/.env holds; a test that
+    needs one sets a dummy value (tests/test_embeddings.py embedding_settings)."""
+    settings = get_settings()
+    original = settings.model_copy(deep=True)
+    settings.embedding_api_key = SecretStr("")
+    settings.generation_api_key = SecretStr("")
+    yield settings
+    for field in type(settings).model_fields:
+        setattr(settings, field, getattr(original, field))
 
 
 @pytest.fixture
@@ -35,6 +50,8 @@ def api():
             patch("app.drive_folders.SessionLocal", factory),
             # Line vectors are filled by tests that call ensure_line_vectors themselves.
             patch("app.worker.embed_sample_lines.apply_async"),
+            # Embeddings a prepared source queues on its own never leave the test.
+            patch("app.worker.embed_document.apply_async"),
             patch("app.knowledge.process_text.apply_async") as dispatch,
         ):
             yield TestClient(app, base_url="http://127.0.0.1"), factory, dispatch

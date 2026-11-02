@@ -33,7 +33,7 @@ from app.refresh import (
 from app.restatement import dispatch_sample_lines
 from app.retrieval import search_context
 from app.web_fetch import FetchError, fallback_title, normalize_url
-from app.worker import process_text
+from app.worker import process_text, queue_embedding
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"], dependencies=[Depends(local_only)])
 # Knowledge is drawn on for facts; sample posts are the owner's finished posts.
@@ -611,30 +611,7 @@ def start_embeddings(document_id: UUID, request: Request):
             raise HTTPException(409, "refresh_in_progress")
         if document.status == "Ready" and document.embedding_profile == profile:
             return summary(document, session)
-        job = session.scalar(
-            select(IngestionJob)
-            .where(
-                IngestionJob.document_id == document_id,
-                IngestionJob.kind == "embedding",
-            )
-            .with_for_update()
-        )
-        if job is None:
-            job = IngestionJob(
-                user_id=LOCAL_USER_ID,
-                workspace_id=LOCAL_WORKSPACE_ID,
-                document_id=document_id,
-                kind="embedding",
-                request_id=request.state.request_id,
-            )
-            session.add(job)
-        job.status = "Pending"
-        job.error_code = document.error_code = None
-        document.status = "Processing"
-        document.processing_stage = "embedding_pending"
-        document.embedding_profile = profile
-        session.flush()
-        job_id = job.id
+        job_id, _ = queue_embedding(session, document, request.state.request_id)
     dispatch_embeddings(job_id, document_id)
     with SessionLocal() as session:
         return summary(owned(document_id, session), session)
