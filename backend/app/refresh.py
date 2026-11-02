@@ -10,6 +10,8 @@ owner, who sees the new and removed paragraphs and chooses:
 - keep: the staging copy is dropped.
 A searchable original is updated only after the new chunks are embedded, in one
 transaction (`apply`). Each chunk carries added_on, so the writer prefers newer text.
+A changed Google Drive file (app/drive_sync.py) takes the same path, replacing without
+asking: the folder is the source of truth.
 """
 
 import re
@@ -17,7 +19,10 @@ from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select, update
 
-from app.models import KnowledgeChunk, KnowledgeDocument
+from app.chunking import chunk_text
+from app.embeddings import profile_key
+from app.extraction import page_range
+from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
 from app.web_fetch import fallback_title
 
 ACTIVE = ("Pending", "Processing")
@@ -93,9 +98,18 @@ def preview(old: str | None, new: str | None) -> dict:
     }
 
 
+def adopt_drive_file(original, staging) -> None:
+    """A Drive file's name and modifiedTime come with its newer version."""
+    if staging.source_type == "drive":
+        original.title = staging.title
+        original.source_reference = staging.source_reference
+        original.drive_modified_at = staging.drive_modified_at
+
+
 def mark_unchanged(session, original, staging) -> None:
     original.fetched_at = datetime.now(UTC)
     original.refresh_result = "unchanged"
+    adopt_drive_file(original, staging)
     session.flush()
     session.execute(delete(KnowledgeDocument).where(KnowledgeDocument.id == staging.id))
 
@@ -124,6 +138,44 @@ def adopt_page(original, staging) -> str | None:
     return replaced_key if replaced_key != original.storage_key else None
 
 
+def prepare_version(session, original, staging, request_id, pages=None):
+    """Chunks the staging copy's text for the chosen action. A searchable original waits for
+    the new chunks' embeddings (returns the embedding job and staging IDs to dispatch after
+    commit); any other original changes now (returns the page copy to remove)."""
+    session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == staging.id))
+    chunks = chunk_text(staging.source_text or "", added_on=today())
+    if pages:
+        for values in chunks:
+            location = values["source_location"]
+            location.update(page_range(pages, location["char_start"], location["char_end"]))
+    for order, values in enumerate(chunks):
+        session.add(
+            KnowledgeChunk(
+                user_id=staging.user_id,
+                workspace_id=staging.workspace_id,
+                document_id=staging.id,
+                chunk_order=order,
+                **values,
+            )
+        )
+    staging.processing_stage = "text_prepared"
+    session.flush()
+    if original.status != "Ready":
+        return apply(session, original, staging), None
+    job = IngestionJob(
+        user_id=staging.user_id,
+        workspace_id=staging.workspace_id,
+        document_id=staging.id,
+        kind="embedding",
+        request_id=request_id,
+    )
+    session.add(job)
+    staging.processing_stage = "embedding_pending"
+    staging.embedding_profile = profile_key()
+    session.flush()
+    return None, (job.id, staging.id)
+
+
 def swap(session, original, staging) -> str | None:
     session.flush()
     session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == original.id))
@@ -136,6 +188,7 @@ def swap(session, original, staging) -> str | None:
     if original.title == fallback_title(original.source_reference or ""):
         original.title = staging.title
     original.refresh_result = "replaced"
+    adopt_drive_file(original, staging)
     if staging.processing_stage == "ready":
         original.status = "Ready"
         original.processing_stage = "ready"

@@ -10,6 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DriveFolders } from "@/components/drive-folders";
 import type { Locale } from "@/lib/i18n";
 
 type Changes = {
@@ -25,7 +26,7 @@ type Document = {
   id: string;
   title: string;
   kind: DocumentKind;
-  source_type: "text" | "txt" | "pdf" | "url";
+  source_type: "text" | "txt" | "pdf" | "url" | "drive";
   filename: string | null;
   url?: string | null;
   fetched_at?: string | null;
@@ -127,6 +128,8 @@ const messages = {
     refreshKept: "The previous version is still in use.",
     remove: "Delete",
     confirm: "Delete this source and its prepared text?",
+    confirmDrive:
+      "Delete this source and its prepared text? While the file is in the Drive folder, it comes back at the next sync.",
     yes: "Delete source",
     cancel: "Cancel",
     view: "View text",
@@ -172,6 +175,7 @@ const messages = {
     typeTxt: "Text file",
     typePdf: "PDF",
     typeUrl: "Web link",
+    typeDrive: "Google Drive",
     added: "Added",
     uploadErrors: {
       file_too_large: "The file is larger than the upload limit.",
@@ -215,6 +219,15 @@ const messages = {
       url_no_content:
         "No readable text was found on this page. Pages that need JavaScript to show their content aren’t supported; paste the text instead.",
       url_parse_failed: "This page couldn’t be read.",
+      file_too_large:
+        "The file is larger than the size limit. Make it smaller in Drive; it is read again once it changes.",
+      file_signature_mismatch:
+        "The file’s contents don’t match its type. Fix it in Drive; it is read again once it changes.",
+      file_not_utf8:
+        "The text file isn’t UTF-8. Save it as UTF-8 in Drive; it is read again once it changes.",
+      file_not_text: "This doesn’t look like a text file.",
+      drive_not_shared:
+        "The file can’t be read from Drive. Check that the folder is still shared with the service account.",
     } as Record<string, string>,
     next: "Older sources",
     previous: "Newer sources",
@@ -298,6 +311,8 @@ const messages = {
     refreshKept: "הגרסה הקודמת עדיין בשימוש.",
     remove: "מחיקה",
     confirm: "למחוק את המקור ואת המקטעים שהוכנו ממנו?",
+    confirmDrive:
+      "למחוק את המקור ואת המקטעים שהוכנו ממנו? כל עוד הקובץ נמצא בתיקייה ב-Drive, הוא יחזור בסנכרון הבא.",
     yes: "מחיקת המקור",
     cancel: "ביטול",
     view: "הצגת הטקסט",
@@ -339,6 +354,7 @@ const messages = {
     typeTxt: "קובץ טקסט",
     typePdf: "PDF",
     typeUrl: "קישור",
+    typeDrive: "Google Drive",
     added: "נוסף",
     uploadErrors: {
       file_too_large: "הקובץ גדול ממגבלת ההעלאה.",
@@ -380,6 +396,15 @@ const messages = {
       url_no_content:
         "לא נמצא טקסט קריא בדף. דפים שמציגים תוכן רק באמצעות JavaScript אינם נתמכים; אפשר להדביק את הטקסט במקום.",
       url_parse_failed: "לא הצלחנו לקרוא את הדף.",
+      file_too_large:
+        "הקובץ גדול ממגבלת הגודל. אפשר להקטין אותו ב-Drive, והוא ייקרא שוב אחרי שישתנה.",
+      file_signature_mismatch:
+        "תוכן הקובץ לא מתאים לסוג שלו. אפשר לתקן אותו ב-Drive, והוא ייקרא שוב אחרי שישתנה.",
+      file_not_utf8:
+        "קובץ הטקסט אינו בקידוד UTF-8. אפשר לשמור אותו כ-UTF-8 ב-Drive, והוא ייקרא שוב אחרי שישתנה.",
+      file_not_text: "זה לא נראה כמו קובץ טקסט.",
+      drive_not_shared:
+        "לא הצלחנו לקרוא את הקובץ מ-Drive. כדאי לבדוק שהתיקייה עדיין משותפת עם ה-Service account.",
     } as Record<string, string>,
     next: "מקורות קודמים",
     previous: "מקורות חדשים יותר",
@@ -406,6 +431,11 @@ const FINAL_ERRORS = new Set([
   "source_file_missing",
   "url_blocked_address",
   "url_unsupported_type",
+  "file_too_large",
+  "file_signature_mismatch",
+  "file_not_utf8",
+  "file_not_text",
+  "drive_not_shared",
 ]);
 type Messages = (typeof messages)[Locale];
 const awaitingChoice = (item: Document) =>
@@ -922,7 +952,18 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       txt: t.typeTxt,
       pdf: t.typePdf,
       url: t.typeUrl,
+      drive: t.typeDrive,
     })[item.source_type] ?? t.typePasted;
+  // A Drive sync changes sources in the background; the list then shows them.
+  const reloadSources = useCallback(() => void load(), [load]);
+  const driveKindField = useCallback(
+    (props: {
+      id: string;
+      value: DocumentKind;
+      onChange: (kind: DocumentKind) => void;
+    }) => <KindField {...props} t={t} />,
+    [t],
+  );
   return (
     <section aria-labelledby="knowledge-title" className="mt-10 space-y-6">
       <div className="rounded-2xl border border-border bg-card p-6 sm:p-9">
@@ -1181,6 +1222,11 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
             {t.linkButton}
           </Button>
         </form>
+        <DriveFolders
+          locale={locale}
+          onSynced={reloadSources}
+          kindField={driveKindField}
+        />
         {connected !== null && (
           <p className="mt-5 text-xs leading-6 text-muted-foreground">
             {connected ? t.connectionReady : t.connectionMissing}
@@ -1589,7 +1635,9 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
                       tabIndex={-1}
                       className="mb-3 rounded text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                     >
-                      {t.confirm}
+                      {item.source_type === "drive"
+                        ? t.confirmDrive
+                        : t.confirm}
                     </p>
                     <div className="flex gap-2">
                       <Button

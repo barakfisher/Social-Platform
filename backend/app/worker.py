@@ -22,7 +22,15 @@ from app.embeddings import (
 from app.extraction import ExtractionError, extract_html, extract_pdf, page_range
 from app.logging import configure_worker_logging
 from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
-from app.refresh import AWAITING, apply, changes, lock_original, mark_unchanged, today
+from app.refresh import (
+    AWAITING,
+    apply,
+    changes,
+    lock_original,
+    mark_unchanged,
+    prepare_version,
+    today,
+)
 from app.restatement import dispatch_sample_lines, ensure_line_vectors
 from app.web_fetch import FetchError, fallback_title, fetch_page
 
@@ -42,6 +50,8 @@ celery_app.conf.update(
 after_setup_logger.connect(configure_worker_logging, weak=False)
 celery_app.conf.beat_schedule = {
     "recover-durable-jobs": {"task": "social.reconcile_jobs", "schedule": 60.0},
+    # Hourly check; each folder syncs once a day (app/drive_sync.py, SP-30).
+    "sync-drive-folders": {"task": "social.sync_due_drive_folders", "schedule": 3600.0},
 }
 logger = logging.getLogger(__name__)
 
@@ -90,7 +100,8 @@ def extract_source(source_type: str, key: str | None, url: str | None) -> Extrac
     """Fetching and parsing take seconds, so they run before any row lock is taken."""
     result = Extracted()
     try:
-        if source_type == "pdf" and key:
+        # A Drive file is stored only when it is a PDF; its text arrives already decoded.
+        if source_type in ("pdf", "drive") and key:
             result.text, result.pages = extract_pdf(storage.read(key))
         elif source_type == "url" and url:
             if key:
@@ -131,12 +142,28 @@ def process_text(job_id: str) -> None:
         # A fetched page is kept only once a committed row refers to it.
         if extracted.new_key and not outcome.kept:
             storage.remove(extracted.new_key)
+    if outcome.replaced_key:
+        storage.remove(outcome.replaced_key)
+    if outcome.embed_job:
+        dispatch_embedding(*outcome.embed_job)
 
 
 @dataclass
 class Prepared:
     # The run's fetched page is referenced by a committed row.
     kept: bool = False
+    # A Drive file's new version: the stored file its original no longer uses, or the
+    # embedding job that replaces the original once it finishes.
+    replaced_key: str | None = None
+    embed_job: tuple[UUID, UUID] | None = None
+
+
+def dispatch_embedding(job_id: UUID, document_id: UUID) -> None:
+    try:
+        embed_document.apply_async(args=[str(job_id)], task_id=str(job_id))
+    except Exception:
+        # The Pending job is queued again by the minute check (app/reconcile.py).
+        logger.warning("embedding_dispatch_failed", extra={"document_id": str(document_id)})
 
 
 def prepare_locked(job_id: str, extracted: Extracted) -> Prepared:
@@ -200,6 +227,14 @@ def prepare_locked(job_id: str, extracted: Extracted) -> Prepared:
             document.fetched_at = datetime.now(UTC)
         if extracted.title and document.title == fallback_title(document.source_reference or ""):
             document.title = extracted.title
+        if original is not None and document.source_type == "drive":
+            # A changed Drive file replaces its original without asking (SP-30).
+            document.status = "Processing"
+            document.refresh_action = "replace"
+            outcome.replaced_key, outcome.embed_job = prepare_version(
+                session, original, document, job.request_id, pages
+            )
+            return outcome
         if original is not None:
             # Changed on the site: the owner chooses to replace, append or keep
             # (app/refresh.py); chunks are made once the choice is known.
@@ -437,3 +472,31 @@ def reconcile_jobs() -> int:
         "durable_jobs_reconciled", extra={"requeued_count": count, "sample_lines_count": lines}
     )
     return count
+
+
+@celery_app.task(
+    name="social.sync_drive_folder",
+    autoretry_for=(OperationalError,),
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    max_retries=3,
+    # Below the broker visibility timeout, so a running sync is never delivered twice.
+    soft_time_limit=300,
+    time_limit=330,
+)
+def sync_drive_folder(folder_id: str) -> None:
+    from app.drive_sync import sync_folder
+
+    sync_folder(UUID(folder_id))
+
+
+@celery_app.task(name="social.sync_due_drive_folders", ignore_result=True)
+def sync_due_drive_folders() -> int:
+    from app.drive_sync import dispatch_sync, due_folders
+
+    folders = due_folders()
+    for folder_id in folders:
+        dispatch_sync(folder_id)
+    logger.info("drive_folders_due", extra={"folder_count": len(folders)})
+    return len(folders)

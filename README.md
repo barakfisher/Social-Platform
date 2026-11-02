@@ -135,6 +135,21 @@ A dedicated Celery beat scheduler checks durable jobs every minute. It requeues 
 
 Validation includes 26 backend tests, six browser tests, and a live browser-to-worker save/prepare/reload/delete check.
 
+## Google Drive folders
+
+A Google Drive folder can be synced into the Knowledge Base, read-only (SP-30). Set up once:
+
+1. In Google Cloud Console, create a project, enable the Google Drive API, and create a
+   service account with no project roles. Create a JSON key for it.
+2. Keep the key outside the repository, readable only by you:
+   `~/.config/social-platform/google-service-account.json` with `chmod 600`. Compose mounts
+   that folder read-only (override with `SOCIAL_PLATFORM_SECRETS_DIR`). For host development
+   set `GOOGLE_SERVICE_ACCOUNT_FILE` to the key's path in `backend/.env`.
+3. In Drive, share the folder with the service account's address as Viewer, then paste the
+   folder link under "Connect a Google Drive folder" on the Knowledge Base page.
+
+Folders sync once a day and on Refresh; see docs/implementation.md (SP-30) for what syncs.
+
 ## Embeddings and AI search
 
 The provider client, resumable embedding worker, Ready gating, and scoped vector-search API are implemented and live-verified with OpenRouter. Provider connectivity, source readiness, idempotent embedding requests, and semantic retrieval passed; temporary verification data was removed. See [AI setup](docs/ai-setup.md) for configuration and repeat verification. Credentials remain local in the Git-ignored backend/.env.

@@ -12,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app import storage
 from app.brand import local_only
-from app.chunking import chunk_text, normalize_text
+from app.chunking import normalize_text
 from app.config import get_settings
 from app.db import SessionLocal
 from app.embeddings import EmbeddingError, configured, embed_texts, profile_key
@@ -23,9 +23,9 @@ from app.refresh import (
     ACTIVE,
     AWAITING,
     append_heading,
-    apply,
     changes,
     keep,
+    prepare_version,
     preview,
     staging_for,
     today,
@@ -82,8 +82,11 @@ def summary(document, session):
         "title": document.title,
         "kind": document.kind,
         "source_type": document.source_type,
-        "filename": document.source_reference if document.source_type in ("pdf", "txt") else None,
+        "filename": (
+            document.source_reference if document.source_type in ("pdf", "txt", "drive") else None
+        ),
         "url": document.source_reference if document.source_type == "url" else None,
+        "drive_folder_id": str(document.drive_folder_id) if document.drive_folder_id else None,
         "status": (
             "Processing"
             if document.status == "Ready" and document.embedding_profile != profile_key()
@@ -118,8 +121,8 @@ def summary(document, session):
 
 
 def refresh_state(document, session):
-    """The page being loaded again, if any; the original stays in use meanwhile."""
-    if document.source_type != "url":
+    """The page or Drive file being loaded again, if any; the original stays in use."""
+    if document.source_type not in ("url", "drive"):
         return None
     staging = staging_for(session, document.id)
     if staging is None:
@@ -492,6 +495,9 @@ def retry_document(document_id: UUID):
             )
         ):
             raise HTTPException(409, "Text is already prepared.")
+        if document.source_type == "drive" and not (document.source_text or document.storage_key):
+            # Nothing was downloaded; the next sync reads the file once it changes in Drive.
+            raise HTTPException(409, "drive_file_unread")
         job = session.scalar(
             select(IngestionJob)
             .where(
@@ -693,34 +699,9 @@ def decide_refresh(document_id: UUID, payload: RefreshDecision, request: Request
                 # Only paragraphs the source does not have yet, under a dated heading.
                 staging.source_text = "\n\n".join([append_heading(today()), *added])
             staging.refresh_action = payload.action
-            session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == staging.id))
-            for order, values in enumerate(chunk_text(staging.source_text or "", added_on=today())):
-                session.add(
-                    KnowledgeChunk(
-                        user_id=LOCAL_USER_ID,
-                        workspace_id=LOCAL_WORKSPACE_ID,
-                        document_id=staging.id,
-                        chunk_order=order,
-                        **values,
-                    )
-                )
-            staging.processing_stage = "text_prepared"
-            session.flush()
-            if document.status == "Ready":
-                job = IngestionJob(
-                    user_id=LOCAL_USER_ID,
-                    workspace_id=LOCAL_WORKSPACE_ID,
-                    document_id=staging.id,
-                    kind="embedding",
-                    request_id=request.state.request_id,
-                )
-                session.add(job)
-                staging.processing_stage = "embedding_pending"
-                staging.embedding_profile = profile_key()
-                session.flush()
-                embed_job = (job.id, staging.id)
-            else:
-                remove_key = apply(session, document, staging)
+            remove_key, embed_job = prepare_version(
+                session, document, staging, request.state.request_id
+            )
     if remove_key:
         storage.remove(remove_key)
     if embed_job:

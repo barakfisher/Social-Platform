@@ -16,3 +16,6 @@ backups/
 
 # Private uploaded source files (backend/app/storage.py)
 backend/var/
+
+# Google service account keys (SP-30) belong outside the repository.
+*service-account*.json

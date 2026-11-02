@@ -31,6 +31,8 @@ def api():
             patch("app.knowledge.SessionLocal", factory),
             patch("app.worker.SessionLocal", factory),
             patch("app.restatement.SessionLocal", factory),
+            patch("app.drive_sync.SessionLocal", factory),
+            patch("app.drive_folders.SessionLocal", factory),
             # Line vectors are filled by tests that call ensure_line_vectors themselves.
             patch("app.worker.embed_sample_lines.apply_async"),
             patch("app.knowledge.process_text.apply_async") as dispatch,

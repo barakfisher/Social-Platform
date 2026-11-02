@@ -65,6 +65,35 @@ class BrandDNA(Owned, Base):
     __table_args__ = (ownership(), UniqueConstraint("workspace_id"), CheckConstraint("version > 0"))
 
 
+class DriveFolder(Owned, Base):
+    """A Google Drive folder shared with the service account; its files are synced in as
+    sources (app/drive_sync.py)."""
+
+    __tablename__ = "drive_folders"
+    folder_id: Mapped[str] = mapped_column(String(200))
+    name: Mapped[str] = mapped_column(String(300), default="")
+    # The kind a new file from this folder gets; the owner may change each source after.
+    kind: Mapped[str] = mapped_column(String(20), default="knowledge")
+    sync_status: Mapped[str] = mapped_column(String(20), default="Pending")
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    # When a sync last started, and when one last listed the folder successfully.
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    file_count: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    __table_args__ = (
+        ownership(),
+        UniqueConstraint("id", "workspace_id", "user_id"),
+        UniqueConstraint("workspace_id", "folder_id"),
+        CheckConstraint("kind IN ('knowledge', 'sample_posts')", name="drive_folders_kind"),
+        CheckConstraint(
+            "sync_status IN ('Pending', 'Syncing', 'Ready', 'Failed')",
+            name="drive_folders_sync_status",
+        ),
+        CheckConstraint("file_count >= 0 AND skipped_count >= 0", name="drive_folders_counts"),
+    )
+
+
 class KnowledgeDocument(Owned, Base):
     __tablename__ = "knowledge_documents"
     title: Mapped[str] = mapped_column(String(300))
@@ -91,9 +120,33 @@ class KnowledgeDocument(Owned, Base):
     refresh_result: Mapped[str | None] = mapped_column(String(20))
     # On a staging copy: the owner's choice for changed text, applied once it is embedded.
     refresh_action: Mapped[str | None] = mapped_column(String(10))
+    # A file synced from a Drive folder (SP-30): its folder, Drive ID and Drive's
+    # modifiedTime as last imported, compared as given to skip unchanged files.
+    drive_folder_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True)
+    drive_file_id: Mapped[str | None] = mapped_column(String(200))
+    drive_modified_at: Mapped[str | None] = mapped_column(String(40))
     __table_args__ = (
         ownership(),
         UniqueConstraint("id", "workspace_id", "user_id"),
+        # Disconnecting a folder removes its sources (their private files go first, in code).
+        ForeignKeyConstraint(
+            ["drive_folder_id", "workspace_id", "user_id"],
+            ["drive_folders.id", "drive_folders.workspace_id", "drive_folders.user_id"],
+            ondelete="CASCADE",
+            name="fk_knowledge_documents_drive_folder",
+        ),
+        # One source per file in a folder; a staging copy carries the same file ID.
+        Index(
+            "uq_drive_folder_file",
+            "drive_folder_id",
+            "drive_file_id",
+            unique=True,
+            postgresql_where=text("drive_folder_id IS NOT NULL AND replaces_id IS NULL"),
+        ),
+        CheckConstraint(
+            "source_type <> 'drive' OR (drive_folder_id IS NOT NULL AND drive_file_id IS NOT NULL)",
+            name="knowledge_documents_drive_file",
+        ),
         ForeignKeyConstraint(
             ["replaces_id", "workspace_id", "user_id"],
             [
@@ -129,7 +182,7 @@ class KnowledgeDocument(Owned, Base):
             postgresql_where=text("source_type = 'url' AND checksum IS NOT NULL"),
         ),
         CheckConstraint(
-            "source_type IN ('text', 'txt', 'pdf', 'url')",
+            "source_type IN ('text', 'txt', 'pdf', 'url', 'drive')",
             name="knowledge_documents_source_type_check",
         ),
         CheckConstraint("status IN ('Pending', 'Processing', 'Ready', 'Failed')"),

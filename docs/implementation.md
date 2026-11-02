@@ -1847,3 +1847,90 @@ Verification: backend 956 passed as `social_app` on a disposable migrated databa
 `alembic check`, and the migration down and up again. Removing the kind filter, the workspace
 filter or the kind-change trigger each makes a test fail. Frontend: not run; nothing in it
 changed.
+
+## SP-30: Google Drive folders sync into the Knowledge Base — 2026-11-02
+
+Owner decisions, each with the alternatives rejected and the failure each would have caused:
+
+- **A service account, not the owner's Google sign-in.** The owner shares a folder with the
+  service account as Viewer; the account sees nothing else. Rejected: user OAuth with
+  `drive.readonly` (reads the whole Drive, so a leaked token exposes everything; while the
+  app is unverified, Google expires the refresh token every 7 days, and verification needs a
+  domain and privacy policy); OAuth with the Picker and `drive.file` (grants single files,
+  not a folder's contents, and needs the Picker UI). No domain is needed for this choice.
+- **`google-auth` signs the token; Drive calls go through the existing `httpx`.** Rejected:
+  `google-api-python-client` (a large SDK for three calls) and hand-written JWT signing
+  (security code we would maintain). `google-auth[requests]` adds `cryptography`, `pyasn1`
+  and `rsa`; `requests` was already in the lock file.
+- **Daily sync plus Refresh, comparing each file's `modifiedTime`.** The folder's own
+  `modifiedTime` does not change when a file inside is edited, so checking the folder would
+  have missed every edit. An unchanged file is not downloaded and costs nothing.
+- **A file Google lists as gone from the folder is deleted here.** Rejected: keeping it marked
+  "removed from Drive", which would have kept old knowledge in drafts until the owner noticed.
+  Only a successful listing deletes; a failed listing or download deletes nothing.
+- **Each folder has a default kind; the owner may change a source, and sync keeps it.**
+  Rejected: one kind per folder (mixing would need two folders) and "everything is
+  knowledge" (sample posts would be treated as facts until marked, what SP-29 prevents).
+
+How it works (`app/drive.py`, `app/drive_sync.py`, `app/drive_folders.py`; migration
+`cd0e430e946f`):
+- `GOOGLE_SERVICE_ACCOUNT_FILE` points at the JSON key, which stays outside the repository.
+  Compose mounts `${SOCIAL_PLATFORM_SECRETS_DIR:-$HOME/.config/social-platform}` read-only
+  into the API and worker. Without the file the feature is off and the UI says so. The API
+  returns only the account's email address, never other key fields.
+- Drive calls go to `https://www.googleapis.com/drive/v3` only, follow no redirects, ignore
+  environment proxies and stop at `UPLOAD_MAX_BYTES`. Folder and file IDs must match
+  `[A-Za-z0-9_-]{10,200}` before they reach a URL or the listing query. A folder over
+  `DRIVE_MAX_FILES` (200) fails as a whole rather than syncing part of it.
+- Imported: Google Docs (exported as plain text), and PDF, `.txt` and `.md` files directly
+  in the folder, the same formats an upload accepts. Subfolders and other files are skipped
+  and counted. A Drive source is `source_type = 'drive'` with its folder, file ID and the
+  `modifiedTime` last imported.
+- A changed file goes through the web-page staging copy (`app/refresh.py`) with the choice
+  fixed to replace: a searchable original stays in use until the new chunks are embedded
+  (embedded automatically, as after a web-page choice); one that is not searchable yet
+  changes at once. `prepare_version` now holds this step for both. A failed import is
+  replaced in place. A searchable file is not replaced while embeddings are off.
+- One sync per folder at a time (advisory lock). The beat checks hourly and syncs folders
+  last attempted 23 hours ago or more, so a day does not drift later. A sync still marked
+  running after an hour shows as interrupted and may be refreshed.
+- New files arrive as prepared text, like an upload; the owner enables AI search for them.
+- Disconnecting deletes the folder's sources and their stored files; nothing changes in
+  Drive. Deleting a single Drive source works, but it comes back at the next sync while the
+  file is in the folder (the delete confirmation says so).
+
+Security review (bf-security-reviewer) and what changed because of it:
+- A listing without a `files` list, or with `incompleteSearch`, now fails instead of
+  reading as an empty folder, which would have deleted every source from it.
+- The token request gets the Drive calls' safeguards: no environment proxies, no
+  redirects, a 30 s timeout, and a key naming any token endpoint other than Google's is
+  refused. `modifiedTime` longer than its 40-character column is refused.
+- Tests use a fake folder ID; `*service-account*.json` is ignored by git and Docker.
+- **Before multi-user production:** one service account reads for every user, so any user
+  who learns a folder ID shared with it could connect that folder. The routes are behind
+  `local_only` and fail closed in production today. Before real logins exist, Drive needs a
+  per-user link (user OAuth or the Picker with `drive.file`), or connect must prove the
+  user owns the folder.
+- Known limits: a task killed by its time limit while storing a PDF can leave an
+  unreferenced private file; key rotation at the same path needs an API and worker
+  restart (credentials are cached per process).
+
+QA (bf-qa) findings fixed: a connect the proxy could not finish showed no message (now a
+generic error, and the proxy allows 60 s for connecting); deletions now run only after every
+file synced, so "Nothing was deleted" on a failed sync is true; missing translations added.
+
+Verification: backend 1022 passed (63 Drive tests on a mocked Drive with a fake key and a
+fake folder ID: ID and link parsing, query and host, pagination, partial listings, size
+limit, error mapping, client settings, connect/list/refresh/disconnect, new, unchanged,
+changed and removed files, kind kept on both replace paths, a searchable file kept in use
+until its new version is embedded, failed listings and downloads deleting nothing, failed
+imports, the beat entry and due folders); ruff, `mypy app`, `alembic check` and a
+downgrade/upgrade round trip. Frontend Prettier, lint, tsc, production build and Playwright
+125/125 (8 Drive tests). Live, with the real service account against the owner's
+"מנטורינג" folder through the UI: connect imported "פוסטים של איתי מהפייסבוק" as sample
+posts (29 chunks, text prepared); Refresh with no change logged `unchanged_count: 1` and
+downloaded nothing; Hebrew desktop and 375 px views checked with no horizontal scroll.
+
+Not verified live: the source reaching Ready (needs "Enable AI search", a paid embedding
+call); an edited file and a removed file against real Drive (the service account cannot
+edit Drive; the owner edits a document, then presses Refresh); a scheduled daily run.
