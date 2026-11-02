@@ -178,6 +178,31 @@ class KnowledgeChunk(Owned, Base):
     )
 
 
+class SamplePostLine(Owned, Base):
+    """A line, or two adjacent lines, of a sample-posts document with its embedding: what a
+    draft is compared with to find a restated post (app/restatement.py)."""
+
+    __tablename__ = "sample_post_lines"
+    document_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True)
+    content: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    embedding = mapped_column(Vector(), nullable=False)
+    embedding_profile: Mapped[str] = mapped_column(String(64))
+    __table_args__ = (
+        ownership(),
+        ForeignKeyConstraint(
+            ["document_id", "workspace_id", "user_id"],
+            [
+                "knowledge_documents.id",
+                "knowledge_documents.workspace_id",
+                "knowledge_documents.user_id",
+            ],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("document_id", "content_hash", "embedding_profile"),
+    )
+
+
 class Post(Owned, Base):
     __tablename__ = "posts_history"
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")

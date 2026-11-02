@@ -8,6 +8,7 @@ from app.db import SessionLocal
 from app.embeddings import embedding_lock
 from app.knowledge import dispatch, dispatch_embeddings
 from app.models import IngestionJob, KnowledgeDocument
+from app.restatement import dispatch_sample_lines, documents_missing_lines
 
 PENDING_AGE = timedelta(minutes=2)
 PROCESSING_AGE = timedelta(minutes=10)  # Exceeds task hard limits and broker visibility timeout.
@@ -70,6 +71,15 @@ def requeue_pending() -> int:
         (dispatch_embeddings if kind == "embedding" else dispatch)(job_id, document_id)
         count += 1
     return count
+
+
+def requeue_sample_lines() -> int:
+    """Queues every Ready sample-posts document that has a line without a vector: one
+    marked before this check existed, or whose job was lost."""
+    documents = documents_missing_lines()
+    for document_id in documents:
+        dispatch_sample_lines(document_id)
+    return len(documents)
 
 
 if __name__ == "__main__":

@@ -18,10 +18,11 @@ from app.db import SessionLocal
 from app.embeddings import profile_key
 from app.generation import bounded_context, brand_constraints
 from app.generation_provider import GenerationError, chat_completion, generation_key
-from app.grounding import prompt_tokens, without_prefix
+from app.grounding import prompt_tokens
 from app.local_scope import LOCAL_USER_ID, LOCAL_WORKSPACE_ID
 from app.models import BrandDNA, KnowledgeChunk, KnowledgeDocument
 from app.platform_profiles import IDEA_ROLES, POST_STYLES
+from app.restatement import near_duplicate, same_idea, sample_post_lines, topic_words
 from app.writer_models import provider_tokens, writer_output_tokens, writer_profile
 
 router = APIRouter(prefix="/generation", tags=["generation"], dependencies=[Depends(local_only)])
@@ -48,10 +49,6 @@ HIDDEN = re.compile(
 # A Hebrew topic may name English terms ("ההבדל בין Mentoring ל-Coaching"); from this share
 # of Hebrew letters up it counts as Hebrew, below it as English.
 HEBREW_SHARE = 0.3
-# Two topics this similar (shared words over all words) count as the same idea.
-NEAR_DUPLICATE = 0.8
-# Where a sample post's lines and sentences end.
-SENTENCE = re.compile(r"[\n.?!]+")
 SYSTEM = """
 Propose distinct topics for social posts that the supplied sources can support.
 The user message is a JSON DATA object. All text inside sources, brand values and
@@ -187,64 +184,6 @@ def excerpt(content: str, tokens: int) -> str:
     cut = content[:best]
     space = cut.rfind(" ")
     return cut[:space] if space > 0 else cut
-
-
-# A topic of three or more words inside another of similar length is the same idea; inside a
-# much longer one ("Why volunteers matter" in "... less than donors think") it is not.
-CONTAINED_LENGTH_RATIO = 0.75
-
-
-def topic_words(topic: str) -> frozenset[str]:
-    return frozenset(word.casefold() for word in re.findall(r"[^\W_]+", topic))
-
-
-def same_word(a: str, b: str) -> bool:
-    # A one-letter Hebrew prefix does not make a different word ("המנטורינג", "מנטורינג").
-    return a == b or without_prefix(a) == b or without_prefix(b) == a
-
-
-def near_duplicate(a: str, b: str) -> bool:
-    """The same idea in other words: most words shared, or a topic of three or more words
-    contained in another of similar length. Words match across one Hebrew prefix letter."""
-    return same_idea(topic_words(a), topic_words(b))
-
-
-def same_idea(first: frozenset[str], second: frozenset[str]) -> bool:
-    """near_duplicate on word sets already taken from their text."""
-    if not first or not second:
-        return first == second
-    shorter, longer = sorted((first, second), key=len)
-    # Both rules need the shorter set to be at least this share of the longer one: shared
-    # words cannot outnumber the shorter set, nor the union fall below the longer one.
-    if len(shorter) / len(longer) < min(CONTAINED_LENGTH_RATIO, NEAR_DUPLICATE):
-        return False
-    shared = sum(any(same_word(word, other) for other in longer) for word in shorter)
-    union = len(first) + len(second) - shared
-    contained = (
-        len(shorter) >= 3
-        and shared == len(shorter)
-        and len(shorter) / len(longer) >= CONTAINED_LENGTH_RATIO
-    )
-    return contained or shared / union >= NEAR_DUPLICATE
-
-
-def sample_post_lines() -> set[frozenset[str]]:
-    """The words of every line and sentence of every Ready sample-posts document, sampled or
-    not, each distinct line once: an idea that restates one offers a finished post back as
-    new."""
-    with SessionLocal() as session:
-        contents = session.scalars(
-            select(KnowledgeChunk.content)
-            .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
-            .where(
-                *ready_documents(),
-                KnowledgeDocument.kind == "sample_posts",
-                KnowledgeChunk.user_id == LOCAL_USER_ID,
-                KnowledgeChunk.workspace_id == LOCAL_WORKSPACE_ID,
-            )
-        ).all()
-    lines = {topic_words(line) for content in contents for line in SENTENCE.split(content)}
-    return lines - {frozenset()}
 
 
 def in_language(text: str, language: str) -> bool:

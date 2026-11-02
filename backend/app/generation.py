@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 from contextlib import contextmanager
 from typing import Literal
 from uuid import UUID
@@ -23,6 +24,12 @@ from app.models import BrandDNA, GenerationRun, KnowledgeDocument
 from app.platform_profiles import POST_STYLES
 from app.post_presets import CTAS, OTHER, TONES, CtaId, ToneId
 from app.query_translation import translate_query
+from app.restatement import (
+    MAX_RESTATED_WARNINGS,
+    restated_by_meaning,
+    restated_sentences,
+    sample_post_lines,
+)
 from app.retrieval import relevant_context
 from app.review_models import review_model_options
 from app.writer_models import (
@@ -32,8 +39,9 @@ from app.writer_models import (
     writer_profile,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/generation", tags=["generation"], dependencies=[Depends(local_only)])
-PROMPT_VERSION = "grounded-post-v7"
+PROMPT_VERSION = "grounded-post-v8"
 # Share of GENERATION_MAX_REQUEST_USD the cross-language query fallback may reserve.
 TRANSLATION_BUDGET_SHARE = 0.2
 # Far more citations than a real draft makes; a longer list is malformed output.
@@ -46,9 +54,24 @@ DEFAULT_KNOWLEDGE_LEVEL: KnowledgeLevel = "general"
 STORED_KNOWLEDGE_LEVEL: KnowledgeLevel = "knowledge_base"
 # Each length's maximum, enforced on every draft, and the least a general-knowledge draft
 # aims for.
+# Added to the writer's warnings when a draft restates a sample post; the server checks
+# what the prompt alone does not guarantee.
+RESTATED_WARNING = {
+    "en": 'Repeats one of your sample posts: "{}". Rewrite it before posting.',
+    "he": 'חוזר על אחד הפוסטים לדוגמה שלך: "{}". כדאי לנסח מחדש לפני פרסום.',
+}
 LENGTH_LIMITS = {"short": 600, "medium": 1200, "long": 2400}
 LENGTH_TARGET_MINIMUMS = {"short": 400, "medium": 800, "long": 1600}
-# Knowledge Base only: grounded-post-v6's prompt, word for word.
+# Both levels end with this: sample posts were otherwise read as material to restate, so a
+# draft came back as an existing post in other words (docs/implementation.md, "sample posts
+# in drafts").
+SAMPLE_POSTS_RULE = """
+Each source has a kind. "knowledge" is material to build the post from. "sample_posts" are
+the brand's own finished posts: use them only for facts about the brand and as examples of
+its voice, structure and rhythm. Never reuse a sample post's message, angle, opening, closing
+question or sentences, not even in other words; this limits "use every relevant point" above.
+The post must say something the sample posts do not already say."""
+# Knowledge Base only: grounded-post-v6's prompt, word for word, then the sample-post rule.
 KNOWLEDGE_BASE_SYSTEM = """
 Write a social post using only the provided brand profile and cited knowledge for factual
 claims.
@@ -88,6 +111,7 @@ Prefer a shorter faithful post to a longer one with new details.
 Each source's source_location.added_on is the date its text entered the knowledge base. When
 sources disagree, state only the most recently added version and leave the older one out.
 All content must fit the platform character limit supplied in the data."""
+KNOWLEDGE_BASE_SYSTEM += SAMPLE_POSTS_RULE
 # Knowledge Base plus general professional knowledge: specific facts still come only from the
 # sources, brand profile and offer details.
 GENERAL_SYSTEM = f"""
@@ -140,7 +164,7 @@ sources and general knowledge that explains them, never with an invented specifi
 the range cannot be reached that way, write shorter and say so in warnings.
 Each source's source_location.added_on is the date its text entered the knowledge base. When
 sources disagree, state only the most recently added version and leave the older one out.
-All content must fit the platform character limit supplied in the data."""
+All content must fit the platform character limit supplied in the data.{SAMPLE_POSTS_RULE}"""
 WRITER_SYSTEMS: dict[str, str] = {
     "knowledge_base": KNOWLEDGE_BASE_SYSTEM,
     "general": GENERAL_SYSTEM,
@@ -286,6 +310,23 @@ def generation_lock(request_key: UUID):
         )
 
 
+def advisory_meaning(content: str) -> list[str]:
+    """The meaning check only adds warnings, so its failure never fails a paid draft."""
+    try:
+        return restated_by_meaning(content)
+    except Exception:
+        logger.exception("restatement_check_failed")
+        return []
+
+
+def repeated_sentences(content: str, found: list[str]) -> list[str]:
+    """Each restated passage once, in draft order; a clause inside a found sentence is the
+    same finding."""
+    unique = list(dict.fromkeys(found))
+    kept = [s for s in unique if not any(s != other and s in other for other in unique)]
+    return sorted(kept, key=content.find)
+
+
 @router.post("")
 def generate(payload: GenerateInput):
     with generation_lock(payload.request_key) as acquired:
@@ -425,6 +466,8 @@ def generate_locked(payload: GenerateInput):
         sources = bounded_context(sources, settings.generation_context_budget)
         if not sources:
             raise GenerationError("insufficient_context")
+        # Read before the paid call, so a database failure here costs nothing.
+        posted = sample_post_lines()
         user = json.dumps(
             {
                 "brand": brand_values,
@@ -467,6 +510,14 @@ def generate_locked(payload: GenerateInput):
             by_id[source_id] for source_id in dict.fromkeys(completion.source_ids)
         ] or sources
         warnings = [warning[:300] for warning in completion.warnings]
+        restated = repeated_sentences(
+            completion.content,
+            restated_sentences(completion.content, posted) + advisory_meaning(completion.content),
+        )
+        warnings += [
+            RESTATED_WARNING[payload.language].format(sentence.rstrip(".:; ")[:200])
+            for sentence in restated[:MAX_RESTATED_WARNINGS]
+        ]
         review = unrequested_review(
             completion.content.strip(),
             brand_values,

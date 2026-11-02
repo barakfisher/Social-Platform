@@ -30,6 +30,7 @@ from app.refresh import (
     staging_for,
     today,
 )
+from app.restatement import dispatch_sample_lines
 from app.retrieval import search_context
 from app.web_fetch import FetchError, fallback_title, normalize_url
 from app.worker import process_text
@@ -457,8 +458,9 @@ class KindChange(BaseModel):
 
 @router.patch("/{document_id}")
 def change_kind(document_id: UUID, payload: KindChange):
-    """Free and immediate at any stage: the kind is read when ideas are suggested, never
-    when text is prepared or embedded, so nothing is processed again."""
+    """Immediate at any stage, and nothing is prepared or embedded again. A Ready document
+    marked as sample posts has its lines embedded in the background, for the draft check
+    (app/restatement.py); until then drafts are checked by shared words only."""
     with SessionLocal.begin() as session:
         owned(document_id, session, lock=True)
         # updated_at stays: topic ideas sample the most recently updated documents, and a
@@ -468,6 +470,10 @@ def change_kind(document_id: UUID, payload: KindChange):
             .where(KnowledgeDocument.id == document_id)
             .values(kind=payload.kind, updated_at=KnowledgeDocument.updated_at)
         )
+        ready = session.get(KnowledgeDocument, document_id)
+        lines = payload.kind == "sample_posts" and ready is not None and ready.status == "Ready"
+    if lines:
+        dispatch_sample_lines(document_id)
     with SessionLocal() as session:
         return summary(owned(document_id, session), session)
 

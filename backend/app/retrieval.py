@@ -77,7 +77,13 @@ def search_context(
     if max_distance is not None:
         filters.append(distance <= max_distance)
     nearest = (
-        select(KnowledgeChunk, KnowledgeDocument.title, KnowledgeDocument.created_at, distance)
+        select(
+            KnowledgeChunk,
+            KnowledgeDocument.title,
+            KnowledgeDocument.kind,
+            KnowledgeDocument.created_at,
+            distance,
+        )
         .join(KnowledgeDocument, KnowledgeDocument.id == KnowledgeChunk.document_id)
         .where(*filters)
         .order_by(distance, KnowledgeChunk.id)
@@ -91,6 +97,8 @@ def rows(result) -> list[dict]:
             "chunk_id": str(chunk.id),
             "document_id": str(chunk.document_id),
             "title": title,
+            # The writer takes facts and style from sample posts, never their message.
+            "kind": kind,
             "content": chunk.content,
             # Chunks prepared before added_on existed date from their document's creation.
             "source_location": {
@@ -99,7 +107,7 @@ def rows(result) -> list[dict]:
             },
             "distance": float(value),
         }
-        for chunk, title, created_at, value in typed_cast(
-            list[tuple[KnowledgeChunk, str, datetime, float]], result
+        for chunk, title, kind, created_at, value in typed_cast(
+            list[tuple[KnowledgeChunk, str, str, datetime, float]], result
         )
     ]

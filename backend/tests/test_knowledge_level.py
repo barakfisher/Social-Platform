@@ -16,6 +16,7 @@ from app.generation import (
     LENGTH_LIMITS,
     LENGTH_TARGET_MINIMUMS,
     PROMPT_VERSION,
+    SAMPLE_POSTS_RULE,
     STORED_KNOWLEDGE_LEVEL,
     WRITER_SYSTEMS,
 )
@@ -31,7 +32,8 @@ from tests.test_generation import (  # noqa: F401  (fixtures used by name)
 
 SOURCE = "Rosemary grows in the community garden."
 GENERAL = "A mentor shortens the learning curve."
-# SHA-256 of grounded-post-v6's writer prompt: "Knowledge Base only" must stay that prompt.
+# SHA-256 of grounded-post-v6's writer prompt: "Knowledge Base only" must stay that prompt,
+# plus the sample-post rule both levels share.
 V6_SYSTEM_SHA256 = "8b84af1eb77241e34cd0af668eedd8d3970c5058bf5411372eecfd88a6f8035d"
 
 
@@ -79,8 +81,10 @@ def stored_claims(review):
 # Writer prompts
 
 
-def test_knowledge_base_prompt_is_grounded_post_v6_word_for_word():
-    assert hashlib.sha256(KNOWLEDGE_BASE_SYSTEM.encode()).hexdigest() == V6_SYSTEM_SHA256
+def test_knowledge_base_prompt_is_grounded_post_v6_word_for_word_plus_the_sample_post_rule():
+    v6 = KNOWLEDGE_BASE_SYSTEM.removesuffix(SAMPLE_POSTS_RULE)
+    assert v6 != KNOWLEDGE_BASE_SYSTEM
+    assert hashlib.sha256(v6.encode()).hexdigest() == V6_SYSTEM_SHA256
     assert WRITER_SYSTEMS == {"knowledge_base": KNOWLEDGE_BASE_SYSTEM, "general": GENERAL_SYSTEM}
 
 
@@ -270,7 +274,7 @@ def test_saved_drafts_from_before_levels_are_checked_as_knowledge_base_only(serv
 
 
 def test_the_writer_prompt_version_names_this_change():
-    assert PROMPT_VERSION == "grounded-post-v7"
+    assert PROMPT_VERSION == "grounded-post-v8"
 
 
 def test_the_general_prompt_keeps_out_persuasive_product_descriptions():

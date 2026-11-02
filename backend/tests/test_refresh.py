@@ -338,7 +338,8 @@ def test_chunks_from_before_dates_existed_use_their_document_date():
     chunk = KnowledgeChunk(document_id=UUID(int=1), content="x", source_location={"char_start": 0})
     chunk.id = UUID(int=2)
     created = datetime(2026, 10, 25, 9, tzinfo=UTC)
-    [row] = rows([(chunk, "Title", created, 0.1)])
+    [row] = rows([(chunk, "Title", "knowledge", created, 0.1)])
     assert row["source_location"] == {"added_on": "2026-10-25", "char_start": 0}
     chunk.source_location = {"added_on": "2026-10-30"}
-    assert rows([(chunk, "Title", created, 0.1)])[0]["source_location"]["added_on"] == "2026-10-30"
+    [row] = rows([(chunk, "Title", "knowledge", created, 0.1)])
+    assert row["source_location"]["added_on"] == "2026-10-30"

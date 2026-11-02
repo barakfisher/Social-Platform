@@ -1742,3 +1742,108 @@ defect and test gaps are fixed above.
 
 Not done yet: criterion 8 (the paid live comparison, after the owner's approval) and the
 typical-token cost estimates, which that comparison will measure.
+
+## Sample posts in drafts: facts and style, never the message (grounded-post-v8) — 2026-11-01
+
+Problem, measured on run `27895904` (GPT-4.1, Hebrew, LinkedIn, general knowledge): the
+writer received five sources, four of them chunks of the owner's sample-posts document, and
+returned the first sample post in other words. Its opening ("not everyone who succeeded
+knows how to help others succeed") and "life experience is an asset, mentoring is a
+profession" were near-verbatim; the rest came from the second post and from the Brand DNA
+positioning. Nothing was general knowledge. Cause: SP-29's document kind reached topic ideas
+only; retrieval and the writer read sample posts as knowledge, and the general prompt says
+to "use every relevant point from the sources first".
+
+Choice (owner decision: "style + facts"):
+- Retrieval returns each source's `kind`, so the writer (and the stored run, and the source
+  check) see which chunks are sample posts.
+- Both writer prompts end with `SAMPLE_POSTS_RULE`: sample posts supply facts about the brand
+  and examples of voice, structure and rhythm, never their message, angle, opening, closing
+  question or sentences; the post must say something they do not. "Knowledge Base only" is
+  grounded-post-v6 word for word plus this rule (the v6 pin now checks the part before it).
+- A server check, free and after the paid call: `restated_sentences` (app/restatement.py)
+  compares each draft clause of four or more words with every line of every Ready
+  sample-posts document, using SP-29's `same_idea`, and adds one warning quoting the first
+  restated clause. It only warns; the draft is kept. Draft clauses also end at colons and
+  semicolons, because the measured draft joined a post's line to its opening with a colon.
+- The restatement helpers moved from topic_suggestions.py to app/restatement.py, the concept
+  both features share.
+
+Rejected alternatives:
+- Sample posts as style only (not citable): brand facts that appear only in the posts ("more
+  than two decades", work with wounded soldiers) would leave the writer, and with one small
+  knowledge document most topics would reach `insufficient_context`.
+- Prompt only: SP-29 measured that a prompt alone still restated a post in some calls.
+- Rewriting a restating draft automatically: a second paid call and more latency for what the
+  owner can see in the warning.
+
+Known limits: the check compares one draft clause with one post line, so a clause that joins
+two lines of a post, or a restatement much longer than the line, passes (as in SP-29). Long
+clauses with a short post line inside them are not flagged on purpose (`same_idea`'s length
+ratio). Stored v7 runs replayed with their request key answer `generation_review_required`,
+as with earlier version bumps.
+
+## Restatement by meaning: sample-post lines are embedded (sample_post_lines) — 2026-11-02
+
+Problem: after grounded-post-v8 three live drafts no longer restated the first sample post
+but took lines of the second, and the word check (shared words within one line) found 1 of
+12 restated sentences: most were reworded or joined a line into a longer sentence.
+
+Measured before building (text-embedding-3-small, 128 lines of the posts document plus 127
+pairs of adjacent lines, 39 sentences of four real drafts, labelled by hand): the 12 copied
+or reworded sentences scored 0.68–1.0 against their nearest line or pair; new sentences
+scored at most 0.65, with a mixed band at 0.55–0.65. `MEANING_THRESHOLD` = 0.65. Embedding
+all 128 lines took 11.4 s, too slow to repeat for every draft.
+
+Choice (owner decisions: vectors stored in the database, scope and criteria approved):
+- Table `sample_post_lines`: each line of a sample-posts document (three or more words, no
+  hashtag lines) and each pair of adjacent lines, with its hash, embedding and embedding
+  profile; cascades with its document. Unique per document, hash and profile.
+- `ensure_line_vectors` embeds only the missing passages and deletes passages the text no
+  longer has or that belong to another profile. It runs as `social.embed_sample_lines`:
+  after a sample-posts document is embedded (for a reloaded page, on the original), right
+  after a Ready document is marked as sample posts, and from the minute check for any Ready
+  sample-posts document with a passage missing (documents marked before this existed, and
+  lost jobs). A per-document advisory lock lets a duplicate job leave at once: live, an
+  889-line document took 79 s and the minute check queued it again while it ran.
+- A draft embeds only its own sentences (one call per 16) and takes, per sentence, the
+  nearest stored passage of the workspace's Ready sample-posts documents. At or above the
+  threshold it is a restatement. The word check still runs; both findings are merged, each
+  passage once in draft order, at most `MAX_RESTATED_WARNINGS` (3) warnings. Without stored
+  lines nothing is embedded; an embedding or database failure only skips this check, after
+  the paid writer call.
+- Kind changes stay immediate. Marking a document as knowledge stops the comparison at
+  once (the lines stay, and are reused if it is marked again).
+
+Rejected alternatives:
+- Embedding all lines for every draft: 11 s per draft for 128 lines, growing with every post.
+- A Redis cache: a second store to keep in step with the database; Redis holds only the job
+  queue today.
+- Embedding lines at the preparation step only: a reloaded page swaps chunks and a kind
+  change prepares nothing, so lines would go stale; the minute check covers both.
+- Rewriting a restating draft automatically: a second paid call; the owner decides.
+
+Live result on the owner's Knowledge Base (now three documents: the owner added "עוד פוסטים
+מהפייסבוק", 18,891 characters, sample posts): 255 + 889 lines embedded by the minute check.
+On the four measured drafts the check flagged all 12 labelled restatements (the word check:
+4) and 5 more: two repeat a Facebook post's message ("they are looking for someone who sees
+them"), so the v8 drafts' "new" message was an existing post; one repeats post 1; one reuses
+the phrase "it is a way of life"; one (0.66) is borderline. One new live draft (`grounded-
+post-v8`, $0.019) returned two warnings, both true restatements; the Brand DNA voice line it
+used was correctly not flagged.
+
+Known limits: the threshold rests on 39 sentences from one Knowledge Base and one embedding
+model; a different model or language needs a new measurement. A short shared phrase can
+score above it. A sentence that joins three or more post lines may be missed. Warnings quote
+up to 200 characters of the draft sentence, not the post it repeats.
+
+Lesson: a disposable test database needs the init script's `ALTER DEFAULT PRIVILEGES` too;
+without it, a table created by a new migration is not granted to `social_app` and every
+test touching it fails with "permission denied". The real database and CI get it from
+`docker/postgres-init.sql`.
+
+Verification: backend 956 passed as `social_app` on a disposable migrated database
+(`social_sample_posts_test`, never `social`), without `.env`; ruff, format, `mypy app`,
+`alembic check`, and the migration down and up again. Removing the kind filter, the workspace
+filter or the kind-change trigger each makes a test fail. Frontend: not run; nothing in it
+changed.
