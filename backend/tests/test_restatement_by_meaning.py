@@ -23,6 +23,7 @@ from app.restatement import (
 )
 from app.worker import embed_document, embed_sample_lines
 from tests.test_embeddings import (  # noqa: F401  (fixtures used by name)
+    embedding_key,
     embedding_settings,
     prepare,
     provider,

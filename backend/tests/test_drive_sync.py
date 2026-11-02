@@ -13,7 +13,7 @@ from app.drive import GOOGLE_DOC_TYPE, DriveError, DriveFile
 from app.drive_sync import SYNC_INTERVAL, SYNC_STALE, due_folders, sync_folder
 from app.models import DriveFolder, IngestionJob, KnowledgeChunk, KnowledgeDocument
 from app.worker import embed_document, process_text
-from tests.test_embeddings import embedding_settings, provider  # noqa: F401
+from tests.test_embeddings import embedding_key, provider  # noqa: F401
 from tests.test_uploads import pdf
 
 FOLDER = "1FakeFolderIdForTests0000000000000"

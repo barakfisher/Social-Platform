@@ -10,7 +10,7 @@ from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
 from app.refresh import changes
 from app.web_fetch import FetchError
 from app.worker import embed_document, process_text
-from tests.test_embeddings import embedding_settings, provider  # noqa: F401
+from tests.test_embeddings import embedding_key, provider  # noqa: F401
 
 PAGE = b"""<html><head><title>Garden hours</title></head><body><article><h1>Garden hours</h1>
 <p>The community garden is open every day from eight in the morning until seven.</p>

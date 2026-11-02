@@ -16,8 +16,9 @@ from app.worker import embed_document, process_text
 RealClient = httpx.Client
 
 
-@pytest.fixture(autouse=True)
-def embedding_settings():
+@pytest.fixture
+def embedding_key(hermetic_settings):
+    """A dummy key and a small test profile; tests that use the fake provider need it."""
     settings = get_settings()
     original = settings.model_copy(deep=True)
     settings.embedding_api_key = SecretStr("dummy-test-key")
@@ -45,8 +46,13 @@ def response_for(request, vector=None):
     )
 
 
+@pytest.fixture(autouse=True)
+def embedding_settings(embedding_key):
+    return embedding_key
+
+
 @pytest.fixture
-def provider():
+def provider(embedding_key):
     def install(handler=response_for):
         return patch(
             "app.embeddings.httpx.Client",
@@ -117,6 +123,42 @@ def prepare(client, factory, text="English ועברית"):
             )
         )
     return result, job_id
+
+
+def test_a_prepared_source_starts_ai_search_on_its_own_when_a_key_is_set(api):
+    client, factory, _ = api
+    result = client.post("/knowledge/text", json={"title": "Auto", "text": "Source"}).json()
+    with patch("app.worker.embed_document.apply_async") as dispatch:
+        process_text(job_for(factory, result["id"]))
+    status = client.get(result["status_url"]).json()
+    assert (status["status"], status["stage"]) == ("Processing", "embedding_pending")
+    with factory() as session:
+        job = session.scalar(
+            select(IngestionJob).where(
+                IngestionJob.document_id == UUID(result["id"]), IngestionJob.kind == "embedding"
+            )
+        )
+        assert job.status == "Pending"
+        assert session.get(KnowledgeDocument, UUID(result["id"])).embedding_profile == (
+            profile_key()
+        )
+    dispatch.assert_called_once_with(args=[str(job.id)], task_id=str(job.id))
+
+
+def test_without_a_key_a_prepared_source_waits_for_the_owner(api, embedding_settings):
+    client, factory, _ = api
+    embedding_settings.embedding_api_key = SecretStr("")
+    result = client.post("/knowledge/text", json={"title": "Manual", "text": "Source"}).json()
+    with patch("app.worker.embed_document.apply_async") as dispatch:
+        process_text(job_for(factory, result["id"]))
+    assert client.get(result["status_url"]).json()["stage"] == "text_prepared"
+    dispatch.assert_not_called()
+    with factory() as session:
+        assert not session.scalar(
+            select(func.count())
+            .select_from(IngestionJob)
+            .where(IngestionJob.document_id == UUID(result["id"]), IngestionJob.kind == "embedding")
+        )
 
 
 def test_embedding_ready_gating_idempotency_and_matching_search(api, provider):

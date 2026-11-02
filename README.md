@@ -154,7 +154,7 @@ Folders sync once a day and on Refresh; see docs/implementation.md (SP-30) for w
 
 The provider client, resumable embedding worker, Ready gating, and scoped vector-search API are implemented and live-verified with OpenRouter. Provider connectivity, source readiness, idempotent embedding requests, and semantic retrieval passed; temporary verification data was removed. See [AI setup](docs/ai-setup.md) for configuration and repeat verification. Credentials remain local in the Git-ignored backend/.env.
 
-The default configuration is OpenRouter / openai/text-embedding-3-small / 1536 dimensions, with separate embedding credentials. Configuration/model/revision changes are isolated using profile hashes; existing vectors must be re-embedded before they are eligible for the current search. The generation API retrieves Ready sources and performs a separate factual-support review.
+The default configuration is OpenRouter / openai/text-embedding-3-small / 1536 dimensions, with separate embedding credentials. Configuration/model/revision changes are isolated using profile hashes; existing vectors must be re-embedded before they are eligible for the current search. The generation API retrieves Ready sources and performs a separate factual-support review. With a key set, a new source's embedding starts as soon as its text is prepared; "Enable AI search" remains for sources prepared without a key, and a failed attempt offers "Retry AI search".
 
 ## Worker reliability verification
 
@@ -165,6 +165,6 @@ Worker domain events are JSON with job_id, document_id, and request_id. Arbitrar
 
 ## Generate and save drafts locally
 
-Configure Brand DNA, paste a source in Knowledge Base and enable AI search until it is Ready. Open Create Post, select platform/language and preferences, generate, review and edit, then Save Draft. History supports searching, editing and deleting drafts. Generation defaults to configurable OpenRouter `openai/gpt-4.1`. It can reuse the existing embedding key on official OpenRouter; all provider calls and secrets stay on the backend. See backend/.env.example for generation budgets and docs/implementation.md for known grounding limitations and retention.
+Configure Brand DNA and paste a source in Knowledge Base; with an embedding key set, AI search starts on its own and the source becomes Ready. Open Create Post, select platform/language and preferences, generate, review and edit, then Save Draft. History supports searching, editing and deleting drafts. Generation defaults to configurable OpenRouter `openai/gpt-4.1`. It can reuse the existing embedding key on official OpenRouter; all provider calls and secrets stay on the backend. See backend/.env.example for generation budgets and docs/implementation.md for known grounding limitations and retention.
 
 To run the opt-in live provider evaluation (incurs API usage): `cd backend && uv run python scripts/evaluate_generation.py`. It uses a disposable database and deliberately fails known unsupported embellishments. It checks six rejected examples and two bilingual generation/save/edit/delete flows. Exact excerpt validation and model review improve grounding but cannot guarantee factual correctness.

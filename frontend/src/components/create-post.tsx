@@ -113,7 +113,7 @@ const copy = {
     media: "Images will be available in a later step.",
     history: "Open History",
     insufficient:
-      "No sufficiently relevant knowledge was found. Add or enable AI search for sources about this topic.",
+      "No sufficiently relevant knowledge was found. Add sources about this topic and make sure they’re Ready.",
     conflict:
       "This draft changed elsewhere. Open History to load its latest version before saving.",
     brandLimit:
@@ -247,7 +247,7 @@ const copy = {
     media: "תמונות יתווספו בשלב הבא.",
     history: "פתיחת ההיסטוריה",
     insufficient:
-      "לא נמצא ידע רלוונטי מספיק. אפשר להוסיף מקורות בנושא ולהפעיל עבורם חיפוש AI.",
+      "לא נמצא ידע רלוונטי מספיק. אפשר להוסיף מקורות בנושא ולוודא שהם מוכנים.",
     conflict:
       "הטיוטה עודכנה במקום אחר. יש לפתוח את ההיסטוריה ולטעון את הגרסה העדכנית לפני שמירה.",
     brandLimit:

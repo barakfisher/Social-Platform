@@ -15,6 +15,7 @@ from app.db import SessionLocal
 from app.embeddings import (
     EmbeddingError,
     TransientEmbeddingError,
+    configured,
     embed_texts,
     embedding_lock,
     profile_key,
@@ -265,7 +266,37 @@ def prepare_locked(job_id: str, extracted: Extracted) -> Prepared:
             "text_prepared",
             extra={"job_id": job_id, "document_id": str(document.id), "request_id": job.request_id},
         )
+        if configured():
+            # With a key set, AI search starts on its own; without one the source waits
+            # at text_prepared until the owner enables it (docs/implementation.md).
+            outcome.embed_job = queue_embedding(session, document, job.request_id)
     return outcome
+
+
+def queue_embedding(session, document, request_id: str) -> tuple[UUID, UUID]:
+    """Marks a locked document for embedding with the current profile; returns the job and
+    document IDs to dispatch after commit. One embedding job per document is reused."""
+    job = session.scalar(
+        select(IngestionJob)
+        .where(IngestionJob.document_id == document.id, IngestionJob.kind == "embedding")
+        .with_for_update()
+    )
+    if job is None:
+        job = IngestionJob(
+            user_id=document.user_id,
+            workspace_id=document.workspace_id,
+            document_id=document.id,
+            kind="embedding",
+            request_id=request_id,
+        )
+        session.add(job)
+    job.status = "Pending"
+    job.error_code = document.error_code = None
+    document.status = "Processing"
+    document.processing_stage = "embedding_pending"
+    document.embedding_profile = profile_key()
+    session.flush()
+    return job.id, document.id
 
 
 @task_failure.connect

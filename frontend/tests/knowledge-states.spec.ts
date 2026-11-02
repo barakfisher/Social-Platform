@@ -516,7 +516,9 @@ test("a failed first load is not shown as an empty Knowledge Base", async ({
   );
   answerConfiguration();
   await expect(
-    page.getByText("AI search can now be enabled for prepared sources."),
+    page.getByText(
+      "AI search is connected. New sources are prepared for it automatically.",
+    ),
   ).toBeVisible();
   fail = false;
   await page
