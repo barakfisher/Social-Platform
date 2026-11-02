@@ -2,6 +2,16 @@ import json
 import logging
 from datetime import UTC, datetime
 
+DRIVE_FIELDS = (
+    "drive_folder_id",
+    "error_code",
+    "folder_count",
+    "added_count",
+    "updated_count",
+    "removed_count",
+    "unchanged_count",
+)
+
 
 class WorkerJSONFormatter(logging.Formatter):
     """Emit only declared metadata; never serialize arbitrary extra fields or exception bodies."""
@@ -17,6 +27,10 @@ class WorkerJSONFormatter(logging.Formatter):
         }
         if hasattr(record, "requeued_count"):
             payload["requeued_count"] = record.requeued_count
+        # Drive folder syncs (SP-30): IDs, error codes and counts only, never file names.
+        for field in DRIVE_FIELDS:
+            if hasattr(record, field):
+                payload[field] = getattr(record, field)
         if record.exc_info and record.exc_info[0]:
             payload["exception_type"] = record.exc_info[0].__name__
         return json.dumps(payload, ensure_ascii=False)

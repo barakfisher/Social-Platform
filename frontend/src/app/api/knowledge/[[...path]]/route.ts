@@ -11,7 +11,11 @@ async function proxy(
   const { path = [] } = await context.params;
   const body =
     (request.method === "POST" &&
-      ((path.length === 1 && (path[0] === "text" || path[0] === "url")) ||
+      ((path.length === 1 &&
+        (path[0] === "text" ||
+          path[0] === "url" ||
+          // Connecting a Google Drive folder (SP-30).
+          path[0] === "drive-folders")) ||
         (path.length === 2 && path[1] === "refresh-decision"))) ||
     // Changing a document's kind (SP-29).
     (request.method === "PATCH" && path.length === 1);
@@ -38,7 +42,13 @@ async function proxy(
       { status: 413 },
     );
   }
-  if (path.length > 2 || path.some((part) => !/^[a-zA-Z0-9-]+$/.test(part))) {
+  // A Drive folder's Refresh is the one three-part path (SP-30).
+  const folderSync =
+    path.length === 3 && path[0] === "drive-folders" && path[2] === "sync";
+  if (
+    (path.length > 2 && !folderSync) ||
+    path.some((part) => !/^[a-zA-Z0-9-]+$/.test(part))
+  ) {
     return NextResponse.json(
       { error: { code: "invalid_path", request_id: requestId } },
       { status: 400 },
@@ -60,7 +70,13 @@ async function proxy(
             ? JSON.stringify(await request.json())
             : undefined,
         cache: "no-store",
-        signal: AbortSignal.timeout(upload ? 60000 : 10000),
+        // Connecting a Drive folder asks Google for a token and the folder (30 s each).
+        signal: AbortSignal.timeout(
+          upload ||
+            (request.method === "POST" && path.join("/") === "drive-folders")
+            ? 60000
+            : 10000,
+        ),
       },
     );
     return NextResponse.json(await response.json(), {

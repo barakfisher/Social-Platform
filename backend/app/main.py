@@ -13,6 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.brand import router as brand_router
 from app.config import get_settings
 from app.db import engine
+from app.drive_folders import router as drive_folders_router
 from app.generation import router as generation_router
 from app.knowledge import router as knowledge_router
 from app.posts import router as posts_router
@@ -22,6 +23,8 @@ from app.write_guard import write_rejection
 
 app = FastAPI(title="Social Platform", version="0.1.0")
 app.include_router(brand_router)
+# Before the Knowledge Base router, whose /knowledge/{document_id} would match first.
+app.include_router(drive_folders_router)
 app.include_router(knowledge_router)
 app.include_router(generation_router)
 app.include_router(posts_router)

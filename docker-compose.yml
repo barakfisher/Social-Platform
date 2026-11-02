@@ -40,9 +40,14 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://social_app:social_app_local@postgres:5432/social
       REDIS_URL: redis://redis:6379/0
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/social-platform/google-service-account.json
     ports: ["127.0.0.1:58073:8000"]
     # Private uploaded source files, shared with the worker (SP-9). Never served directly.
-    volumes: ["source_files:/app/var/sources"]
+    # The Drive service account's key (SP-30) stays outside the repository, read-only here;
+    # without it the Drive feature is off.
+    volumes:
+      - source_files:/app/var/sources
+      - ${SOCIAL_PLATFORM_SECRETS_DIR:-${HOME}/.config/social-platform}:/run/social-platform:ro
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -54,8 +59,11 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://social_app:social_app_local@postgres:5432/social
       REDIS_URL: redis://redis:6379/0
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/social-platform/google-service-account.json
     command: ["celery", "-A", "app.worker.celery_app", "worker", "--loglevel=INFO"]
-    volumes: ["source_files:/app/var/sources"]
+    volumes:
+      - source_files:/app/var/sources
+      - ${SOCIAL_PLATFORM_SECRETS_DIR:-${HOME}/.config/social-platform}:/run/social-platform:ro
     stop_grace_period: 300s
     depends_on:
       migrate: {condition: service_completed_successfully}
