@@ -8,7 +8,7 @@ from pydantic import SecretStr
 from sqlalchemy import delete
 
 from app.config import get_settings
-from app.embeddings import profile_key
+from app.embeddings import EmbeddingError, profile_key
 from app.generation import (
     GENERAL_SYSTEM,
     WRITER_SYSTEMS,
@@ -113,6 +113,11 @@ def service_api(api):
         patch("app.generation.lock_engine", factory.kw["bind"].engine),
         patch("app.posts.SessionLocal", factory),
         patch("app.recheck.SessionLocal", factory),
+        patch("app.restatement.SessionLocal", factory),
+        # No network: tests that compare by meaning patch it with their own vectors.
+        patch(
+            "app.restatement.embed_texts", side_effect=EmbeddingError("embedding_not_configured")
+        ),
         patch("app.generation.embed_texts", return_value=[[1.0, 0.0, 0.0]]) as embeddings,
         patch("app.generation.chat_completion", side_effect=fake_completion) as generation,
     ):
@@ -141,6 +146,7 @@ def setup_source(
     other=False,
     content="Rosemary grows in the community garden.",
     title="Source",
+    kind="knowledge",
 ):
     with factory.begin() as session:
         seed_local_scope(session)
@@ -161,6 +167,7 @@ def setup_source(
             source_text=content,
             status=status,
             embedding_profile=profile_key(),
+            kind=kind,
         )
         session.add(doc)
         session.flush()

@@ -30,6 +30,9 @@ def api():
         with (
             patch("app.knowledge.SessionLocal", factory),
             patch("app.worker.SessionLocal", factory),
+            patch("app.restatement.SessionLocal", factory),
+            # Line vectors are filled by tests that call ensure_line_vectors themselves.
+            patch("app.worker.embed_sample_lines.apply_async"),
             patch("app.knowledge.process_text.apply_async") as dispatch,
         ):
             yield TestClient(app, base_url="http://127.0.0.1"), factory, dispatch

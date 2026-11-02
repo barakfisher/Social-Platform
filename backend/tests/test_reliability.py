@@ -74,5 +74,9 @@ def test_reconciliation_is_scheduled_and_dispatches_through_worker():
         "task": "social.reconcile_jobs",
         "schedule": 60.0,
     }
-    with patch("app.reconcile.requeue_pending", return_value=2):
+    with (
+        patch("app.reconcile.requeue_pending", return_value=2),
+        patch("app.reconcile.requeue_sample_lines", return_value=1) as lines,
+    ):
         assert reconcile_jobs() == 2
+    lines.assert_called_once_with()

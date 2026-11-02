@@ -23,6 +23,7 @@ from app.extraction import ExtractionError, extract_html, extract_pdf, page_rang
 from app.logging import configure_worker_logging
 from app.models import IngestionJob, KnowledgeChunk, KnowledgeDocument
 from app.refresh import AWAITING, apply, changes, lock_original, mark_unchanged, today
+from app.restatement import dispatch_sample_lines, ensure_line_vectors
 from app.web_fetch import FetchError, fallback_title, fetch_page
 
 celery_app = Celery("social_platform", broker=get_settings().redis_url)
@@ -331,6 +332,7 @@ def embed_document(job_id: str) -> None:
                     chunk.embedding_dimensions = settings.embedding_dimensions
                     chunk.embedding_profile = profile
         replaced_key = None
+        sample_lines_for = None
         with SessionLocal.begin() as session:
             original = lock_original(session, document_id)
             document = session.scalar(
@@ -346,9 +348,15 @@ def embed_document(job_id: str) -> None:
             job.status = "Ready"
             if document.replaces_id is None:
                 document.status = "Ready"
+                ready = document
             elif original is not None:
                 # A loaded-again page changes its searchable original only now (refresh).
                 replaced_key = apply(session, original, document)
+                ready = original
+            else:
+                ready = None
+            if ready is not None and ready.kind == "sample_posts":
+                sample_lines_for = ready.id
             logger.info(
                 "embedding_complete",
                 extra={
@@ -359,6 +367,32 @@ def embed_document(job_id: str) -> None:
             )
         if replaced_key:
             storage.remove(replaced_key)
+        if sample_lines_for is not None:
+            dispatch_sample_lines(sample_lines_for)
+
+
+@celery_app.task(
+    name="social.embed_sample_lines",
+    autoretry_for=(OperationalError, TransientEmbeddingError),
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    max_retries=4,
+    soft_time_limit=240,
+    time_limit=270,
+)
+def embed_sample_lines(document_id: str) -> None:
+    """Idempotent: a lost run is repaired by the minute check. A large document takes longer
+    than a minute, so the check queues it again while it runs; the duplicate leaves at once
+    instead of paying for the same lines (measured: 889 lines, 79 s)."""
+    # Keyed by the document: embedding jobs lock their own job IDs, never a document's.
+    with embedding_lock(document_id) as acquired:
+        if not acquired:
+            return
+        count = ensure_line_vectors(UUID(document_id))
+        logger.info(
+            "sample_lines_embedded", extra={"document_id": document_id, "embedded_count": count}
+        )
 
 
 @task_failure.connect
@@ -395,8 +429,11 @@ def record_embedding_failure(sender=None, args=None, exception=None, **kwargs):
 
 @celery_app.task(name="social.reconcile_jobs", ignore_result=True)
 def reconcile_jobs() -> int:
-    from app.reconcile import requeue_pending
+    from app.reconcile import requeue_pending, requeue_sample_lines
 
     count = requeue_pending()
-    logger.info("durable_jobs_reconciled", extra={"requeued_count": count})
+    lines = requeue_sample_lines()
+    logger.info(
+        "durable_jobs_reconciled", extra={"requeued_count": count, "sample_lines_count": lines}
+    )
     return count
