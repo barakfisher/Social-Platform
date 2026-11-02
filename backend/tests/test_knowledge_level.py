@@ -10,15 +10,20 @@ from uuid import uuid4
 import pytest
 
 from app.generation import (
+    CHARS_PER_WORD,
     DEFAULT_KNOWLEDGE_LEVEL,
     GENERAL_SYSTEM,
     KNOWLEDGE_BASE_SYSTEM,
     LENGTH_LIMITS,
     LENGTH_TARGET_MINIMUMS,
+    LENGTH_TARGET_WORDS,
     PROMPT_VERSION,
     SAMPLE_POSTS_RULE,
+    SHORT_WRITER_SYSTEMS,
     STORED_KNOWLEDGE_LEVEL,
     WRITER_SYSTEMS,
+    length_target,
+    writer_system,
 )
 from app.grounding import REVIEW_SYSTEM, Review, check_draft, prompt_tokens
 from app.models import GenerationRun, Post
@@ -32,9 +37,11 @@ from tests.test_generation import (  # noqa: F401  (fixtures used by name)
 
 SOURCE = "Rosemary grows in the community garden."
 GENERAL = "A mentor shortens the learning curve."
-# SHA-256 of grounded-post-v6's writer prompt: "Knowledge Base only" must stay that prompt,
-# plus the sample-post rule both levels share.
-V6_SYSTEM_SHA256 = "8b84af1eb77241e34cd0af668eedd8d3970c5058bf5411372eecfd88a6f8035d"
+# SHA-256 of grounded-post-v6's writer prompt without its two length lines ("Length is a
+# maximum ... Never pad a short source." and "Prefer a shorter faithful post ..."): every
+# other rule of "Knowledge Base only" stays word for word (SP-28).
+V6_RULES_SHA256 = "165d0c32206e792d41a183d10783e5fb0d4a50bb1650931f7b73cd9a7ef1781d"
+LENGTH_RULE_START = "\nLength is a target range"
 
 
 def flat(text: str) -> str:
@@ -81,24 +88,68 @@ def stored_claims(review):
 # Writer prompts
 
 
-def test_knowledge_base_prompt_is_grounded_post_v6_word_for_word_plus_the_sample_post_rule():
-    v6 = KNOWLEDGE_BASE_SYSTEM.removesuffix(SAMPLE_POSTS_RULE)
-    assert v6 != KNOWLEDGE_BASE_SYSTEM
-    assert hashlib.sha256(v6.encode()).hexdigest() == V6_SYSTEM_SHA256
+def test_knowledge_base_prompt_keeps_every_v6_rule_and_only_its_length_lines_change():
+    rules = KNOWLEDGE_BASE_SYSTEM.removesuffix(SAMPLE_POSTS_RULE)
+    assert rules != KNOWLEDGE_BASE_SYSTEM
+    rules = rules[: rules.index(LENGTH_RULE_START)]
+    assert hashlib.sha256(rules.encode()).hexdigest() == V6_RULES_SHA256
     assert WRITER_SYSTEMS == {"knowledge_base": KNOWLEDGE_BASE_SYSTEM, "general": GENERAL_SYSTEM}
 
 
-def test_general_prompt_allows_general_knowledge_and_aims_for_the_length_range():
-    general, knowledge_base = flat(GENERAL_SYSTEM), flat(KNOWLEDGE_BASE_SYSTEM)
+@pytest.mark.parametrize("system", [KNOWLEDGE_BASE_SYSTEM, GENERAL_SYSTEM])
+def test_both_levels_aim_for_the_length_range_and_warn_when_sources_are_thin(system):
+    prompt = flat(system)
     for length, limit in LENGTH_LIMITS.items():
-        assert LENGTH_TARGET_MINIMUMS[length] < limit
-        assert f"{length} {LENGTH_TARGET_MINIMUMS[length]}–{limit}" in general
-    # The rules that kept drafts short and source-only leave the general level only.
-    for rule in ("Never add outside/world knowledge", "Never pad", "Prefer a shorter"):
-        assert rule in knowledge_base and rule not in general
+        assert f"{length} {LENGTH_TARGET_MINIMUMS[length]}–{limit}" in prompt
+    for rule in ("Never pad", "Prefer a shorter"):
+        assert rule not in prompt
+    assert "For medium and long posts, length_target in the data" in prompt
+    assert "plan enough points for it before writing" in prompt
+    assert "The character maximum is a hard limit" in prompt
+    assert "sources were too thin for the chosen length" in prompt
+    # Reasoning writers spent their whole output limit counting characters.
+    assert "Check the length" not in prompt
+
+
+# SHA-256 of grounded-post-v8's writer prompts as merged on main: short drafts use them
+# unchanged (SP-28).
+V8_SYSTEM_SHA256 = {
+    "knowledge_base": "784f9c1ae5916457689537bb029c07b1e526528081e9cf05f86bd4c367967447",
+    "general": "c890811c1bdc633383945e077ea1a35ab56f05c139160a8c76076781862a747a",
+}
+
+
+@pytest.mark.parametrize("level", sorted(WRITER_SYSTEMS))
+def test_short_drafts_keep_grounded_post_v8_word_for_word(level):
+    assert sorted(SHORT_WRITER_SYSTEMS) == sorted(WRITER_SYSTEMS)
+    system = SHORT_WRITER_SYSTEMS[level]
+    assert hashlib.sha256(system.encode()).hexdigest() == V8_SYSTEM_SHA256[level]
+    assert writer_system(level, "short") == system
+    for length in ("medium", "long"):
+        assert writer_system(level, length) == WRITER_SYSTEMS[level]
+    assert length_target("short") is None
+
+
+def test_general_prompt_allows_general_knowledge_and_the_knowledge_base_level_does_not():
+    general, knowledge_base = flat(GENERAL_SYSTEM), flat(KNOWLEDGE_BASE_SYSTEM)
+    assert "Never add outside/world knowledge" in knowledge_base
+    assert "Never add outside/world knowledge" not in general
+    assert "general knowledge that explains it" in general
+    assert "general knowledge" not in knowledge_base.split(LENGTH_RULE_START.strip())[1]
     assert "main message and angle come from the sources" in general
     assert "first-person story or experience. Never invent these." in general
-    assert "write shorter and say so in warnings" in general
+
+
+@pytest.mark.parametrize("length", sorted(LENGTH_TARGET_WORDS))
+def test_the_word_target_lands_inside_the_character_range(length):
+    # At the fewest measured characters per word the minimum is reached; at the most, the
+    # maximum is not passed.
+    fewest, most = LENGTH_TARGET_WORDS[length]
+    low, high = CHARS_PER_WORD
+    assert LENGTH_TARGET_MINIMUMS[length] < LENGTH_LIMITS[length]
+    assert fewest < most
+    assert fewest * low >= LENGTH_TARGET_MINIMUMS[length]
+    assert most * high <= LENGTH_LIMITS[length]
 
 
 # Writer requests
@@ -118,6 +169,27 @@ def test_each_level_sends_its_own_writer_prompt(service_api, level):
     with factory() as session:
         run = session.query(GenerationRun).one()
         assert run.inputs["knowledge_level"] == level
+
+
+@pytest.mark.parametrize("length", sorted(LENGTH_LIMITS))
+def test_the_writer_gets_the_chosen_lengths_target(service_api, length):
+    client, factory, _, generation = service_api
+    setup_brand(factory)
+    setup_source(factory)
+    response = client.post("/generation", json=payload(length=length))
+    assert response.status_code == 200, response.text
+    data = json.loads(generation.call_args.args[1])
+    assert data["platform_character_limit"] == LENGTH_LIMITS[length]
+    characters = {"min": LENGTH_TARGET_MINIMUMS[length], "max": LENGTH_LIMITS[length]}
+    if length == "short":
+        # As in v8: every v9 wording pushed short drafts past their maximum.
+        assert "length_target" not in data
+        assert generation.call_args.args[0] == SHORT_WRITER_SYSTEMS[DEFAULT_KNOWLEDGE_LEVEL]
+    else:
+        assert data["length_target"] == {
+            "characters": characters,
+            "words": dict(zip(("min", "max"), LENGTH_TARGET_WORDS[length], strict=True)),
+        }
 
 
 def test_an_omitted_level_is_general_knowledge(service_api):
@@ -274,7 +346,7 @@ def test_saved_drafts_from_before_levels_are_checked_as_knowledge_base_only(serv
 
 
 def test_the_writer_prompt_version_names_this_change():
-    assert PROMPT_VERSION == "grounded-post-v8"
+    assert PROMPT_VERSION == "grounded-post-v9"
 
 
 def test_the_general_prompt_keeps_out_persuasive_product_descriptions():

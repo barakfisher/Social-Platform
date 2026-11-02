@@ -1036,3 +1036,30 @@ the owner's change: the source check runs only on request, the writer gets every
 translation fallback's 20%, and the cap is $0.80, so the writer's smallest allowance is $0.64
 and Terra's worst review ($0.24) fits the whole cap (`tests/test_generation_budget.py`, which
 fails at $0.65 with Opus listed).
+## SP-28: draft length and depth, grounded-post-v8 vs v9 — 2026-11-02
+
+`backend/scripts/measure_draft_quality.py` on the owner's 9 Hebrew topics (6 medium, 3 short;
+one medium on google/gemini-3.8-flash, the rest openai/gpt-4.1; source check
+openai/gpt-5.6-terra), each topic's latest Ready inputs, READ ONLY. Rounds, in order:
+
+1. v8 baseline (`--baseline-ref main`): 4/9 in range; the 5 short were medium drafts of
+   606–717 characters, none warned. Median cited chunks 3; unsupported claims 8.9 per checked
+   draft (7 checked; 2 reviews `grounding_review_invalid`). $0.564. A first attempt stopped
+   after 2 topics on an invalid review ($0.215); the script now records that and continues.
+2. v9, first wording: medium on gpt-4.1 5/5 in range (972–1,059). All 3 short drafts went
+   past 600 (`generation_output_limit`); the Gemini topic was cut off
+   (`generation_output_truncated`). $0.506.
+3. Writer only, 4 failed topics: short drafts 119–125 words when asked for 75–90 (676–709
+   characters); Gemini cut off again with no usage reported. $0.099.
+4. Short "one or two points", Gemini output 5,000: unchanged (117–124 words; Gemini cut off).
+   $0.099.
+5. (Key limit reached; owner raised it.) Short with v8's character-only wording, "Check the
+   length" removed: Gemini finished, 1,083 characters with a thin-sources warning; "מנטוריג"
+   947; short still 704–797. $0.238.
+6. Short on v8's prompts word for word, no length target: 400 and 458 characters; the third
+   topic stopped at the script's cap before its source check. $0.165.
+
+Result against the acceptance criteria: docs/implementation.md, SP-28. Unsupported claims per
+checked draft rose (11.0 on 4 vs 8.9 on 7) while the rate per 1,000 characters fell (13.0 vs
+14.0); not conclusive on this sample. Not measured live: a long draft (no owner run uses
+"long"), "Knowledge Base only" at any length, and short's third topic on the final prompts.

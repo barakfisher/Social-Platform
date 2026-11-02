@@ -40,7 +40,7 @@ Provider key is private in git-ignored backend/.env. Never print/read secrets in
 
 Commands:
 - `cd backend && uv run ruff format --check . && uv run ruff check . && uv run mypy app`
-- `cd backend && TEST_DATABASE_URL=postgresql+psycopg://social_app:social_app_local@localhost:55473/social uv run pytest`
+- `cd backend && TEST_DATABASE_URL=postgresql+psycopg://social_app:social_app_local@localhost:55473/social_test uv run pytest` (create `social_test` once: README, Tests)
 - `cd backend && uv run alembic check`
 - `cd frontend && npm run format:check && npm run lint && npm run build && npm run typecheck && npm test`
 

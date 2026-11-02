@@ -1967,3 +1967,75 @@ job; no key leaves the source at `text_prepared` with no job), ruff, mypy; Playw
 including a pending-embedding source showing no start button and the failed state offering
 "Retry AI search". Not verified live: a new source reaching Ready without a click, which
 needs a paid embedding call.
+
+## SP-28: drafts reach their chosen length (grounded-post-v9) and a draft measure — 2026-11-02
+
+**Starting point, measured read-only.** grounded-post-v7 had already given the default
+"general" level a target range (short 400–600, medium 800–1200, long 1600–2400) with "write
+shorter and say so in warnings". It did not work: 4 of the 5 v7/v8 medium drafts were
+679–792 characters (about 130 words), none with a warning. The issue's original plan (v5 →
+v6) predates v7, so the change became v8 → v9. The ranges stay v7's: that owner decision is
+newer than the issue's 75%.
+
+Owner decisions, with the alternatives rejected and the failure each would have caused:
+
+- **Stronger instructions, no code retry.** Rejected: a server length check with one
+  expansion call (a second paid call on short drafts and pressure to pad where material is
+  missing, rejected twice before); lowering the ranges (medium 650 would already be "in
+  range" today, so nothing would change).
+- **Medium and long also get a word target** (150–180 / 300–360 words, `LENGTH_TARGET_WORDS`).
+  Writers miss character counts, in Hebrew most, but follow word counts. The owner's drafts
+  run 5.45–6.5 characters per word (`CHARS_PER_WORD`), so a post inside the word range lands
+  inside the character range; a test pins that relation. They plan enough points for the
+  range before writing and develop each with what the sources state (plus general knowledge
+  at the general level). Thin sources: write shorter and add a warning in the post's language.
+- **Short drafts keep grounded-post-v8's prompts word for word** (`SHORT_WRITER_SYSTEMS`,
+  hash-checked against main's v8) and get no `length_target`. Every v9 wording pushed short
+  drafts past their 600 maximum, which fails a paid draft: with a 75–90 word target they came
+  out 117–125 words; with "a short post has room for one or two points" the same; with v8's
+  character-only wording plus v9's develop clause, 130–141. v8 kept 3 of 3 in range.
+  Rejected: a lower short range (guesswork about a 40% overshoot, still able to pass 600).
+- **"Never pad" and "prefer shorter" leave "Knowledge Base only" for medium and long.** Every
+  other v6 rule of that level is unchanged (hash-checked); only its length lines changed.
+- **"Check the length before answering" was removed.** With it, Gemini spent its whole output
+  limit (reasoning included) and the draft was cut off, at 4,000 and at 5,000 tokens; without
+  it the same topic finished (1,083 characters).
+- **Output limits:** gpt-4.1 900 → 1,400 (a long Hebrew draft is about 920 tokens at 2.6
+  characters per token, plus JSON and IDs; tested for every writer); Gemini 4,000 → 5,000, the
+  most `chat_completion` allows (tested: no profile above it, which would be lowered silently).
+- **A committed measure, `backend/scripts/measure_draft_quality.py`.** Rejected: a one-off
+  script (the previous one was thrown away and the next quality tasks need the same measure).
+  Every transaction is READ ONLY in PostgreSQL itself (`default_transaction_read_only` on each
+  connection, tested). `--max-usd` is required; each call's worst case is checked against
+  what is left before it is sent. A source check that does not finish is recorded and the run
+  continues (owner, after one invalid review stopped a whole run); a refused embedding or the
+  cap ends it with the reason and keeps what was measured. `--baseline-ref` measures another
+  revision's writer prompt with today's retrieval and check; `--topic` and `--writer-only`
+  narrow a run.
+- **Tests run against a separate `social_test` database** (README, Tests). They used to run
+  against the owner's `social`; the rollback held, but one stray commit would touch the
+  owner's data.
+
+**Live comparison (paid, owner's 9 Hebrew topics, same writer and reviewer models).** Latest
+v9 result per topic; medium drafts on gpt-4.1 other than "מנטוריג" were measured on v9's
+first wording (with "Check the length", since removed):
+
+| Criterion | v8 | v9 | |
+| --- | --- | --- | --- |
+| In range or warned; at least 6 in range | 4/9, 5 short without a warning | 8/8 in range (1 short topic unmeasured) | pass |
+| Median cited chunks higher | 3 | 3.5 | pass, barely |
+| Mean unsupported claims per checked draft not higher | 8.9 (7 checked) | 11.0 (4 checked) | **fails** |
+| (Per 1,000 characters, not a criterion) | 14.0 | 13.0 | |
+| No spending-limit, prompt-limit or timeout failures | | none on the final prompts | pass |
+
+On the four topics checked in both: 5→5, 6→5, 12→20, 12→14. Longer drafts carry more claims;
+four checked drafts cannot settle whether the rate rose. 4 of 21 source checks returned
+invalid output (`grounding_review_invalid`), about one in five.
+
+Spend: about $2.06 of the owner's $2.30 cap (raised from $1.50 during the run), including
+three Gemini calls cut off before usage was reported. The OpenRouter key hit its $10 limit
+mid-run (the owner raised it to $20).
+
+Found along the way: a call that ends with `generation_output_truncated` returns no usage, so
+neither the app nor the script records its cost.
+
