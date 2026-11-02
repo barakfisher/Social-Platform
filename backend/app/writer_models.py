@@ -51,9 +51,17 @@ class WriterProfile:
 # GPT-5.6-sol: o200k counts match within a constant 27 tokens, as GPT-4.1. Typical tokens are
 # the medians of the same six drafts (8,562-17,431 / 340-1,004 incl. reasoning, 2026-10-31).
 WRITER_PROFILES = {
-    "openai/gpt-4.1": WriterProfile(token_ratio=Decimal("1.0"), typical_tokens=(13886, 311)),
+    # A long Hebrew draft is about 920 tokens (2.6 characters each) plus its JSON and source
+    # IDs; the 900-token default cut it off (SP-28).
+    "openai/gpt-4.1": WriterProfile(
+        token_ratio=Decimal("1.0"), typical_tokens=(13886, 311), output_tokens=1400
+    ),
     "google/gemini-3.8-flash": WriterProfile(
-        token_ratio=Decimal("1.25"), typical_tokens=(18236, 3271), output_tokens=4000
+        # Reasoning counts against the limit: 4,000 cut off grounded-post-v9 drafts that plan
+        # before writing; 5,000 is the most chat_completion allows (SP-28).
+        token_ratio=Decimal("1.25"),
+        typical_tokens=(18236, 3271),
+        output_tokens=5000,
     ),
     "anthropic/claude-opus-5.5": WriterProfile(
         token_ratio=Decimal("1.8"), typical_tokens=(22252, 1683), output_tokens=4000

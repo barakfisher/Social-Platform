@@ -51,8 +51,8 @@ Base documents (59 chunks), the generation runs (29 on 2026-10-31) and the saved
   → `social`), following README.md, which still says to do so. The rollback held and the data
   matched afterwards (5 documents, 59 chunks, 1 brand, 1 post), but the earlier lesson stands:
   use a disposable `social_test` database (create, grant, `alembic upgrade head` as admin, run
-  from the repo root with `env -u OPENROUTER_API_KEY`, drop). **README.md should be fixed**
-  so it stops pointing at the owner's database.
+  from the repo root with `env -u OPENROUTER_API_KEY`, drop). Fixed in SP-28: README.md now
+  points tests at a kept local `social_test` database and says how to create it.
 - **Paid calls this session ran without a stated dollar cap.** The owner approved the live
   comparison as an acceptance criterion and asked for the suggestion call, but no cap was
   named. Ask for one before the call. Key usage went from $5.777 (last handoff) to $6.419,
@@ -81,8 +81,10 @@ Base documents (59 chunks), the generation runs (29 on 2026-10-31) and the saved
 
 - **Draft quality is still the owner's main complaint.** With full context, checked drafts
   carry more points to check (2–14, before 0–1): mostly the writer's own elaborations found in
-  no chunk ("אמון, הקשבה"), plus at least one reviewer miss on a supported claim. Drafts stay
-  short (323–811 characters) because the writer prompt says "never pad" and "prefer shorter".
+  no chunk ("אמון, הקשבה"), plus at least one reviewer miss on a supported claim. SP-28 (grounded-post-v9) made medium drafts reach
+  800–1200; short drafts keep v8's prompts because every v9 wording pushed them past 600.
+  Unsupported claims per draft rose on a small sample while the rate per character fell
+  (docs/implementation.md).
   2 of 7 reviews ended unchecked (Terra coverage/evidence; same rate as before or better).
 - **Sample posts are treated as facts.** "קובץ פוסטים לדוגמא" is a Knowledge Base source: the
   writer copies from it, and the live suggestion call cited only it for all three ideas.

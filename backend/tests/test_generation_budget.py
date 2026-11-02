@@ -1,10 +1,11 @@
+import math
 import os
 from decimal import Decimal
 
 import pytest
 
 from app.config import Settings
-from app.generation import TRANSLATION_BUDGET_SHARE
+from app.generation import LENGTH_LIMITS, TRANSLATION_BUDGET_SHARE
 from app.generation_provider import attempt_estimate_usd
 from app.writer_models import WRITER_PROFILES, provider_tokens
 
@@ -83,3 +84,26 @@ def test_default_budget_affords_largest_allowed_prompt(defaults):
 
 def test_default_context_budget_fits_inside_prompt_budget(defaults):
     assert defaults.generation_context_budget < defaults.generation_prompt_budget
+
+
+# Measured on the owner's Hebrew drafts (o200k): about 2.6 characters per token. The JSON
+# wrapper, cited chunk IDs and warnings add a few hundred tokens more (SP-28).
+HEBREW_CHARS_PER_TOKEN = 2.6
+ANSWER_OVERHEAD_TOKENS = 300
+
+
+def test_every_writer_can_return_the_longest_hebrew_draft(defaults):
+    longest = math.ceil(LENGTH_LIMITS["long"] / HEBREW_CHARS_PER_TOKEN) + ANSWER_OVERHEAD_TOKENS
+    for model_id in defaults.generation_writer_models:
+        profile = WRITER_PROFILES[model_id]
+        provider_longest = math.ceil(longest * profile.token_ratio)
+        output = profile.output_tokens or defaults.generation_max_output_tokens
+        assert output >= provider_longest, model_id
+
+
+def test_no_writer_output_limit_is_silently_lowered(defaults):
+    # chat_completion caps every output limit at the larger of the writer and reviewer
+    # defaults; a profile above it would promise room the call never gets.
+    cap = max(defaults.generation_max_output_tokens, defaults.generation_review_max_output_tokens)
+    for model_id in defaults.generation_writer_models:
+        assert (WRITER_PROFILES[model_id].output_tokens or 0) <= cap, model_id

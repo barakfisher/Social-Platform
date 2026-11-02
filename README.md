@@ -77,12 +77,24 @@ uv run ruff format --check .
 uv run ruff check .
 uv run mypy app
 uv run pytest
-# Include database tests after migration:
-TEST_DATABASE_URL=postgresql+psycopg://social_app:social_app_local@localhost:55473/social uv run pytest
+# Include database tests, against social_test (never your own social database):
+TEST_DATABASE_URL=postgresql+psycopg://social_app:social_app_local@localhost:55473/social_test uv run pytest
 uv run alembic check
 ```
 
-Database tests roll back their fixtures; the worker test creates and deletes its own temporary owner/workspace. Use a dedicated database in CI. Without TEST_DATABASE_URL, PostgreSQL tests are explicitly skipped.
+Database tests roll back their fixtures; the worker test creates and deletes its own temporary owner/workspace. Without TEST_DATABASE_URL, PostgreSQL tests are explicitly skipped. Run them against a separate `social_test` database: a test that commits by mistake then cannot touch your sources, drafts or Brand DNA. Create it once, from the repository root (the grants match `docker/postgres-init.sql`, which runs only for `social`):
+
+```bash
+docker compose exec -T postgres psql -U social_admin -d social -c "CREATE DATABASE social_test"
+docker compose exec -T postgres psql -U social_admin -d social_test -v ON_ERROR_STOP=1 -c "GRANT CONNECT ON DATABASE social_test TO social_app; GRANT USAGE ON SCHEMA public TO social_app; ALTER DEFAULT PRIVILEGES FOR ROLE social_admin IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO social_app; ALTER DEFAULT PRIVILEGES FOR ROLE social_admin IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO social_app;"
+cd backend && DATABASE_URL=postgresql+psycopg://social_admin:social_admin_local@localhost:55473/social_test MIGRATION_DATABASE_URL=postgresql+psycopg://social_admin:social_admin_local@localhost:55473/social_test uv run alembic upgrade head
+```
+
+Repeat the last command after pulling a new migration. CI starts its own empty database, so it keeps using `social` there.
+
+## Measuring draft quality (paid)
+
+`backend/scripts/measure_draft_quality.py` writes a fresh draft for each topic that has a Ready draft, on that topic's latest inputs and models, then runs the source check. It reports each draft's length against its target, warnings, chunks received and cited, unsupported claims, cost and time. It only reads the database (every transaction is READ ONLY) and refuses to run without `--max-usd`; a call that could pass what is left of the cap is not sent. Compare a change with `--baseline-ref main`; narrow a run with `--topic` or `--writer-only`. Results so far: docs/implementation.md (SP-28).
 
 ## Schema and migrations
 

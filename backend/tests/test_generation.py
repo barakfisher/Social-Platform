@@ -14,6 +14,7 @@ from app.generation import (
     WRITER_SYSTEMS,
     bounded_context,
     request_inputs,
+    writer_system,
 )
 from app.generation_provider import GenerationError, chat_completion
 from app.grounding import REVIEW_SYSTEM, prompt_tokens, review_draft
@@ -45,7 +46,8 @@ def settings():
 
 def fake_completion(system, user, tokens, **kwargs):
     data = json.loads(user)
-    assert system == WRITER_SYSTEMS[data["preferences"]["knowledge_level"]]
+    preferences = data["preferences"]
+    assert system == writer_system(preferences["knowledge_level"], preferences["length"])
     return json.dumps(
         {
             "content": "A grounded draft. טיוטה מבוססת.",
@@ -471,7 +473,13 @@ def test_writer_keeps_injected_text_inside_its_own_data_field(service_api, locat
     system, user, _ = generation.call_args.args
     assert system == GENERAL_SYSTEM
     data = json.loads(user)
-    assert set(data) == {"brand", "preferences", "sources", "platform_character_limit"}
+    assert set(data) == {
+        "brand",
+        "preferences",
+        "sources",
+        "platform_character_limit",
+        "length_target",
+    }
     value = data
     for key in INJECTION_PATHS[location]:
         value = value[key]
