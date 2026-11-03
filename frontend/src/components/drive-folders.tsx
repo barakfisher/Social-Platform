@@ -45,8 +45,6 @@ const messages = {
       "Google Docs, PDF, TXT and Markdown files directly in the folder are imported. Subfolders and other files are skipped.",
     connect: "Connect folder",
     connecting: "Checking the folder…",
-    connected: "Folder connected. Its files are being imported.",
-    duplicate: "This folder is already connected.",
     folders: "Connected folders",
     loading: "Loading folders…",
     loadError: "We couldn’t load your Drive folders. Please try again.",
@@ -116,8 +114,6 @@ const messages = {
       "מיובאים קובצי Google Docs,‏ PDF,‏ TXT ו-Markdown שנמצאים ישירות בתיקייה. תת-תיקיות וקבצים אחרים מדולגים.",
     connect: "חיבור התיקייה",
     connecting: "בודק את התיקייה…",
-    connected: "התיקייה חוברה. הקבצים שלה מיובאים.",
-    duplicate: "התיקייה הזו כבר מחוברת.",
     folders: "תיקיות מחוברות",
     loading: "טוען תיקיות…",
     loadError: "לא הצלחנו לטעון את התיקיות מ-Drive. אפשר לנסות שוב.",
@@ -177,28 +173,233 @@ const POLL_INTERVAL_MS = 3000;
 const syncing = (folder: Folder) =>
   folder.status === "Pending" || folder.status === "Syncing";
 
-export function DriveFolders({
+const fetchListing = async (): Promise<Listing> => {
+  const response = await fetch("/api/knowledge/drive-folders", {
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error();
+  return response.json();
+};
+type KindFieldRender = (props: {
+  id: string;
+  value: DocumentKind;
+  onChange: (kind: DocumentKind) => void;
+}) => React.ReactNode;
+
+// The connect form, shown in the Knowledge Base's add-source dialog.
+export function DriveFolderConnect({
   locale,
-  onSynced,
   kindField,
+  labelledBy,
+  onConnected,
+  onBusyChange,
 }: {
   locale: Locale;
-  // A sync finished: the Knowledge Base list should show what it added or removed.
-  onSynced: () => void;
   // The Knowledge Base's own content-type control, so both read the same.
-  kindField: (props: {
-    id: string;
-    value: DocumentKind;
-    onChange: (kind: DocumentKind) => void;
-  }) => React.ReactNode;
+  kindField: KindFieldRender;
+  labelledBy: string;
+  onConnected: (duplicate: boolean) => void;
+  // The dialog stays open while the folder is being checked.
+  onBusyChange: (busy: boolean) => void;
 }) {
   const t = messages[locale];
   const [listing, setListing] = useState<Listing | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [link, setLink] = useState("");
   const [kind, setKind] = useState<DocumentKind>("knowledge");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      setListing(await fetchListing());
+      setLoadFailed(false);
+    } catch {
+      setLoadFailed(true);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  useEffect(() => onBusyChange(busy), [busy, onBusyChange]);
+
+  async function connect(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setNotice("");
+    setFormError(null);
+    if (!link.trim()) {
+      setFormError("drive_folder_invalid");
+      document.getElementById("drive-folder")?.focus();
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await fetch("/api/knowledge/drive-folders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder: link.trim(), kind }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        // The proxy's own errors (a timeout, an unreachable API) carry no message.
+        setFormError(body.error?.message || "generic");
+        return;
+      }
+      const result = await response.json();
+      setLink("");
+      setKind("knowledge");
+      onConnected(Boolean(result.duplicate));
+    } catch {
+      setFormError("generic");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyAddress(address: string) {
+    try {
+      await navigator.clipboard.writeText(address);
+      setNotice(t.copied);
+    } catch {
+      // The address stays selectable on screen.
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <p className="text-xs leading-5 text-muted-foreground">{t.intro}</p>
+      {listing === null && !loadFailed ? (
+        <p role="status" className="flex items-center gap-2 text-sm">
+          <LoaderCircle size={16} className="animate-spin" aria-hidden />
+          {t.loading}
+        </p>
+      ) : listing === null ? (
+        <div
+          role="alert"
+          className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+        >
+          {t.loadError}
+          <Button
+            variant="outline"
+            size="sm"
+            className="ms-3"
+            onClick={() => void load()}
+          >
+            {t.retry}
+          </Button>
+        </div>
+      ) : !listing.configured ? (
+        <p className="text-sm text-muted-foreground">{t.notConfigured}</p>
+      ) : (
+        <form
+          onSubmit={connect}
+          noValidate
+          aria-labelledby={labelledBy}
+          className="space-y-5"
+        >
+          {listing.service_account_email && (
+            <div className="text-sm">
+              <p>{t.shareStep}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <code
+                  id="drive-service-email"
+                  dir="ltr"
+                  className="max-w-full break-all rounded bg-muted px-2 py-1 text-xs"
+                >
+                  {listing.service_account_email}
+                </code>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-describedby="drive-service-email"
+                  onClick={() =>
+                    void copyAddress(listing.service_account_email ?? "")
+                  }
+                >
+                  <Copy size={14} aria-hidden />
+                  {t.copy}
+                </Button>
+              </div>
+              <p className="mt-3">{t.pasteStep}</p>
+            </div>
+          )}
+          <fieldset disabled={busy} className="space-y-5">
+            <div>
+              <label
+                htmlFor="drive-folder"
+                className="mb-2 block text-sm font-medium"
+              >
+                {t.folderLabel}
+              </label>
+              <input
+                id="drive-folder"
+                // The form appears once the folders load, after the step opened.
+                autoFocus
+                inputMode="url"
+                maxLength={2048}
+                value={link}
+                dir="ltr"
+                onChange={(e) => {
+                  setLink(e.target.value);
+                  setFormError(null);
+                }}
+                placeholder="https://drive.google.com/drive/folders/…"
+                aria-describedby={
+                  formError ? "drive-hint drive-error" : "drive-hint"
+                }
+                aria-invalid={formError !== null}
+                className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
+              />
+              <p
+                id="drive-hint"
+                className="mt-2 text-xs leading-5 text-muted-foreground"
+              >
+                {t.folderHint}
+              </p>
+            </div>
+            {kindField({ id: "drive-kind", value: kind, onChange: setKind })}
+          </fieldset>
+          {formError && (
+            <p id="drive-error" role="alert" className="text-sm text-red-800">
+              {t.errors[formError] ?? t.generic}
+            </p>
+          )}
+          <Button type="submit" disabled={busy}>
+            {busy ? (
+              <LoaderCircle size={16} className="animate-spin" />
+            ) : (
+              <FolderSync size={16} />
+            )}
+            {busy ? t.connecting : t.connect}
+          </Button>
+        </form>
+      )}
+      <p role="status" className="text-sm text-primary">
+        {notice}
+      </p>
+    </div>
+  );
+}
+
+// Connected folders, managed from the Knowledge Base page. Shows nothing until a
+// folder is connected; connecting happens in the add-source dialog.
+export function DriveFolders({
+  locale,
+  onSynced,
+  version,
+}: {
+  locale: Locale;
+  // A sync finished: the Knowledge Base list should show what it added or removed.
+  onSynced: () => void;
+  // Bumped when a folder is connected, so the list reads it.
+  version: number;
+}) {
+  const t = messages[locale];
+  const [listing, setListing] = useState<Listing | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [confirm, setConfirm] = useState<string | null>(null);
@@ -206,11 +407,7 @@ export function DriveFolders({
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch("/api/knowledge/drive-folders", {
-        cache: "no-store",
-      });
-      if (!response.ok) throw new Error();
-      const data: Listing = await response.json();
+      const data = await fetchListing();
       setListing(data);
       setLoadFailed(false);
       const finished = data.items.filter(
@@ -229,50 +426,13 @@ export function DriveFolders({
   }, [onSynced, t]);
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, version]);
   const active = listing?.items.some(syncing) ?? false;
   useEffect(() => {
     if (!active) return;
     const timer = setInterval(() => void load(), POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [active, load]);
-
-  const errorCode = async (response: Response) => {
-    const body = await response.json().catch(() => ({}));
-    return (body.error?.message ?? "") as string;
-  };
-
-  async function connect(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setNotice("");
-    setFormError(null);
-    if (!link.trim()) {
-      setFormError("drive_folder_invalid");
-      return;
-    }
-    setBusy("connect");
-    try {
-      const response = await fetch("/api/knowledge/drive-folders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ folder: link.trim(), kind }),
-      });
-      if (!response.ok) {
-        // The proxy's own errors (a timeout, an unreachable API) carry no message.
-        setFormError((await errorCode(response)) || "generic");
-        return;
-      }
-      const result = await response.json();
-      setLink("");
-      setKind("knowledge");
-      setNotice(result.duplicate ? t.duplicate : t.connected);
-      await load();
-    } catch {
-      setFormError("generic");
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function act(folder: Folder, action: "sync" | "disconnect") {
     setBusy(`${action}-${folder.id}`);
@@ -297,244 +457,139 @@ export function DriveFolders({
     }
   }
 
-  async function copyAddress(address: string) {
-    try {
-      await navigator.clipboard.writeText(address);
-      setNotice(t.copied);
-    } catch {
-      // The address stays selectable on screen.
-    }
-  }
-
   const time = (value: string) =>
     new Intl.DateTimeFormat(locale, {
       dateStyle: "medium",
       timeStyle: "short",
     }).format(new Date(value));
 
+  if (loadFailed && listing === null)
+    return (
+      // Not an alert: nothing the owner did failed, and the page's own alerts stay alone.
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+        {t.loadError}
+        <Button
+          variant="outline"
+          size="sm"
+          className="ms-3"
+          onClick={() => void load()}
+        >
+          {t.retry}
+        </Button>
+      </div>
+    );
+  // The last folder's disconnect notice stays until the next action.
+  if (!listing?.configured || (!listing.items.length && !notice)) return null;
   return (
     <section
       aria-labelledby="drive-heading"
-      className="mt-8 space-y-5 border-t border-border pt-7"
+      className="rounded-2xl border border-border bg-card p-6 sm:p-9"
     >
-      <h3 id="drive-heading" className="font-semibold">
-        {t.heading}
+      <h3 id="drive-heading" className="mb-4 text-lg font-semibold">
+        {t.folders}
       </h3>
-      <p className="text-xs leading-5 text-muted-foreground">{t.intro}</p>
-      {listing === null && !loadFailed ? (
-        <p role="status" className="flex items-center gap-2 text-sm">
-          <LoaderCircle size={16} className="animate-spin" aria-hidden />
-          {t.loading}
-        </p>
-      ) : loadFailed && listing === null ? (
-        // Not an alert: nothing the owner did failed, and the page's own alerts stay alone.
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-          {t.loadError}
-          <Button
-            variant="outline"
-            size="sm"
-            className="ms-3"
-            onClick={() => void load()}
-          >
-            {t.retry}
-          </Button>
-        </div>
-      ) : listing && !listing.configured ? (
-        <p className="text-sm text-muted-foreground">{t.notConfigured}</p>
-      ) : listing ? (
-        <>
-          <form onSubmit={connect} noValidate className="space-y-5">
-            {listing.service_account_email && (
-              <div className="text-sm">
-                <p>{t.shareStep}</p>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <code
-                    id="drive-service-email"
-                    dir="ltr"
-                    className="max-w-full break-all rounded bg-muted px-2 py-1 text-xs"
-                  >
-                    {listing.service_account_email}
-                  </code>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    aria-describedby="drive-service-email"
-                    onClick={() =>
-                      void copyAddress(listing.service_account_email ?? "")
-                    }
-                  >
-                    <Copy size={14} aria-hidden />
-                    {t.copy}
-                  </Button>
-                </div>
-                <p className="mt-3">{t.pasteStep}</p>
-              </div>
-            )}
-            <fieldset disabled={busy === "connect"} className="space-y-5">
-              <div>
-                <label
-                  htmlFor="drive-folder"
-                  className="mb-2 block text-sm font-medium"
-                >
-                  {t.folderLabel}
-                </label>
-                <input
-                  id="drive-folder"
-                  inputMode="url"
-                  maxLength={2048}
-                  value={link}
-                  dir="ltr"
-                  onChange={(e) => {
-                    setLink(e.target.value);
-                    setFormError(null);
-                  }}
-                  placeholder="https://drive.google.com/drive/folders/…"
-                  aria-describedby={
-                    formError ? "drive-hint drive-error" : "drive-hint"
-                  }
-                  aria-invalid={formError !== null}
-                  className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
-                />
-                <p
-                  id="drive-hint"
-                  className="mt-2 text-xs leading-5 text-muted-foreground"
-                >
-                  {t.folderHint}
-                </p>
-              </div>
-              {kindField({ id: "drive-kind", value: kind, onChange: setKind })}
-            </fieldset>
-            {formError && (
-              <p id="drive-error" role="alert" className="text-sm text-red-800">
-                {t.errors[formError] ?? t.generic}
+      <ul className="space-y-3">
+        {listing.items.map((folder) => (
+          <li key={folder.id} className="rounded-xl border border-border p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h4
+                dir="auto"
+                className="min-w-0 max-w-full break-words font-medium"
+              >
+                {folder.name || folder.folder_id}
+              </h4>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">
+                {syncing(folder) && (
+                  <LoaderCircle
+                    size={12}
+                    className="animate-spin"
+                    aria-hidden
+                  />
+                )}
+                {t.status[folder.status]}
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {folder.synced_at &&
+              !Number.isNaN(Date.parse(folder.synced_at)) ? (
+                <>
+                  {t.lastSynced}{" "}
+                  <time dateTime={folder.synced_at}>
+                    {time(folder.synced_at)}
+                  </time>
+                </>
+              ) : (
+                t.neverSynced
+              )}
+              {" · "}
+              {t.files(folder.document_count, folder.skipped_count)}
+              {" · "}
+              {t.newFilesAs(t.kinds[folder.kind])}
+            </p>
+            {folder.status === "Failed" && folder.error_code && (
+              <p className="mt-3 text-sm text-red-800">
+                {t.errors[folder.error_code] ?? t.generic} {t.syncErrorNote}
               </p>
             )}
-            <Button type="submit" disabled={busy !== null}>
-              {busy === "connect" ? (
-                <LoaderCircle size={16} className="animate-spin" />
-              ) : (
-                <FolderSync size={16} />
-              )}
-              {busy === "connect" ? t.connecting : t.connect}
-            </Button>
-          </form>
-          {listing.items.length > 0 && (
-            <div>
-              <h4 className="mb-3 text-sm font-semibold">{t.folders}</h4>
-              <ul className="space-y-3">
-                {listing.items.map((folder) => (
-                  <li
-                    key={folder.id}
-                    className="rounded-xl border border-border p-4"
+            {rowError === folder.id && (
+              <p role="alert" className="mt-3 text-sm text-red-800">
+                {t.generic}
+              </p>
+            )}
+            {confirm === folder.id ? (
+              <div
+                role="group"
+                aria-labelledby={`drive-confirm-${folder.id}`}
+                className="mt-4 rounded-lg bg-muted p-4"
+              >
+                <p id={`drive-confirm-${folder.id}`} className="text-sm">
+                  {t.confirm(folder.document_count)}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    disabled={busy !== null}
+                    onClick={() => void act(folder, "disconnect")}
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <h5
-                        dir="auto"
-                        className="min-w-0 max-w-full break-words font-medium"
-                      >
-                        {folder.name || folder.folder_id}
-                      </h5>
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">
-                        {syncing(folder) && (
-                          <LoaderCircle
-                            size={12}
-                            className="animate-spin"
-                            aria-hidden
-                          />
-                        )}
-                        {t.status[folder.status]}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {folder.synced_at &&
-                      !Number.isNaN(Date.parse(folder.synced_at)) ? (
-                        <>
-                          {t.lastSynced}{" "}
-                          <time dateTime={folder.synced_at}>
-                            {time(folder.synced_at)}
-                          </time>
-                        </>
-                      ) : (
-                        t.neverSynced
-                      )}
-                      {" · "}
-                      {t.files(folder.document_count, folder.skipped_count)}
-                      {" · "}
-                      {t.newFilesAs(t.kinds[folder.kind])}
-                    </p>
-                    {folder.status === "Failed" && folder.error_code && (
-                      <p className="mt-3 text-sm text-red-800">
-                        {t.errors[folder.error_code] ?? t.generic}{" "}
-                        {t.syncErrorNote}
-                      </p>
-                    )}
-                    {rowError === folder.id && (
-                      <p role="alert" className="mt-3 text-sm text-red-800">
-                        {t.generic}
-                      </p>
-                    )}
-                    {confirm === folder.id ? (
-                      <div
-                        role="group"
-                        aria-labelledby={`drive-confirm-${folder.id}`}
-                        className="mt-4 rounded-lg bg-muted p-4"
-                      >
-                        <p
-                          id={`drive-confirm-${folder.id}`}
-                          className="text-sm"
-                        >
-                          {t.confirm(folder.document_count)}
-                        </p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            disabled={busy !== null}
-                            onClick={() => void act(folder, "disconnect")}
-                          >
-                            {t.confirmYes}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setConfirm(null)}
-                          >
-                            {t.cancel}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={busy !== null || syncing(folder)}
-                          aria-label={`${t.sync}: ${folder.name}`}
-                          onClick={() => void act(folder, "sync")}
-                        >
-                          <RefreshCw size={14} aria-hidden />
-                          {t.sync}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={busy !== null}
-                          aria-label={`${t.disconnect}: ${folder.name}`}
-                          onClick={() => setConfirm(folder.id)}
-                        >
-                          <Unlink size={14} aria-hidden />
-                          {t.disconnect}
-                        </Button>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </>
-      ) : null}
-      <p role="status" className="text-sm text-primary">
+                    {t.confirmYes}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setConfirm(null)}
+                  >
+                    {t.cancel}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null || syncing(folder)}
+                  aria-label={`${t.sync}: ${folder.name}`}
+                  onClick={() => void act(folder, "sync")}
+                >
+                  <RefreshCw size={14} aria-hidden />
+                  {t.sync}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  aria-label={`${t.disconnect}: ${folder.name}`}
+                  onClick={() => setConfirm(folder.id)}
+                >
+                  <Unlink size={14} aria-hidden />
+                  {t.disconnect}
+                </Button>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      <p role="status" className="mt-3 text-sm text-primary">
         {notice}
       </p>
     </section>

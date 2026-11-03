@@ -1,16 +1,20 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowLeft,
   BookOpen,
   FileUp,
+  FolderSync,
   Link2,
+  PenLine,
   Plus,
   LoaderCircle,
   RefreshCw,
   Trash2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DriveFolders } from "@/components/drive-folders";
+import { DriveFolderConnect, DriveFolders } from "@/components/drive-folders";
 import type { Locale } from "@/lib/i18n";
 
 type Changes = {
@@ -22,6 +26,22 @@ type Changes = {
 // Knowledge is drawn on for facts; sample posts are the owner's finished posts (SP-29).
 type DocumentKind = "knowledge" | "sample_posts";
 const KINDS: DocumentKind[] = ["knowledge", "sample_posts"];
+// The add-source dialog's choices, in the order it offers them.
+type SourceChoice = "text" | "file" | "url" | "drive";
+const CHOICES: SourceChoice[] = ["text", "file", "url", "drive"];
+const CHOICE_ICONS = {
+  text: PenLine,
+  file: FileUp,
+  url: Link2,
+  drive: FolderSync,
+};
+// Where focus goes when a step opens; the Drive form appears once its folders load.
+const FIRST_FIELD = {
+  text: "source-title",
+  file: "source-file",
+  url: "source-url",
+  drive: "drive-folder",
+};
 type Document = {
   id: string;
   title: string;
@@ -60,7 +80,30 @@ const messages = {
     saved: "Text saved. Preparation is queued.",
     duplicate:
       "This text is already in your Knowledge Base. No new source was added.",
-    empty: "No sources yet. Add your first text above.",
+    empty: "No sources yet. Add your first one, and your posts can draw on it.",
+    addSource: "Add a source",
+    wizardIntro: "What would you like to add?",
+    back: "Back",
+    closeWizard: "Close",
+    dropHint: "You can also drop a PDF or text file here.",
+    dropHere: "Drop the file to upload it",
+    choices: {
+      text: {
+        title: "Write or paste text",
+        hint: "Notes, product details or brand stories",
+      },
+      file: { title: "Upload a file", hint: "PDF, TXT or Markdown" },
+      url: {
+        title: "Add a web page",
+        hint: "A public page; its main text is kept",
+      },
+      drive: {
+        title: "Connect a Google Drive folder",
+        hint: "Its files are added and synced daily",
+      },
+    } as Record<SourceChoice, { title: string; hint: string }>,
+    driveConnected: "Folder connected. Its files are being imported.",
+    driveDuplicate: "This folder is already connected.",
     sources: "Your sources",
     loading: "Loading sources…",
     listError:
@@ -137,14 +180,12 @@ const messages = {
     view: "View text",
     close: "Close text",
     limit: "Up to 100,000 characters.",
-    upload: "Upload a file",
     fileLabel: "PDF or text file",
     uploadTitle: "File title (optional)",
     uploadTitleHint: "Defaults to the file name",
     uploadLimit: (size: string, pages: number) =>
       `PDF, TXT or Markdown (UTF-8), up to ${size} and ${pages} pages. Scanned PDFs need text recognition (OCR) first.`,
     uploadButton: "Upload file",
-    linkHeading: "Add a web page",
     linkLabel: "Page address (URL)",
     linkTitle: "Page title (optional)",
     linkTitleHint: "Defaults to the page’s own title",
@@ -250,7 +291,30 @@ const messages = {
     adding: "מוסיף…",
     saved: "הטקסט נשמר ונשלח להכנה.",
     duplicate: "הטקסט הזה כבר נמצא במאגר הידע. לא נוסף מקור חדש.",
-    empty: "עדיין אין מקורות. אפשר להוסיף את הטקסט הראשון למעלה.",
+    empty: "עדיין אין מקורות. מוסיפים את הראשון, והפוסטים יוכלו להתבסס עליו.",
+    addSource: "הוספת מקור",
+    wizardIntro: "מה רוצים להוסיף?",
+    back: "חזרה",
+    closeWizard: "סגירה",
+    dropHint: "אפשר גם לגרור לכאן קובץ PDF או טקסט.",
+    dropHere: "משחררים את הקובץ כדי להעלות אותו",
+    choices: {
+      text: {
+        title: "כתיבה או הדבקת טקסט",
+        hint: "הערות, מידע על מוצרים או סיפורי מותג",
+      },
+      file: { title: "העלאת קובץ", hint: "PDF,‏ TXT או Markdown" },
+      url: {
+        title: "הוספת דף אינטרנט",
+        hint: "דף ציבורי; נשמר הטקסט הראשי שלו",
+      },
+      drive: {
+        title: "חיבור תיקייה מ-Google Drive",
+        hint: "הקבצים בה נוספים ומסונכרנים כל יום",
+      },
+    } as Record<SourceChoice, { title: string; hint: string }>,
+    driveConnected: "התיקייה חוברה. הקבצים שלה מיובאים.",
+    driveDuplicate: "התיקייה הזו כבר מחוברת.",
     sources: "המקורות שלך",
     loading: "טוען מקורות…",
     listError: "לא הצלחנו לטעון את המקורות. כדאי לבדוק את החיבור ולנסות שוב.",
@@ -321,14 +385,12 @@ const messages = {
     view: "הצגת הטקסט",
     close: "סגירת הטקסט",
     limit: "עד 100,000 תווים.",
-    upload: "העלאת קובץ",
     fileLabel: "קובץ PDF או טקסט",
     uploadTitle: "כותרת לקובץ (לא חובה)",
     uploadTitleHint: "ברירת המחדל היא שם הקובץ",
     uploadLimit: (size: string, pages: number) =>
       `סוגי קבצים: PDF,‏ TXT או Markdown בקידוד UTF-8, עד ⁦${size}⁩ ו־${pages} עמודים. קובצי PDF סרוקים צריכים לעבור קודם זיהוי טקסט (OCR).`,
     uploadButton: "העלאת הקובץ",
-    linkHeading: "הוספת דף אינטרנט",
     linkLabel: "כתובת הדף (URL)",
     linkTitle: "כותרת לדף (לא חובה)",
     linkTitleHint: "ברירת המחדל היא הכותרת של הדף עצמו",
@@ -592,14 +654,82 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     | "saved"
     | "duplicate"
     | "deleted"
-    | "invalid"
     | "uploaded"
     | "uploadDuplicate"
     | "linkAdded"
     | "linkDuplicate"
     | "kindSaved"
+    | "driveConnected"
+    | "driveDuplicate"
     | null
   >(null);
+  // The add-source dialog: its step is "choose" or the chosen kind of source.
+  const wizard = useRef<HTMLDialogElement>(null);
+  const [step, setStep] = useState<"choose" | SourceChoice>("choose");
+  const [textError, setTextError] = useState<"invalid" | "generic" | null>(
+    null,
+  );
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [driveVersion, setDriveVersion] = useState(0);
+  // An add in flight keeps the dialog open, so its result is seen where it was asked.
+  const adding = driveBusy || ["submit", "upload", "link"].includes(busy ?? "");
+  function openWizard(start: "choose" | SourceChoice = "choose") {
+    setStep(start);
+    setTextError(null);
+    setUploadError(null);
+    setLinkError(null);
+    wizard.current?.showModal();
+    setFocusTarget(
+      start === "choose"
+        ? ["choose-text"]
+        : [FIRST_FIELD[start], `step-${start}`],
+    );
+  }
+  function closeWizard() {
+    if (adding) return;
+    wizard.current?.close();
+  }
+  // A source was added: the dialog closes and the list, already reloaded, shows it.
+  function added(result: NonNullable<typeof notice>) {
+    wizard.current?.close();
+    setNotice(result);
+    setFocusTarget(["add-source"]);
+  }
+  function chooseStep(choice: SourceChoice) {
+    setStep(choice);
+    setFocusTarget([FIRST_FIELD[choice], `step-${choice}`]);
+  }
+  function backToChoices() {
+    const from = step;
+    setStep("choose");
+    setFocusTarget([`choose-${from}`]);
+  }
+  // A file dropped on the sources list opens the upload step with it chosen.
+  const [dragging, setDragging] = useState(false);
+  const dropped = useRef<FileList | null>(null);
+  const [drops, setDrops] = useState(0);
+  useEffect(() => {
+    const input = document.getElementById("source-file");
+    if (!dropped.current || !(input instanceof HTMLInputElement)) return;
+    input.files = dropped.current;
+    dropped.current = null;
+  }, [drops]);
+  function dropFile(event: React.DragEvent) {
+    event.preventDefault();
+    setDragging(false);
+    const files = event.dataTransfer.files;
+    if (!files.length || adding) return;
+    dropped.current = files;
+    setFile(files[0]);
+    openWizard("file");
+    setDrops((count) => count + 1);
+  }
+  const onDriveConnected = useCallback((duplicate: boolean) => {
+    setDriveVersion((version) => version + 1);
+    wizard.current?.close();
+    setNotice(duplicate ? "driveDuplicate" : "driveConnected");
+    setFocusTarget(["add-source"]);
+  }, []);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Document | null>(null);
   // Bumped when a source changes in place; a list read that began before the change
@@ -750,14 +880,15 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
   }, [active, load]);
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setNotice(null);
     if (!title.trim() || !text.trim()) {
-      setNotice("invalid");
+      setTextError("invalid");
       setFocusTarget([title.trim() ? "source-text" : "source-title"]);
       return;
     }
     setBusy("submit");
-    setNotice(null);
-    setError(null);
+    setTextError(null);
+    let done = false;
     try {
       const response = await fetch("/api/knowledge/text", {
         method: "POST",
@@ -769,14 +900,15 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       setTitle("");
       setText("");
       setTextKind("knowledge");
-      setNotice(result.duplicate ? "duplicate" : "saved");
       setOffset(0);
       await load(0);
+      done = true;
+      added(result.duplicate ? "duplicate" : "saved");
     } catch {
-      setError("generic");
+      setTextError("generic");
     } finally {
       setBusy(null);
-      setFocusTarget(["source-title"]);
+      if (!done) setFocusTarget(["source-title"]);
     }
   }
   async function submitLink(event: React.FormEvent<HTMLFormElement>) {
@@ -794,6 +926,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       return;
     }
     setBusy("link");
+    let done = false;
     try {
       const response = await fetch("/api/knowledge/url", {
         method: "POST",
@@ -813,14 +946,15 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       setLink("");
       setLinkTitle("");
       setLinkKind("knowledge");
-      setNotice(result.duplicate ? "linkDuplicate" : "linkAdded");
       setOffset(0);
       await load(0);
+      done = true;
+      added(result.duplicate ? "linkDuplicate" : "linkAdded");
     } catch {
       setLinkError("generic");
     } finally {
       setBusy(null);
-      setFocusTarget(["source-url"]);
+      if (!done) setFocusTarget(["source-url"]);
     }
   }
   async function uploadFile(event: React.FormEvent<HTMLFormElement>) {
@@ -851,6 +985,7 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
     const query = new URLSearchParams({ filename: file.name });
     if (fileTitle.trim()) query.set("title", fileTitle.trim());
     query.set("kind", fileKind);
+    let done = false;
     try {
       // XMLHttpRequest reports upload progress; fetch does not.
       const result = await new Promise<{
@@ -885,15 +1020,16 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       setFile(null);
       setFileTitle("");
       setFileKind("knowledge");
-      setNotice(result.body.duplicate ? "uploadDuplicate" : "uploaded");
       setOffset(0);
       await load(0);
+      done = true;
+      added(result.body.duplicate ? "uploadDuplicate" : "uploaded");
     } catch {
       setUploadError("generic");
     } finally {
       setBusy(null);
       setProgress(null);
-      setFocusTarget(["source-file"]);
+      if (!done) setFocusTarget(["source-file"]);
     }
   }
   async function action(
@@ -979,265 +1115,397 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
         <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
           {t.description}
         </p>
-        <form onSubmit={submit} className="mt-7 space-y-5">
-          <fieldset disabled={busy === "submit"} className="space-y-5">
-            <div>
-              <label
-                htmlFor="source-title"
-                className="mb-2 block text-sm font-medium"
-              >
-                {t.label}
-              </label>
-              <input
-                id="source-title"
-                required
-                maxLength={300}
-                value={title}
-                dir={title ? "auto" : locale === "he" ? "rtl" : "ltr"}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder={t.titleHint}
-                aria-invalid={notice === "invalid" && !title.trim()}
-                className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="source-text"
-                className="mb-2 block text-sm font-medium"
-              >
-                {t.text}
-              </label>
-              <textarea
-                id="source-text"
-                required
-                maxLength={100000}
-                rows={8}
-                value={text}
-                dir={text ? "auto" : locale === "he" ? "rtl" : "ltr"}
-                onChange={(e) => setText(e.target.value)}
-                placeholder={t.textHint}
-                aria-describedby="source-limit"
-                aria-invalid={notice === "invalid" && !text.trim()}
-                className="w-full resize-y rounded-lg border border-border bg-background p-3 text-start text-sm leading-6 focus-visible:outline-2 focus-visible:outline-primary"
-              />
-              <p
-                id="source-limit"
-                className="mt-2 text-xs text-muted-foreground"
-              >
-                {t.limit}
-              </p>
-            </div>
-            <KindField
-              id="source-kind"
-              value={textKind}
-              onChange={setTextKind}
-              t={t}
-            />
-          </fieldset>
-          <Button type="submit" disabled={busy !== null}>
-            {busy === "submit" ? (
-              <LoaderCircle size={16} className="animate-spin" />
-            ) : (
-              <Plus size={16} />
-            )}
-            {busy === "submit" ? t.adding : t.add}
-          </Button>
-        </form>
-        <form
-          onSubmit={uploadFile}
-          className="mt-8 space-y-5 border-t border-border pt-7"
-          aria-labelledby="upload-title-heading"
-        >
-          <h3 id="upload-title-heading" className="font-semibold">
-            {t.upload}
-          </h3>
-          <fieldset disabled={busy === "upload"} className="space-y-5">
-            <div>
-              <label
-                htmlFor="source-file"
-                className="mb-2 block text-sm font-medium"
-              >
-                {t.fileLabel}
-              </label>
-              <input
-                id="source-file"
-                type="file"
-                accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
-                aria-describedby={
-                  uploadError ? "upload-limit upload-error" : "upload-limit"
-                }
-                aria-invalid={uploadError !== null}
-                onChange={(e) => {
-                  setFile(e.target.files?.[0] ?? null);
-                  setUploadError(null);
-                }}
-                className="block w-full max-w-full text-sm file:me-3 file:rounded-lg file:border file:border-border file:bg-background file:px-3 file:py-2 file:text-sm"
-              />
-              <p
-                id="upload-limit"
-                className="mt-2 text-xs leading-5 text-muted-foreground"
-              >
-                {t.uploadLimit(megabytes(limits.bytes), limits.pages)}
-              </p>
-            </div>
-            <div>
-              <label
-                htmlFor="upload-title"
-                className="mb-2 block text-sm font-medium"
-              >
-                {t.uploadTitle}
-              </label>
-              <input
-                id="upload-title"
-                maxLength={300}
-                value={fileTitle}
-                dir={fileTitle ? "auto" : locale === "he" ? "rtl" : "ltr"}
-                onChange={(e) => setFileTitle(e.target.value)}
-                placeholder={t.uploadTitleHint}
-                className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
-              />
-            </div>
-            <KindField
-              id="file-kind"
-              value={fileKind}
-              onChange={setFileKind}
-              t={t}
-            />
-          </fieldset>
-          {progress !== null && (
-            <div>
-              {/* Sending the bytes, then the server checking and storing them;
-                  background preparation shows on the source's row afterwards. */}
-              <div
-                role="progressbar"
-                aria-label={progress < 100 ? t.uploading : t.saving}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={progress < 100 ? progress : undefined}
-                className="h-2 w-full overflow-hidden rounded-full bg-muted"
-              >
-                <div
-                  className={`h-full bg-primary transition-[width] ${progress < 100 ? "" : "animate-pulse"}`}
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-              {/* Only the phase is live; reading every percent would flood a screen
-                  reader, and the progress bar already carries the number. */}
-              <p className="mt-1 text-xs text-muted-foreground">
-                <span role="status">
-                  {progress < 100 ? t.uploading : t.saving}
-                </span>
-                {progress < 100 && <span aria-hidden> {progress}%</span>}
-              </p>
-            </div>
-          )}
-          {uploadError && (
-            <p id="upload-error" role="alert" className="text-sm text-red-800">
-              {uploadError === "chooseFile"
-                ? t.chooseFile
-                : (t.uploadErrors[uploadError] ?? t.uploadGeneric)}
-            </p>
-          )}
-          <Button type="submit" disabled={busy !== null}>
-            {busy === "upload" ? (
-              <LoaderCircle size={16} className="animate-spin" />
-            ) : (
-              <FileUp size={16} />
-            )}
-            {t.uploadButton}
-          </Button>
-        </form>
-        <form
-          onSubmit={submitLink}
-          noValidate
-          className="mt-8 space-y-5 border-t border-border pt-7"
-          aria-labelledby="link-heading"
-        >
-          <h3 id="link-heading" className="font-semibold">
-            {t.linkHeading}
-          </h3>
-          <fieldset disabled={busy === "link"} className="space-y-5">
-            <div>
-              <label
-                htmlFor="source-url"
-                className="mb-2 block text-sm font-medium"
-              >
-                {t.linkLabel}
-              </label>
-              <input
-                id="source-url"
-                type="url"
-                inputMode="url"
-                maxLength={2048}
-                value={link}
-                dir="ltr"
-                onChange={(e) => {
-                  setLink(e.target.value);
-                  setLinkError(null);
-                }}
-                placeholder="https://"
-                aria-describedby={
-                  linkError ? "link-limit link-error" : "link-limit"
-                }
-                aria-invalid={linkError !== null}
-                className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
-              />
-              <p
-                id="link-limit"
-                className="mt-2 text-xs leading-5 text-muted-foreground"
-              >
-                {t.linkLimit}
-              </p>
-            </div>
-            <div>
-              <label
-                htmlFor="link-title"
-                className="mb-2 block text-sm font-medium"
-              >
-                {t.linkTitle}
-              </label>
-              <input
-                id="link-title"
-                maxLength={300}
-                value={linkTitle}
-                dir={linkTitle ? "auto" : locale === "he" ? "rtl" : "ltr"}
-                onChange={(e) => setLinkTitle(e.target.value)}
-                placeholder={t.linkTitleHint}
-                className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
-              />
-            </div>
-            <KindField
-              id="link-kind"
-              value={linkKind}
-              onChange={setLinkKind}
-              t={t}
-            />
-          </fieldset>
-          {linkError && (
-            <p id="link-error" role="alert" className="text-sm text-red-800">
-              {t.linkErrors[linkError] ?? t.linkGeneric}
-            </p>
-          )}
-          <Button type="submit" disabled={busy !== null}>
-            {busy === "link" ? (
-              <LoaderCircle size={16} className="animate-spin" />
-            ) : (
-              <Link2 size={16} />
-            )}
-            {t.linkButton}
-          </Button>
-        </form>
-        <DriveFolders
-          locale={locale}
-          onSynced={reloadSources}
-          kindField={driveKindField}
-        />
         {connected !== null && (
-          <p className="mt-5 text-xs leading-6 text-muted-foreground">
+          <p className="mt-2 text-xs leading-6 text-muted-foreground">
             {connected ? t.connectionReady : t.connectionMissing}
           </p>
         )}
+        <Button
+          id="add-source"
+          className="mt-6"
+          aria-haspopup="dialog"
+          onClick={() => openWizard()}
+        >
+          <Plus size={16} />
+          {t.addSource}
+        </Button>
       </div>
+      <dialog
+        ref={wizard}
+        aria-labelledby="wizard-title"
+        // Escape would drop an add in flight from view; it stays open until it answers.
+        onCancel={(event) => adding && event.preventDefault()}
+        // The dialog box has no padding, so a click on it (not its content) is on the backdrop.
+        onClick={(event) =>
+          event.target === event.currentTarget && closeWizard()
+        }
+        className="m-auto w-[calc(100%-2rem)] max-w-xl rounded-2xl border border-border bg-card text-foreground shadow-xl backdrop:bg-black/40 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:max-w-none max-sm:rounded-none max-sm:border-0"
+      >
+        <div className="max-h-[85vh] space-y-5 overflow-y-auto p-6 max-sm:h-full max-sm:max-h-none">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-1">
+              {step !== "choose" && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t.back}
+                  disabled={adding}
+                  onClick={backToChoices}
+                >
+                  <ArrowLeft size={18} className="rtl:rotate-180" />
+                </Button>
+              )}
+              <h2
+                id="wizard-title"
+                tabIndex={-1}
+                className="rounded text-lg font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              >
+                {step === "choose" ? t.addSource : t.choices[step].title}
+              </h2>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label={t.closeWizard}
+              disabled={adding}
+              onClick={closeWizard}
+            >
+              <X size={18} />
+            </Button>
+          </div>
+          {step === "choose" ? (
+            <div role="group" aria-labelledby="wizard-intro">
+              <p
+                id="wizard-intro"
+                className="mb-3 text-sm text-muted-foreground"
+              >
+                {t.wizardIntro}
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {CHOICES.map((choice) => {
+                  const Icon = CHOICE_ICONS[choice];
+                  return (
+                    <button
+                      key={choice}
+                      id={`choose-${choice}`}
+                      type="button"
+                      aria-describedby={`choose-${choice}-hint`}
+                      onClick={() => chooseStep(choice)}
+                      className="flex items-start gap-3 rounded-xl border border-border bg-background p-4 text-start transition-colors hover:border-primary hover:bg-primary/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    >
+                      <Icon
+                        size={20}
+                        className="mt-0.5 shrink-0 text-primary"
+                        aria-hidden
+                      />
+                      <span>
+                        <span className="block text-sm font-medium">
+                          {t.choices[choice].title}
+                        </span>
+                        <span
+                          id={`choose-${choice}-hint`}
+                          className="mt-1 block text-xs leading-5 text-muted-foreground"
+                        >
+                          {t.choices[choice].hint}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            // Focused when the step opens, so its title is read before the form.
+            <div id={`step-${step}`} tabIndex={-1} className="outline-none">
+              {step === "text" && (
+                <form
+                  onSubmit={submit}
+                  noValidate
+                  aria-labelledby="wizard-title"
+                  className="space-y-5"
+                >
+                  <fieldset disabled={busy === "submit"} className="space-y-5">
+                    <div>
+                      <label
+                        htmlFor="source-title"
+                        className="mb-2 block text-sm font-medium"
+                      >
+                        {t.label}
+                      </label>
+                      <input
+                        id="source-title"
+                        required
+                        maxLength={300}
+                        value={title}
+                        dir={title ? "auto" : locale === "he" ? "rtl" : "ltr"}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder={t.titleHint}
+                        aria-invalid={textError === "invalid" && !title.trim()}
+                        className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="source-text"
+                        className="mb-2 block text-sm font-medium"
+                      >
+                        {t.text}
+                      </label>
+                      <textarea
+                        id="source-text"
+                        required
+                        maxLength={100000}
+                        rows={8}
+                        value={text}
+                        dir={text ? "auto" : locale === "he" ? "rtl" : "ltr"}
+                        onChange={(e) => setText(e.target.value)}
+                        placeholder={t.textHint}
+                        aria-describedby="source-limit"
+                        aria-invalid={textError === "invalid" && !text.trim()}
+                        className="w-full resize-y rounded-lg border border-border bg-background p-3 text-start text-sm leading-6 focus-visible:outline-2 focus-visible:outline-primary"
+                      />
+                      <p
+                        id="source-limit"
+                        className="mt-2 text-xs text-muted-foreground"
+                      >
+                        {t.limit}
+                      </p>
+                    </div>
+                    <KindField
+                      id="source-kind"
+                      value={textKind}
+                      onChange={setTextKind}
+                      t={t}
+                    />
+                  </fieldset>
+                  {textError && (
+                    <p role="alert" className="text-sm text-red-800">
+                      {textError === "invalid" ? t.invalid : t.error}
+                    </p>
+                  )}
+                  <Button type="submit" disabled={busy !== null}>
+                    {busy === "submit" ? (
+                      <LoaderCircle size={16} className="animate-spin" />
+                    ) : (
+                      <Plus size={16} />
+                    )}
+                    {busy === "submit" ? t.adding : t.add}
+                  </Button>
+                </form>
+              )}
+              {step === "file" && (
+                <form
+                  onSubmit={uploadFile}
+                  className="space-y-5"
+                  aria-labelledby="wizard-title"
+                >
+                  <fieldset disabled={busy === "upload"} className="space-y-5">
+                    <div>
+                      <label
+                        htmlFor="source-file"
+                        className="mb-2 block text-sm font-medium"
+                      >
+                        {t.fileLabel}
+                      </label>
+                      <input
+                        id="source-file"
+                        type="file"
+                        accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
+                        aria-describedby={
+                          uploadError
+                            ? "upload-limit upload-error"
+                            : "upload-limit"
+                        }
+                        aria-invalid={uploadError !== null}
+                        onChange={(e) => {
+                          setFile(e.target.files?.[0] ?? null);
+                          setUploadError(null);
+                        }}
+                        className="block w-full max-w-full text-sm file:me-3 file:rounded-lg file:border file:border-border file:bg-background file:px-3 file:py-2 file:text-sm"
+                      />
+                      <p
+                        id="upload-limit"
+                        className="mt-2 text-xs leading-5 text-muted-foreground"
+                      >
+                        {t.uploadLimit(megabytes(limits.bytes), limits.pages)}
+                      </p>
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="upload-title"
+                        className="mb-2 block text-sm font-medium"
+                      >
+                        {t.uploadTitle}
+                      </label>
+                      <input
+                        id="upload-title"
+                        maxLength={300}
+                        value={fileTitle}
+                        dir={
+                          fileTitle ? "auto" : locale === "he" ? "rtl" : "ltr"
+                        }
+                        onChange={(e) => setFileTitle(e.target.value)}
+                        placeholder={t.uploadTitleHint}
+                        className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
+                      />
+                    </div>
+                    <KindField
+                      id="file-kind"
+                      value={fileKind}
+                      onChange={setFileKind}
+                      t={t}
+                    />
+                  </fieldset>
+                  {progress !== null && (
+                    <div>
+                      {/* Sending the bytes, then the server checking and storing them;
+                        background preparation shows on the source's row afterwards. */}
+                      <div
+                        role="progressbar"
+                        aria-label={progress < 100 ? t.uploading : t.saving}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={progress < 100 ? progress : undefined}
+                        className="h-2 w-full overflow-hidden rounded-full bg-muted"
+                      >
+                        <div
+                          className={`h-full bg-primary transition-[width] ${progress < 100 ? "" : "animate-pulse"}`}
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                      {/* Only the phase is live; reading every percent would flood a screen
+                        reader, and the progress bar already carries the number. */}
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        <span role="status">
+                          {progress < 100 ? t.uploading : t.saving}
+                        </span>
+                        {progress < 100 && (
+                          <span aria-hidden> {progress}%</span>
+                        )}
+                      </p>
+                    </div>
+                  )}
+                  {uploadError && (
+                    <p
+                      id="upload-error"
+                      role="alert"
+                      className="text-sm text-red-800"
+                    >
+                      {uploadError === "chooseFile"
+                        ? t.chooseFile
+                        : (t.uploadErrors[uploadError] ?? t.uploadGeneric)}
+                    </p>
+                  )}
+                  <Button type="submit" disabled={busy !== null}>
+                    {busy === "upload" ? (
+                      <LoaderCircle size={16} className="animate-spin" />
+                    ) : (
+                      <FileUp size={16} />
+                    )}
+                    {t.uploadButton}
+                  </Button>
+                </form>
+              )}
+              {step === "url" && (
+                <form
+                  onSubmit={submitLink}
+                  noValidate
+                  className="space-y-5"
+                  aria-labelledby="wizard-title"
+                >
+                  <fieldset disabled={busy === "link"} className="space-y-5">
+                    <div>
+                      <label
+                        htmlFor="source-url"
+                        className="mb-2 block text-sm font-medium"
+                      >
+                        {t.linkLabel}
+                      </label>
+                      <input
+                        id="source-url"
+                        type="url"
+                        inputMode="url"
+                        maxLength={2048}
+                        value={link}
+                        dir="ltr"
+                        onChange={(e) => {
+                          setLink(e.target.value);
+                          setLinkError(null);
+                        }}
+                        placeholder="https://"
+                        aria-describedby={
+                          linkError ? "link-limit link-error" : "link-limit"
+                        }
+                        aria-invalid={linkError !== null}
+                        className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
+                      />
+                      <p
+                        id="link-limit"
+                        className="mt-2 text-xs leading-5 text-muted-foreground"
+                      >
+                        {t.linkLimit}
+                      </p>
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="link-title"
+                        className="mb-2 block text-sm font-medium"
+                      >
+                        {t.linkTitle}
+                      </label>
+                      <input
+                        id="link-title"
+                        maxLength={300}
+                        value={linkTitle}
+                        dir={
+                          linkTitle ? "auto" : locale === "he" ? "rtl" : "ltr"
+                        }
+                        onChange={(e) => setLinkTitle(e.target.value)}
+                        placeholder={t.linkTitleHint}
+                        className="h-11 w-full rounded-lg border border-border bg-background px-3 text-start text-sm focus-visible:outline-2 focus-visible:outline-primary"
+                      />
+                    </div>
+                    <KindField
+                      id="link-kind"
+                      value={linkKind}
+                      onChange={setLinkKind}
+                      t={t}
+                    />
+                  </fieldset>
+                  {linkError && (
+                    <p
+                      id="link-error"
+                      role="alert"
+                      className="text-sm text-red-800"
+                    >
+                      {t.linkErrors[linkError] ?? t.linkGeneric}
+                    </p>
+                  )}
+                  <Button type="submit" disabled={busy !== null}>
+                    {busy === "link" ? (
+                      <LoaderCircle size={16} className="animate-spin" />
+                    ) : (
+                      <Link2 size={16} />
+                    )}
+                    {t.linkButton}
+                  </Button>
+                </form>
+              )}
+              {step === "drive" && (
+                <DriveFolderConnect
+                  locale={locale}
+                  kindField={driveKindField}
+                  labelledBy="wizard-title"
+                  onConnected={onDriveConnected}
+                  onBusyChange={setDriveBusy}
+                />
+              )}
+            </div>
+          )}
+        </div>
+      </dialog>
       {error && (
         <div
           role="alert"
@@ -1257,10 +1525,35 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
       <p role="status" className="text-sm text-primary">
         {notice ? t[notice] : ""}
       </p>
+      <DriveFolders
+        locale={locale}
+        onSynced={reloadSources}
+        version={driveVersion}
+      />
       <p role="status" className="sr-only">
         {announcement}
       </p>
-      <div className="rounded-2xl border border-border bg-card p-6 sm:p-9">
+      <div
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node))
+            setDragging(false);
+        }}
+        onDrop={dropFile}
+        className={`relative rounded-2xl border bg-card p-6 sm:p-9 ${dragging ? "border-2 border-dashed border-primary" : "border-border"}`}
+      >
+        {dragging && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-primary/5 text-sm font-medium text-primary"
+          >
+            {t.dropHere}
+          </div>
+        )}
         <div className="mb-6 flex items-center justify-between gap-3">
           <h3
             id="sources-heading"
@@ -1279,6 +1572,11 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
             {t.refresh}
           </Button>
         </div>
+        {items.length > 0 && (
+          <p className="-mt-4 mb-5 text-xs text-muted-foreground">
+            {t.dropHint}
+          </p>
+        )}
         {listFailed && !loading && (
           <div
             role="alert"
@@ -1303,7 +1601,19 @@ export function KnowledgeBase({ locale }: { locale: Locale }) {
         ) : items.length === 0 ? (
           // A failed first load is not an empty Knowledge Base.
           listFailed ? null : (
-            <p className="text-sm text-muted-foreground">{t.empty}</p>
+            <div className="rounded-xl border border-dashed border-border p-6 text-center">
+              <p className="text-sm text-muted-foreground">{t.empty}</p>
+              <Button
+                variant="outline"
+                className="mt-4"
+                aria-haspopup="dialog"
+                onClick={() => openWizard()}
+              >
+                <Plus size={16} />
+                {t.addSource}
+              </Button>
+              <p className="mt-3 text-xs text-muted-foreground">{t.dropHint}</p>
+            </div>
           )
         ) : (
           <ul className="space-y-4">

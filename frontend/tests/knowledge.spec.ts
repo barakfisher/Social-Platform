@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { openAddSource } from "./add-source-dialog";
 const sourceDocument = {
   id: "11111111-1111-4111-8111-111111111111",
   title: "מקור לדוגמה",
@@ -46,6 +47,7 @@ test("pasted text prepares, survives reload, previews and deletes in Hebrew", as
     });
   });
   await page.goto("/he/knowledge");
+  await openAddSource(page, "he", "text");
   await page
     .getByLabel("כותרת המקור", { exact: true })
     .fill(sourceDocument.title);
@@ -127,6 +129,7 @@ test("failed submission keeps text and failed preparation can be retried", async
     });
   });
   await page.goto("/en/knowledge");
+  await openAddSource(page, "en", "text");
   await page.getByLabel("Source title", { exact: true }).fill("Saved source");
   await page
     .getByLabel("Paste your text", { exact: true })
@@ -320,6 +323,7 @@ test("a PDF upload shows progress, its type and file name, then a processing fai
     });
   });
   await page.goto("/en/knowledge");
+  await openAddSource(page, "en", "file");
   await expect(page.locator("#upload-limit")).toHaveText(
     "PDF, TXT or Markdown (UTF-8), up to 5 MB and 120 pages. Scanned PDFs need text recognition (OCR) first.",
   );
@@ -346,7 +350,9 @@ test("a PDF upload shows progress, its type and file name, then a processing fai
     "datetime",
     sourceDocument.created_at,
   );
+  await openAddSource(page, "en", "file");
   await expect(page.getByLabel("File title (optional)")).toHaveValue("");
+  await page.keyboard.press("Escape");
   item = {
     ...item!,
     status: "Failed",
@@ -379,6 +385,7 @@ test("unsupported and oversized files are refused before upload", async ({
     await route.fulfill({ json: { items: [], total: 0 } });
   });
   await page.goto("/en/knowledge");
+  await openAddSource(page, "en", "file");
   const input = page.getByLabel("PDF or text file", { exact: true });
   const upload = page.getByRole("button", { name: "Upload file", exact: true });
   await upload.click();
@@ -424,6 +431,7 @@ test("a rejected Hebrew text file keeps the choice and explains the fix", async 
     await route.fulfill({ json: { items: [], total: 0 } });
   });
   await page.goto("/he/knowledge");
+  await openAddSource(page, "he", "file");
   const input = page.getByLabel("קובץ PDF או טקסט", { exact: true });
   await input.setInputFiles({
     name: "הערות.txt",
@@ -471,6 +479,7 @@ test("a web page is added, shown with its link, and explains a fetch failure", a
     });
   });
   await page.goto("/en/knowledge");
+  await openAddSource(page, "en", "url");
   await page
     .getByLabel("Page address (URL)", { exact: true })
     .fill(" https://garden.example/hours ");
@@ -485,7 +494,9 @@ test("a web page is added, shown with its link, and explains a fetch failure", a
     title: "",
     kind: "knowledge",
   });
+  await openAddSource(page, "en", "url");
   await expect(page.getByLabel("Page address (URL)")).toHaveValue("");
+  await page.keyboard.press("Escape");
   const entry = page
     .getByRole("listitem")
     .filter({ hasText: "garden.example/hours" });
@@ -526,6 +537,7 @@ test("web addresses are checked in Hebrew before and after sending", async ({
     await route.fulfill({ json: { items: [], total: 0 } });
   });
   await page.goto("/he/knowledge");
+  await openAddSource(page, "he", "url");
   const input = page.getByLabel("כתובת הדף (URL)", { exact: true });
   const add = page.getByRole("button", { name: "הוספת הדף", exact: true });
   const alert = page.locator("section [role=alert]");

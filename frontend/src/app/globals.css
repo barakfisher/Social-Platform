@@ -25,6 +25,10 @@ body {
   color: var(--foreground);
   font-family: Arial, "Noto Sans Hebrew", sans-serif;
 }
+/* A modal dialog keeps the page behind it from scrolling. */
+html:has(dialog[open]) {
+  overflow: hidden;
+}
 button,
 a {
   -webkit-tap-highlight-color: transparent;

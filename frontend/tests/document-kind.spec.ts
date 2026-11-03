@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openAddSource } from "./add-source-dialog";
 
 // SP-29: a source is knowledge or sample posts; topic ideas never restate a sample post.
 const source = {
@@ -46,6 +47,7 @@ test("each way of adding a source sends the chosen content type", async ({
   });
   await page.goto("/en/knowledge");
 
+  await openAddSource(page, "en", "text");
   const textKind = page.locator("#source-kind");
   await expect(textKind).toHaveValue("knowledge");
   await expect(textKind).toHaveAccessibleName("Content type");
@@ -58,8 +60,11 @@ test("each way of adding a source sends the chosen content type", async ({
   await page.getByRole("button", { name: "Add to Knowledge Base" }).click();
   await expect.poll(() => sent.text).toBe("sample_posts");
   // The next source starts as knowledge again.
+  await openAddSource(page, "en", "text");
   await expect(textKind).toHaveValue("knowledge");
+  await page.keyboard.press("Escape");
 
+  await openAddSource(page, "en", "file");
   await page.locator("#file-kind").selectOption("sample_posts");
   await page.locator("#source-file").setInputFiles({
     name: "posts.txt",
@@ -69,6 +74,7 @@ test("each way of adding a source sends the chosen content type", async ({
   await page.getByRole("button", { name: "Upload file" }).click();
   await expect.poll(() => sent.file).toBe("sample_posts");
 
+  await openAddSource(page, "en", "url");
   await page.locator("#link-kind").selectOption("sample_posts");
   await page.locator("#source-url").fill("https://garden.example/posts");
   await page.getByRole("button", { name: "Add web page" }).click();

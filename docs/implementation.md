@@ -2039,3 +2039,38 @@ mid-run (the owner raised it to $20).
 Found along the way: a call that ends with `generation_output_truncated` returns no usage, so
 neither the app nor the script records its cost.
 
+
+## Knowledge Base: sources first, adding in a dialog — 2026-11-03
+
+Problem: all four ways of adding a source (pasted text, file, web page, Drive folder) were
+open at the top of the page at once, each with its own content-type field, and the list of
+sources, which is what the owner comes back to, sat below them.
+
+Choices (owner-approved):
+- The page shows the sources, connected Drive folders (only once one exists) and one "Add a
+  source" button. The button opens a two-step modal: pick the kind of source, then its form.
+  The forms, their checks and the API are unchanged; content type stays a field in each form.
+- A successful add closes the dialog, reloads the list and returns focus to the button; the
+  outcome is announced on the page. An error stays in the dialog next to its field, with what
+  was typed. While an add is in flight the dialog can't be closed (the close and back buttons
+  are disabled and Escape is cancelled), so its result is shown where it was asked. Closing
+  without adding keeps the typed values for the next time.
+- A file dropped on the sources list opens the upload step with that file chosen.
+- Under 640px the dialog fills the screen. A page behind an open dialog doesn't scroll
+  (`html:has(dialog[open])` in globals.css, which also covers the topic-ideas dialog).
+- The dialog is the native `<dialog>`, as for topic ideas: Escape, focus containment and focus
+  return come from the browser.
+
+Rejected:
+- Tabs (sources, plus one tab per kind of source): they mix "what I have" with "add one",
+  leave the owner on the form after adding with no sight of the new source and its status, and
+  five tabs don't fit a phone screen.
+- A content-type step of its own: an extra click for a choice that is almost always
+  "Knowledge".
+- `@radix-ui/react-dialog`: a new dependency for what the native element already does here;
+  it would matter for nested dialogs, which nothing needs.
+
+Verification: Prettier, ESLint, tsc, production build and Playwright 132/132 (new
+add-source-dialog.spec.ts; the knowledge, document-kind and Drive specs now go through the
+dialog). Checked in the browser pane in Hebrew at 375px and 1280px, and in English at 1280px,
+against the local API without adding anything.
