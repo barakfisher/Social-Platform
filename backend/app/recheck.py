@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select, update
 
+from app import tracing
 from app.brand import local_only
 from app.config import get_settings
 from app.db import SessionLocal
@@ -72,18 +73,34 @@ def brand_values() -> dict:
         return brand_constraints(brand)
 
 
-def run_check(content: str, sources: list[dict], inputs: GenerateInput, model: str) -> dict:
-    try:
-        return check_draft(
-            content,
-            sources,
-            brand_values(),
-            inputs.writer_preferences(),
-            offer_details=inputs.offer_details,
-            model_id=model,
+def run_check(
+    content: str, sources: list[dict], inputs: GenerateInput, model: str, *, session_id: str
+) -> dict:
+    """session_id is the draft's generation run, so the check joins the draft's trace session."""
+    with tracing.action(
+        "check-sources",
+        input={"draft": content, "review_model": model},
+        session_id=session_id,
+    ) as trace:
+        try:
+            review = check_draft(
+                content,
+                sources,
+                brand_values(),
+                inputs.writer_preferences(),
+                offer_details=inputs.offer_details,
+                model_id=model,
+            )
+        except GenerationError as exc:
+            # A block is a review outcome, not a fault.
+            level = "WARNING" if exc.code == "draft_blocked" else "ERROR"
+            trace.update(level=level, status_message=exc.code)
+            raise HTTPException(409, exc.code) from None
+        trace.update(
+            output={key: review.get(key) for key in ("status", "reason", "findings")},
+            level="WARNING" if review["status"] == "unchecked" else None,
         )
-    except GenerationError as exc:
-        raise HTTPException(409, exc.code) from None
+        return review
 
 
 @router.post("/generation/{run_id}/review")
@@ -105,7 +122,9 @@ def recheck_generation(run_id: UUID, payload: RecheckInput):
             result, inputs = run.result, generation_inputs(run.inputs, run.request_key)
             model = review_model(payload.review_model, run.inputs)
         try:
-            review = run_check(result["content"], result["sources"], inputs, model)
+            review = run_check(
+                result["content"], result["sources"], inputs, model, session_id=str(run_id)
+            )
         except HTTPException as exc:
             if exc.detail != "draft_blocked":
                 raise
@@ -158,8 +177,9 @@ def recheck_draft(post_id: UUID, payload: RecheckDraftInput):
             inputs = generation_inputs(settings["preferences"], post.id)
             model = review_model(payload.review_model, settings["preferences"])
             content, sources = post.content, post.source_snapshots
+            session_id = str(post.generation_run_id or post.id)
         try:
-            review = run_check(content, sources, inputs, model)
+            review = run_check(content, sources, inputs, model, session_id=session_id)
         except HTTPException as exc:
             if exc.detail != "draft_blocked":
                 raise

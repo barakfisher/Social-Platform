@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.local_scope import LOCAL_WORKSPACE_ID
 from app.main import app
 from app.models import KnowledgeDocument
+from app.tracing import tracer
 
 
 @pytest.fixture(autouse=True)
@@ -21,9 +22,14 @@ def hermetic_settings():
     original = settings.model_copy(deep=True)
     settings.embedding_api_key = SecretStr("")
     settings.generation_api_key = SecretStr("")
+    # Tracing is off too: no test sends to Langfuse (tests/test_tracing.py records in memory).
+    settings.langfuse_public_key = ""
+    settings.langfuse_secret_key = SecretStr("")
+    tracer.cache_clear()
     yield settings
     for field in type(settings).model_fields:
         setattr(settings, field, getattr(original, field))
+    tracer.cache_clear()
 
 
 @pytest.fixture

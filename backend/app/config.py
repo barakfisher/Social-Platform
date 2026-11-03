@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:53073", "http://127.0.0.1:53073"]
     # Host header values the API answers; anything else is DNS rebinding (SP-23).
     allowed_hosts: list[str] = ["127.0.0.1", "localhost"]
+    # Langfuse Cloud project that receives traces of the AI actions (app/tracing.py). Empty
+    # keys turn tracing off. Traces hold the prompts: Brand DNA and Knowledge Base text.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: SecretStr = SecretStr("")
+    langfuse_base_url: str = "https://cloud.langfuse.com"
 
     @model_validator(mode="after")
     def default_models_are_offered(self):

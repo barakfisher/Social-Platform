@@ -60,3 +60,20 @@ The reviewer (source-review-v8) splits each numbered sentence into claims taken 
 Cached results from older prompt/review versions require regeneration before saving. Existing saved drafts remain accessible. Editing a draft clears its grounded flag; stored review metadata always describes the original generated text, not later user edits.
 
 Opt-in paid verification: `cd backend && uv run python scripts/evaluate_generation.py`. The script uses a disposable migrated database, real embeddings, six negative cases (EN/HE aroma, embellished volunteers, source injection, invented schedule/price, wrong language), and two positive EN LinkedIn/HE Facebook generation/save/edit/delete cases. Wrong-script rejection runs without a paid review. Passing this small fixture set is not evidence of broad-domain accuracy. To evaluate a writer without the reviewer-only cases, add `--live --writer-only`: it runs the garden positives and the 20 scenarios but skips the fixed-draft review cases, whose outcome does not depend on the writer.
+
+## Tracing with Langfuse
+
+Each AI action (generate a draft, check sources, suggest topics) can be traced in Langfuse
+Cloud: what every model call was given and answered, its tokens, cost, retries and errors.
+To turn it on, create a project at https://cloud.langfuse.com (EU), create an API key pair
+under Settings > API Keys, and set in backend/.env:
+
+```
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+```
+
+Then recreate the API container. Traces contain the full prompts, including Brand DNA and
+Knowledge Base text. Empty keys turn tracing off; tests never send traces. Trace layout and
+the reasons behind it: docs/implementation.md, "Langfuse tracing of the AI actions".

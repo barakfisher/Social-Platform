@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import select
 
+from app import tracing
 from app.brand import local_only
 from app.config import get_settings
 from app.db import SessionLocal
@@ -194,6 +195,17 @@ def in_language(text: str, language: str) -> bool:
 
 @router.post("/topic-suggestions")
 def suggest_topics(payload: SuggestInput):
+    with tracing.action("suggest-topics", input=payload.model_dump(mode="json")) as trace:
+        try:
+            result = grounded_suggestions(payload)
+        except HTTPException as exc:
+            trace.update(level="ERROR", status_message=str(exc.detail))
+            raise
+        trace.update(output={"suggestions": result["suggestions"], "reason": result["reason"]})
+        return result
+
+
+def grounded_suggestions(payload: SuggestInput) -> dict:
     settings = get_settings()
     writer_model = payload.writer_model or settings.generation_model
     try:
@@ -249,6 +261,7 @@ def suggest_topics(payload: SuggestInput):
             SYSTEM,
             user,
             provider_tokens(tokens, profile),
+            name="propose-topics",
             schema=Suggestions.model_json_schema(),
             budget_usd=settings.generation_max_request_usd,
             output_tokens=writer_output_tokens(profile),

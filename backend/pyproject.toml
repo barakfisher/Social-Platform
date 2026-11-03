@@ -17,6 +17,7 @@ dependencies = [
     "pypdf>=6,<7",
     "trafilatura>=2,<3",
     "google-auth[requests]>=2.40,<3",
+    "langfuse>=5.1,<6",
 ]
 [dependency-groups]
 dev = ["pytest>=8,<10", "httpx>=0.28,<1", "ruff>=0.9,<1", "mypy>=1.15,<2"]

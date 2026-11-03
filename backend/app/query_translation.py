@@ -57,6 +57,7 @@ def translate_query(
         TRANSLATION_SYSTEM,
         user,
         provider_tokens(tokens, writer_profile(settings.generation_model)),
+        name="translate-query",
         schema=schema,
         budget_usd=budget_usd,
         output_tokens=min(450, settings.generation_max_output_tokens),

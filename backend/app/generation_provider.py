@@ -1,9 +1,11 @@
+import json
 import math
 import time
 from decimal import Decimal, InvalidOperation
 
 import httpx
 
+from app import tracing
 from app.config import get_settings
 
 
@@ -72,22 +74,82 @@ def chat_completion(
     user: str,
     prompt_tokens: int,
     *,
+    name: str = "complete-chat",
     schema: dict | None = None,
     budget_usd: float | None = None,
     output_tokens: int | None = None,
     model_id: str | None = None,
 ) -> tuple[str, dict]:
+    """One model call, traced as a generation named after the step that makes it."""
     settings = get_settings()
-    key = generation_key()
-    if not key:
-        raise GenerationError("generation_not_configured")
     model_id = model_id or settings.generation_model
-    model = model_details(model_id)
     # Callers default to the writer limit; only the reviewer asks for its larger limit.
     output_tokens = min(
         output_tokens or settings.generation_max_output_tokens,
         max(settings.generation_max_output_tokens, settings.generation_review_max_output_tokens),
     )
+    with tracing.step(
+        name,
+        as_type="generation",
+        model=model_id,
+        model_parameters={"temperature": 0, "max_completion_tokens": output_tokens},
+        input=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+    ) as generation:
+        try:
+            content, metadata = complete(
+                system,
+                user,
+                prompt_tokens,
+                schema=schema,
+                budget_usd=budget_usd,
+                output_tokens=output_tokens,
+                model_id=model_id,
+            )
+        except GenerationError as exc:
+            generation.update(level="ERROR", status_message=exc.code, metadata=exc.metadata)
+            raise
+        usage = metadata["usage"]
+        generation.update(
+            output=readable(content),
+            # The model that answered; OpenRouter may name a dated version of the request.
+            model=metadata["model"],
+            usage_details={
+                "input": usage["prompt_tokens"],
+                "output": usage["completion_tokens"],
+            },
+            # OpenRouter's billed cost, not Langfuse's price table; unknown stays unset.
+            cost_details=None if usage["cost_usd"] is None else {"total": usage["cost_usd"]},
+            metadata={
+                key: metadata[key]
+                for key in ("requested_model", "attempts", "estimated_max_usd", "reserved_max_usd")
+            },
+        )
+        return content, metadata
+
+
+def readable(content: str):
+    """Structured output as JSON in the trace, so Langfuse renders its fields."""
+    try:
+        return json.loads(content)
+    except (ValueError, RecursionError):
+        return content
+
+
+def complete(
+    system: str,
+    user: str,
+    prompt_tokens: int,
+    *,
+    schema: dict | None,
+    budget_usd: float | None,
+    output_tokens: int,
+    model_id: str,
+) -> tuple[str, dict]:
+    settings = get_settings()
+    key = generation_key()
+    if not key:
+        raise GenerationError("generation_not_configured")
+    model = model_details(model_id)
     budget_usd = min(
         budget_usd if budget_usd is not None else settings.generation_max_request_usd,
         settings.generation_max_request_usd,
