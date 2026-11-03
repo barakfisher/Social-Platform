@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { addSourceButton, openAddSource } from "./add-source-dialog";
 
 // SP-30: a Google Drive folder shared with the service account syncs into the Knowledge Base.
 const EMAIL = "reader@example.iam.gserviceaccount.com";
@@ -45,6 +46,7 @@ test("without a key the form explains that Drive isn't set up", async ({
 }) => {
   await stub(page, { configured: false, items: [] });
   await page.goto("/en/knowledge");
+  await openAddSource(page, "en", "drive");
   await expect(
     page.getByText("Google Drive isn’t set up on the server yet."),
   ).toBeVisible();
@@ -65,6 +67,7 @@ test("connecting shows whom to share with and sends the link and kind", async ({
     });
   });
   await page.goto("/en/knowledge");
+  await openAddSource(page, "en", "drive");
   await expect(page.getByText(EMAIL)).toBeVisible();
   await page.getByLabel("Folder link").fill(LINK);
   await page.locator("#drive-kind").selectOption("sample_posts");
@@ -73,6 +76,8 @@ test("connecting shows whom to share with and sends the link and kind", async ({
   await expect(
     page.getByText("Folder connected. Its files are being imported."),
   ).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(addSourceButton(page)).toBeFocused();
 });
 
 test("a folder that isn't shared says what to do", async ({ page }) => {
@@ -85,6 +90,7 @@ test("a folder that isn't shared says what to do", async ({ page }) => {
     });
   });
   await page.goto("/en/knowledge");
+  await openAddSource(page, "en", "drive");
   await page.getByLabel("Folder link").fill(LINK);
   await page.getByRole("button", { name: "Connect folder" }).click();
   await expect(page.locator("#drive-error")).toContainText(
@@ -171,6 +177,7 @@ test("a connect the proxy cannot finish still says so", async ({ page }) => {
     });
   });
   await page.goto("/en/knowledge");
+  await openAddSource(page, "en", "drive");
   await page.getByLabel("Folder link").fill(LINK);
   await page.getByRole("button", { name: "Connect folder" }).click();
   await expect(page.locator("#drive-error")).toHaveText(
@@ -183,5 +190,6 @@ test("Hebrew: without a key the form says Drive isn’t set up", async ({
 }) => {
   await stub(page, { configured: false, items: [] });
   await page.goto("/he/knowledge");
+  await openAddSource(page, "he", "drive");
   await expect(page.getByText("Google Drive עוד לא הוגדר בשרת.")).toBeVisible();
 });

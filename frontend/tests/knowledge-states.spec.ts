@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { addSourceButton, openAddSource } from "./add-source-dialog";
 
 const source = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -104,6 +105,7 @@ test("a web address error is tied to its field and focus stays there", async ({
     await route.fulfill({ json: { items: [], total: 0 } });
   });
   await page.goto("/en/knowledge");
+  await openAddSource(page, "en", "url");
   const input = page.getByLabel("Page address (URL)", { exact: true });
   await expect(input).toHaveAttribute("aria-describedby", "link-limit");
   await input.fill("http://10.0.0.5/admin");
@@ -125,7 +127,10 @@ test("a web address error is tied to its field and focus stays there", async ({
       exact: true,
     }),
   ).toBeVisible();
-  await expect(input).toBeFocused();
+  // The dialog closed on success; reopened, the field is clear.
+  await expect(addSourceButton(page)).toBeFocused();
+  await openAddSource(page, "en", "url");
+  await expect(input).toHaveValue("");
   await expect(input).toHaveAttribute("aria-invalid", "false");
 });
 
@@ -306,6 +311,7 @@ test("upload progress is separate from checking the file and from preparation", 
     });
   });
   await page.goto("/en/knowledge");
+  await openAddSource(page, "en", "file");
   await page.getByLabel("PDF or text file", { exact: true }).setInputFiles({
     name: "guide.txt",
     mimeType: "text/plain",
@@ -335,7 +341,7 @@ test("upload progress is separate from checking the file and from preparation", 
   await expect(page.getByRole("progressbar")).toHaveCount(0);
   const badge = page.getByRole("listitem").getByText("Queued", { exact: true });
   await expect(badge.locator("svg.animate-spin")).toHaveCount(1);
-  await expect(page.getByLabel("PDF or text file")).toBeFocused();
+  await expect(addSourceButton(page)).toBeFocused();
 });
 
 test("an upload that loses a race with a delete says to upload again", async ({
@@ -352,6 +358,7 @@ test("an upload that loses a race with a delete says to upload again", async ({
     await route.fulfill({ json: { items: [], total: 0 } });
   });
   await page.goto("/he/knowledge");
+  await openAddSource(page, "he", "file");
   const input = page.getByLabel("קובץ PDF או טקסט", { exact: true });
   await input.setInputFiles({
     name: "guide.txt",
@@ -528,7 +535,9 @@ test("a failed first load is not shown as an empty Knowledge Base", async ({
     .click();
   await expect(failure).toHaveCount(0);
   await expect(
-    page.getByText("No sources yet. Add your first text above."),
+    page.getByText(
+      "No sources yet. Add your first one, and your posts can draw on it.",
+    ),
   ).toBeVisible();
 });
 
