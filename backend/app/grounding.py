@@ -616,6 +616,7 @@ def review_draft(
             data,
             tokens,
             schema=Review.model_json_schema(),
+            name="review-draft",
             # The check runs on request, alone, so it may use the whole per-request cap.
             budget_usd=min(
                 budget_usd if budget_usd is not None else settings.generation_max_request_usd,

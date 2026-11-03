@@ -2074,3 +2074,78 @@ Verification: Prettier, ESLint, tsc, production build and Playwright 132/132 (ne
 add-source-dialog.spec.ts; the knowledge, document-kind and Drive specs now go through the
 dialog). Checked in the browser pane in Hebrew at 375px and 1280px, and in English at 1280px,
 against the local API without adding anything.
+
+
+## Langfuse tracing of the AI actions — 2026-11-03
+
+Problem: when a draft is weak, wrong or costly, nothing showed what each model call was
+given, what it answered, or what it cost per step. The database keeps only the final result
+and usage totals.
+
+Choices (owner-approved):
+- Langfuse Cloud EU, Python SDK `langfuse>=5.1,<6` (the latest major), installed with the
+  Langfuse agent skill. Traces hold the full prompts, so Brand DNA and Knowledge Base text are
+  stored with Langfuse, a third party (they already go to OpenRouter). Off unless
+  LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are both set (app/tracing.py).
+- One trace per user action, named after it: `generate-draft` (`embed-topic`,
+  `retrieve-sources`, optional `translate-query` with `embed-translated-topic`, `write-draft`,
+  `find-restated-sentences`),
+  `check-sources` (`review-draft`) and `suggest-topics` (`propose-topics`). Names are stable
+  identifiers for Langfuse filters, dashboards and evaluators; renaming one breaks them.
+- `chat_completion` is the one place a model call becomes a `generation`: role-labelled input,
+  parsed JSON output, the model that answered, requested model, temperature and output limit,
+  input/output tokens, OpenRouter's billed cost (unset when OpenRouter reports none, never
+  zero), attempts and reservation, and the error code as an ERROR level. A blocked draft is a
+  WARNING on `check-sources`: an outcome, not a fault.
+- `retrieve-sources` records chunk IDs, titles, kind and distance, not chunk text: the writer's
+  input already shows the text the writer actually read.
+- Every trace has the local user as user ID and ENVIRONMENT as its environment. The draft's
+  generation run ID is the session ID, so a draft and its later source checks appear together;
+  a saved post's check uses its run, or the post ID for a post with none.
+- Inputs are set explicitly, never "all function arguments", so the provider key and headers
+  cannot reach a trace (tests/test_tracing.py checks it).
+
+Rejected:
+- Self-hosting Langfuse: keeps data local, but adds about six containers (web, worker,
+  Postgres, ClickHouse, Redis, MinIO) and several GB of RAM to run and update for one user.
+- OpenRouter Broadcast (no code): flat one-per-call traces with no step names, nesting, user,
+  session or link to drafts, which would have hidden which step failed or cost the most.
+- Switching to the OpenAI SDK for Langfuse's automatic wrapper: rewrites the client whose
+  budget reservation, retries and response validation are measured and tested, to save a few
+  lines of instrumentation.
+- Tracing the worker's document embedding: bulk source text with little debugging value, more
+  volume on the free tier, and whole documents sent to Langfuse. Not traced.
+
+Found along the way: FastAPI emits its own OpenTelemetry request spans into the provider
+Langfuse registers. The SDK's default filter drops them and marks each action's span as the
+root of its trace, so nothing extra is exported; a test checks the root marking.
+
+`find-restated-sentences` is a `guardrail`: it embeds the draft's sentences (a paid call)
+to warn about lines that repeat sample posts. The live audit found it missing from the tree.
+
+OpenRouter Broadcast is on for the owner's OpenRouter account and sends every call to the same
+Langfuse project, as flat `LLM Generation` traces (environment `default`, no user or session).
+With both on, each call's cost is counted twice in Langfuse. It is an account setting, not code.
+
+Limits: the embedding steps record no token usage (embed_texts does not return it). The
+reviewer (GPT-5.6-terra) returns no reasoning text through OpenRouter, so no thinking is
+captured; its output tokens include reasoning, which isn't broken out.
+`scripts/measure_draft_quality.py` calls the writer outside any action, so with keys set its
+calls appear as top-level `complete-chat` generations. With tracing off, the SDK logs one
+"initialized without public_key" line when the first AI action runs.
+
+Tracing never fails a request (security review): the SDK does not guard its own `update()`,
+and it parses some LANGFUSE_* environment values (Docker's `env_file` exports all of
+backend/.env) even with tracing off. Unguarded, a failed update after the paid writer call
+turned a stored draft into a 500, and a malformed value failed every AI action. Now every
+observation's update, start and attribute propagation is guarded and logged by exception type
+only, and a client that can't be built leaves tracing off (tests/test_tracing.py reproduces
+both).
+
+Verification: ruff, mypy and pytest with the test database, 1069 passed (11 new in
+tests/test_tracing.py, recorded in memory, no network). Security review: no secret reaches a
+trace, log or the frontend. Live check, 2026-11-03, Langfuse Cloud EU, fetched with
+langfuse-cli and audited against the best-practices page: two Hebrew LinkedIn drafts and one
+source check on the owner's sources ($0.074 in all). Names, types, nesting, root input and
+output, model, usage, OpenRouter's cost (matching the stored cost), user, session and
+environment arrived as designed; the draft and its check share one session.

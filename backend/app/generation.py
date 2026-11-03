@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 
+from app import tracing
 from app.brand import local_only
 from app.chunking import token_count
 from app.config import get_settings
@@ -378,11 +379,16 @@ def generation_lock(request_key: UUID):
 
 def advisory_meaning(content: str) -> list[str]:
     """The meaning check only adds warnings, so its failure never fails a paid draft."""
-    try:
-        return restated_by_meaning(content)
-    except Exception:
-        logger.exception("restatement_check_failed")
-        return []
+    # It embeds the draft's sentences, a paid call of its own, so it is a step of the trace.
+    with tracing.step("find-restated-sentences", as_type="guardrail", input=content) as step:
+        try:
+            found = restated_by_meaning(content)
+        except Exception as exc:
+            logger.exception("restatement_check_failed")
+            step.update(level="WARNING", status_message=type(exc).__name__)
+            return []
+        step.update(output=found)
+        return found
 
 
 def repeated_sentences(content: str, found: list[str]) -> list[str]:
@@ -481,26 +487,184 @@ def generate_locked(payload: GenerateInput):
                 existing.error_code = "generation_interrupted"
                 session.commit()
             raise HTTPException(409, existing.error_code or "generation_failed")
-    translation_metadata: dict[str, object] | None = None
-    try:
-        if not generation_key():
-            raise GenerationError("generation_not_configured")
-        with SessionLocal() as session:
-            available = session.scalar(
-                select(KnowledgeDocument.id)
-                .where(
-                    KnowledgeDocument.user_id == LOCAL_USER_ID,
-                    KnowledgeDocument.workspace_id == LOCAL_WORKSPACE_ID,
-                    KnowledgeDocument.status == "Ready",
-                    KnowledgeDocument.embedding_profile == profile_key(),
+    # One trace per draft; its id is the session, so later source checks join it.
+    with tracing.action("generate-draft", input=inputs, session_id=str(run_id)) as trace:
+        translation_metadata: dict[str, object] | None = None
+        try:
+            if not generation_key():
+                raise GenerationError("generation_not_configured")
+            with SessionLocal() as session:
+                available = session.scalar(
+                    select(KnowledgeDocument.id)
+                    .where(
+                        KnowledgeDocument.user_id == LOCAL_USER_ID,
+                        KnowledgeDocument.workspace_id == LOCAL_WORKSPACE_ID,
+                        KnowledgeDocument.status == "Ready",
+                        KnowledgeDocument.embedding_profile == profile_key(),
+                    )
+                    .limit(1)
                 )
-                .limit(1)
+            if available is None:
+                raise GenerationError("insufficient_context")
+            if token_count(payload.topic) > 1800:
+                raise GenerationError("generation_topic_too_long")
+            vector = embedded("embed-topic", payload.topic)
+            sources = retrieved(vector, payload.topic)
+            # The writer is the only paid stage of a draft; the source check runs on request with
+            # its own allowance (app/recheck.py).
+            stage_budget = settings.generation_max_request_usd
+            if not sources:
+                translated = translate_query(
+                    payload.topic,
+                    budget_usd=settings.generation_max_request_usd * TRANSLATION_BUDGET_SHARE,
+                )
+                if translated is not None:
+                    query, translation_metadata, translation_reservation = translated
+                    stage_budget = settings.generation_max_request_usd - translation_reservation
+                    vector = embedded("embed-translated-topic", query)
+                    sources = retrieved(vector, query)
+            sources = bounded_context(sources, settings.generation_context_budget)
+            if not sources:
+                raise GenerationError("insufficient_context")
+            # Read before the paid call, so a database failure here costs nothing.
+            posted = sample_post_lines()
+            data = {
+                "brand": brand_values,
+                "preferences": preferences,
+                "sources": sources,
+                "platform_character_limit": LENGTH_LIMITS[payload.length],
+            }
+            target = length_target(payload.length)
+            if target is not None:
+                data["length_target"] = target
+            user = json.dumps(data, ensure_ascii=False)
+            system = writer_system(payload.knowledge_level, payload.length)
+            prompt_tokens = generation_tokens(system) + generation_tokens(user) + 32
+            if prompt_tokens > settings.generation_prompt_budget:
+                raise GenerationError("generation_prompt_limit")
+            # The budget above counts o200k tokens so every writer gets the same sources; cost
+            # and context length use the writer's own (measured) token count.
+            raw, metadata = chat_completion(
+                system,
+                user,
+                provider_tokens(prompt_tokens, profile),
+                name="write-draft",
+                budget_usd=stage_budget,
+                output_tokens=writer_output_tokens(profile),
+                model_id=writer_model,
             )
-        if available is None:
-            raise GenerationError("insufficient_context")
-        if token_count(payload.topic) > 1800:
-            raise GenerationError("generation_topic_too_long")
-        vector = embed_texts([payload.topic])[0]
+            try:
+                completion = Completion.model_validate_json(raw)
+            except ValidationError:
+                raise GenerationError("generation_invalid_response", metadata) from None
+            if (
+                not completion.content.strip()
+                or "\x00" in completion.content
+                or len(completion.content) > LENGTH_LIMITS[payload.length]
+            ):
+                raise GenerationError("generation_output_limit", metadata)
+            by_id = {s["chunk_id"]: s for s in sources}
+            if any(source_id not in by_id for source_id in completion.source_ids):
+                raise GenerationError("generation_invalid_sources", metadata)
+            # A draft that cites nothing is still shown; a source check on request reviews it
+            # against everything the writer saw, so its claims surface as findings, not an error.
+            references = [
+                by_id[source_id] for source_id in dict.fromkeys(completion.source_ids)
+            ] or sources
+            warnings = [warning[:300] for warning in completion.warnings]
+            restated = repeated_sentences(
+                completion.content,
+                restated_sentences(completion.content, posted)
+                + advisory_meaning(completion.content),
+            )
+            warnings += [
+                RESTATED_WARNING[payload.language].format(sentence.rstrip(".:; ")[:200])
+                for sentence in restated[:MAX_RESTATED_WARNINGS]
+            ]
+            review = unrequested_review(
+                completion.content.strip(),
+                brand_values,
+                preferences,
+                offer_details=payload.offer_details,
+            )
+            costs = [metadata.get("usage", {}).get("cost_usd")]
+            if translation_metadata is not None:
+                metadata["retrieval_translation"] = translation_metadata
+                costs.append(translation_metadata.get("cost_usd"))
+            metadata["grounding_review"] = review
+            metadata["total_cost_usd"] = sum(costs) if all(c is not None for c in costs) else None
+            result = {
+                "id": str(run_id),
+                "platform": payload.platform,
+                "language": payload.language,
+                "content": completion.content.strip(),
+                "sources": references,
+                "offer_details": payload.offer_details,
+                "warnings": warnings,
+                "grounded": False,
+                "metadata": {
+                    **metadata,
+                    "prompt_version": PROMPT_VERSION,
+                    "brand_id": brand_id,
+                    "brand_version": brand_values["version"],
+                    "embedding_profile": profile_key(),
+                    "preferences": inputs,
+                    "prompt_tokens_estimate": prompt_tokens,
+                    "writer_token_ratio": str(profile.token_ratio),
+                },
+            }
+            with SessionLocal.begin() as session:
+                run = session.get(GenerationRun, run_id)
+                assert run is not None
+                run.status = "Ready"
+                run.result = result
+            trace.update(
+                output={"content": result["content"], "warnings": warnings},
+                metadata={"run_id": str(run_id), "prompt_version": PROMPT_VERSION},
+            )
+            return result
+        except (GenerationError, EmbeddingError) as exc:
+            trace.update(level="ERROR", status_message=exc.code)
+            with SessionLocal.begin() as session:
+                run = session.get(GenerationRun, run_id)
+                assert run is not None
+                run.status = "Failed"
+                run.error_code = exc.code
+                failure_metadata = dict(getattr(exc, "metadata", {}))
+                if translation_metadata is not None:
+                    failure_metadata["retrieval_translation"] = translation_metadata
+                run.result = {"metadata": failure_metadata}
+            status = (
+                409
+                if exc.code
+                in (
+                    "insufficient_context",
+                    "generation_prompt_limit",
+                    "generation_topic_too_long",
+                )
+                else 503
+            )
+            raise HTTPException(status, exc.code) from None
+        except Exception:
+            trace.update(level="ERROR", status_message="generation_failed")
+            with SessionLocal.begin() as session:
+                run = session.get(GenerationRun, run_id)
+                assert run is not None
+                run.status = "Failed"
+                run.error_code = "generation_failed"
+            raise HTTPException(500, "generation_failed") from None
+
+
+def embedded(name: str, text: str) -> list[float]:
+    settings = get_settings()
+    with tracing.step(name, as_type="embedding", model=settings.embedding_model, input=text):
+        return embed_texts([text])[0]
+
+
+def retrieved(vector: list[float], query: str) -> list[dict]:
+    """Every Ready chunk close enough to the query, nearest first."""
+    settings = get_settings()
+    with tracing.step("retrieve-sources", as_type="retriever", input=query) as step:
         with SessionLocal() as session:
             sources = relevant_context(
                 session,
@@ -509,148 +673,11 @@ def generate_locked(payload: GenerateInput):
                 workspace_id=LOCAL_WORKSPACE_ID,
                 max_distance=settings.generation_max_distance,
             )
-        # The writer is the only paid stage of a draft; the source check runs on request with
-        # its own allowance (app/recheck.py).
-        stage_budget = settings.generation_max_request_usd
-        if not sources:
-            translated = translate_query(
-                payload.topic,
-                budget_usd=settings.generation_max_request_usd * TRANSLATION_BUDGET_SHARE,
-            )
-            if translated is not None:
-                query, translation_metadata, translation_reservation = translated
-                stage_budget = settings.generation_max_request_usd - translation_reservation
-                vector = embed_texts([query])[0]
-                with SessionLocal() as session:
-                    sources = relevant_context(
-                        session,
-                        vector,
-                        user_id=LOCAL_USER_ID,
-                        workspace_id=LOCAL_WORKSPACE_ID,
-                        max_distance=settings.generation_max_distance,
-                    )
-        sources = bounded_context(sources, settings.generation_context_budget)
-        if not sources:
-            raise GenerationError("insufficient_context")
-        # Read before the paid call, so a database failure here costs nothing.
-        posted = sample_post_lines()
-        data = {
-            "brand": brand_values,
-            "preferences": preferences,
-            "sources": sources,
-            "platform_character_limit": LENGTH_LIMITS[payload.length],
-        }
-        target = length_target(payload.length)
-        if target is not None:
-            data["length_target"] = target
-        user = json.dumps(data, ensure_ascii=False)
-        system = writer_system(payload.knowledge_level, payload.length)
-        prompt_tokens = generation_tokens(system) + generation_tokens(user) + 32
-        if prompt_tokens > settings.generation_prompt_budget:
-            raise GenerationError("generation_prompt_limit")
-        # The budget above counts o200k tokens so every writer gets the same sources; cost
-        # and context length use the writer's own (measured) token count.
-        raw, metadata = chat_completion(
-            system,
-            user,
-            provider_tokens(prompt_tokens, profile),
-            budget_usd=stage_budget,
-            output_tokens=writer_output_tokens(profile),
-            model_id=writer_model,
+        step.update(
+            output=tracing.source_list(sources),
+            metadata={"max_distance": settings.generation_max_distance},
         )
-        try:
-            completion = Completion.model_validate_json(raw)
-        except ValidationError:
-            raise GenerationError("generation_invalid_response", metadata) from None
-        if (
-            not completion.content.strip()
-            or "\x00" in completion.content
-            or len(completion.content) > LENGTH_LIMITS[payload.length]
-        ):
-            raise GenerationError("generation_output_limit", metadata)
-        by_id = {s["chunk_id"]: s for s in sources}
-        if any(source_id not in by_id for source_id in completion.source_ids):
-            raise GenerationError("generation_invalid_sources", metadata)
-        # A draft that cites nothing is still shown; a source check on request reviews it
-        # against everything the writer saw, so its claims surface as findings, not an error.
-        references = [
-            by_id[source_id] for source_id in dict.fromkeys(completion.source_ids)
-        ] or sources
-        warnings = [warning[:300] for warning in completion.warnings]
-        restated = repeated_sentences(
-            completion.content,
-            restated_sentences(completion.content, posted) + advisory_meaning(completion.content),
-        )
-        warnings += [
-            RESTATED_WARNING[payload.language].format(sentence.rstrip(".:; ")[:200])
-            for sentence in restated[:MAX_RESTATED_WARNINGS]
-        ]
-        review = unrequested_review(
-            completion.content.strip(),
-            brand_values,
-            preferences,
-            offer_details=payload.offer_details,
-        )
-        costs = [metadata.get("usage", {}).get("cost_usd")]
-        if translation_metadata is not None:
-            metadata["retrieval_translation"] = translation_metadata
-            costs.append(translation_metadata.get("cost_usd"))
-        metadata["grounding_review"] = review
-        metadata["total_cost_usd"] = sum(costs) if all(c is not None for c in costs) else None
-        result = {
-            "id": str(run_id),
-            "platform": payload.platform,
-            "language": payload.language,
-            "content": completion.content.strip(),
-            "sources": references,
-            "offer_details": payload.offer_details,
-            "warnings": warnings,
-            "grounded": False,
-            "metadata": {
-                **metadata,
-                "prompt_version": PROMPT_VERSION,
-                "brand_id": brand_id,
-                "brand_version": brand_values["version"],
-                "embedding_profile": profile_key(),
-                "preferences": inputs,
-                "prompt_tokens_estimate": prompt_tokens,
-                "writer_token_ratio": str(profile.token_ratio),
-            },
-        }
-        with SessionLocal.begin() as session:
-            run = session.get(GenerationRun, run_id)
-            assert run is not None
-            run.status = "Ready"
-            run.result = result
-        return result
-    except (GenerationError, EmbeddingError) as exc:
-        with SessionLocal.begin() as session:
-            run = session.get(GenerationRun, run_id)
-            assert run is not None
-            run.status = "Failed"
-            run.error_code = exc.code
-            failure_metadata = dict(getattr(exc, "metadata", {}))
-            if translation_metadata is not None:
-                failure_metadata["retrieval_translation"] = translation_metadata
-            run.result = {"metadata": failure_metadata}
-        status = (
-            409
-            if exc.code
-            in (
-                "insufficient_context",
-                "generation_prompt_limit",
-                "generation_topic_too_long",
-            )
-            else 503
-        )
-        raise HTTPException(status, exc.code) from None
-    except Exception:
-        with SessionLocal.begin() as session:
-            run = session.get(GenerationRun, run_id)
-            assert run is not None
-            run.status = "Failed"
-            run.error_code = "generation_failed"
-        raise HTTPException(500, "generation_failed") from None
+        return sources
 
 
 @router.get("/review-models")
